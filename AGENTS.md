@@ -58,11 +58,18 @@ repo\
 ├─ deploy\               nginx / compose / 服务器初始化
 ├─ docs\{architecture.md, evidence\, records\, archive\}
 ├─ .github\workflows\
-├─ docker-compose.yml
+├─ Dockerfile
+├─ docker-compose.yml         本地开发栈（PG/Redis/api/worker）
+├─ docker-compose.prod.yml    生产栈（+ nginx/Prometheus，严格 mem_limit）
 ├─ pyproject.toml
 ├─ AGENTS.md             ← 本文件
 └─ README.md             ← 给外人看
 ```
+
+> ⚠️ **生产 compose 放在仓库根，不在 `deploy\`**（与最初设想不同）：
+> compose 里的相对路径是按**该文件所在目录**解析的，放根目录才能让
+> `./deploy/prometheus/...` 与 `env_file: .env` 在**本地与服务器上解析一致**。
+> `deploy\` 仍放 nginx / 初始化脚本 / Prometheus 配置。
 
 ### 1.3 运行时形态（服务器上）
 
@@ -157,22 +164,39 @@ Docker Hub / GHCR · 把项目 #1 部署到公网 · 时间表 / 排期
 
 ## 6. 构建 / 测试 / 运行命令
 
-> 🚧 骨架尚未搭建，以下是**约定好的形状**，落代码时按此实现（不一致就在本文件改）。
+> ✅ **骨架已落地**（2026-10-14）。下面是**实际可跑**的命令（已逐条跑绿）。
 
-### 本地（Windows / PowerShell）
+### 首次准备
 
 ```powershell
-uv sync                                   # 安装依赖
-uv run ruff check . ; uv run ruff format --check .
-uv run pytest tests/ -q                   # 单元 + 工具级测试
-docker compose up -d                      # 起依赖服务 / 全栈
-docker compose logs -f api                # 看日志
+Copy-Item .env.example .env      # 然后填自己的 API Key（.env 已被 gitignore）
+```
+
+### 本地后端（Windows / PowerShell）
+
+```powershell
+uv sync --all-groups                       # 安装依赖（含 dev 组）
+uv run ruff check .                        # lint
+uv run ruff format --check .               # 格式
+uv run pytest -q                           # 测试（不需要 docker）
+uv run uvicorn app.main:app --reload       # 本地起后端
+docker compose up -d                       # 起 PG/Redis/api/worker
+docker compose logs -f api                 # 看日志
+```
+
+### 本地前端
+
+```powershell
+cd web
+pnpm install
+pnpm dev                                   # http://127.0.0.1:5173（已配好 /healthz 等代理）
+pnpm build                                 # vue-tsc 类型检查 + 构建
 ```
 
 ### 本地（WSL / bash，如需）
 
 ```bash
-uv sync && uv run pytest tests/ -q
+uv sync --all-groups && uv run pytest -q
 docker compose up -d
 ```
 
@@ -337,8 +361,8 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 
 | 项 | 值 |
 |---|---|
-| 阶段 | **方案已定稿 + 服务器已瘦身，代码尚未开始**（`repo\` 目前只有本文件） |
+| 阶段 | **v1.0 骨架已落地**（可跑通 lint / test / compose / 前端 build），业务功能尚未开始 |
 | 计划书版本 | `plan\PROJECT-PLAN.md` **v2（补坑版）**；v1 已逐字冻结在 `..\archive\PROJECT-PLAN-v1-2026-10-13.md` |
-| 下一步 | **搭 v1.0 骨架**：① `repo\` 内部目录 ② `pyproject.toml` ③ `docker-compose.yml` 骨架 ④ `web\` 前端脚手架 ⑤ `deploy\` + `.github\workflows\` ⑥ `repo\README.md` 初版 |
+| 下一步 | **补 v1.0 业务功能**：① 登录 + `tenant_id` 数据模型 ② 会话列表 + 聊天（引用溯源 + 拒答 + SSE）③ 知识库上传 + 入库 worker ④ 只读评测报告页 |
 | 未决项 | **无** |
-| 刚完成 | ✅ **系统瘦身已执行完成**（2026-10-14）：关停 **6 个单元**（5 目标 + `multipathd.socket`），全部 `inactive/disabled`；`available` **1084 → 1184 MB（+100 MB）**，运行中 service 30 → 25，0 失败单元；执行中新发现 4 个坑已记入 §10（详见计划书 §10.3.3） |
+| 刚完成 | ✅ **系统瘦身**（2026-10-14，关 6 单元，`available` +100 MB，详见 §10）<br>✅ **v1.0 骨架**（2026-10-14，首个提交 `67b8d1d`，44 文件；`ruff`/`pytest`/`compose config`/`pnpm build` 全绿） |
