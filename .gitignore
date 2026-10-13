@@ -1,0 +1,46 @@
+# ============================================================
+# grounded-qa .gitignore
+# ============================================================
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# ---------- 环境变量 / 密钥（绝不进 git）----------
+# 只允许 .env.example 进仓库。
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*credential*
+
+# ---------- 前端 ----------
+node_modules/
+web/dist/
+web/.vite/
+*.local
+
+# ---------- IDE ----------
+.idea/
+.vscode/
+
+# ---------- 操作系统 ----------
+.DS_Store
+Thumbs.db
+
+# ---------- 运行时产物 ----------
+*.log
+logs/
+data/
+*.sqlite3

@@ -1,0 +1,136 @@
+# ============================================================
+# grounded-qa · 本地开发 compose
+# ------------------------------------------------------------
+# 用途：本机起 PG + Redis + 应用，跑通 §5.1 日常循环的第 ③ 步
+#       （AGENTS.md：「本地 docker compose up 验证 ← 起 PG/Redis/应用，浏览器点一遍」）
+#
+# ⚠️ 服务器形态**不共用这份文件**，在 deploy/docker-compose.prod.yml
+#    （那份才带 nginx / Prometheus / node_exporter 和严格的内存上限）。
+#
+# ⚠️ 硬性要求（AGENTS.md §5.2 部署前检查清单）：
+#    每个服务都要有 mem_limit + healthcheck + restart。
+# ============================================================
+
+name: grounded-qa
+
+services:
+  # ------------------------------------------------------------
+  # PostgreSQL 16 + pgvector
+  # 本地依赖服务一律用 compose 起，**不要装到 Windows 宿主机**
+  # ------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg16
+    container_name: gq-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-grounded_qa}
+      POSTGRES_USER: ${POSTGRES_USER:-grounded}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      # 让容器内的初始化脚本也走 UTF-8
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    mem_limit: 220m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-grounded} -d ${POSTGRES_DB:-grounded_qa}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ------------------------------------------------------------
+  # Redis：语义缓存 + BLPOP 队列
+  # ------------------------------------------------------------
+  redis:
+    image: redis:7.4.1-alpine
+    container_name: gq-redis
+    restart: unless-stopped
+    # maxmemory 与淘汰策略必须显式设：2C2G 上不能让 Redis 无限涨
+    command:
+      - redis-server
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-96mb}
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    ports:
+      - "127.0.0.1:6379:6379"
+    mem_limit: 96m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # ------------------------------------------------------------
+  # 自研 API（FastAPI + SSE）
+  # ------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: grounded-qa-api:0.1.0
+    container_name: gq-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 容器内要用服务名，不是 localhost
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ------------------------------------------------------------
+  # 自研 mini worker（Redis BLPOP；**不是 Celery**）
+  # 文档解析 / 切分 / 向量化，串行执行
+  # ------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: grounded-qa-api:0.1.0
+    container_name: gq-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    command: ["python", "-m", "app.workers.main"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # 解析任务串行 + mem_limit 兜底，防止大文档把机器打爆
+    mem_limit: 160m
+    healthcheck:
+      # 骨架阶段还没有 worker 主循环，先探进程活着
+      test: ["CMD-SHELL", "pgrep -f 'app.workers.main' > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  pgdata:
+    name: gq-pgdata

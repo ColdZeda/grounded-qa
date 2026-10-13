@@ -1,0 +1,75 @@
+# ============================================================
+# CI：lint → test → 前端类型检查与构建
+# ------------------------------------------------------------
+# 触发：推送到 main、以及所有 PR。
+# 不做镜像构建/推送 —— 那在 deploy.yml 里（只在 main 上跑）。
+#
+# ⚠️ 约定：测试里**不许真调 LLM API**（AGENTS §7.1 约定 9）。
+#    所以这里不需要任何 API Key 的 secret。
+# ============================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支的旧运行自动取消，省 CI 分钟数
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: 后端 · lint + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          # 锁版本，不用 latest
+          version: "0.5.11"
+          enable-cache: true
+
+      - name: 安装依赖
+        run: uv sync --all-groups --frozen
+
+      - name: ruff lint
+        run: uv run ruff check .
+
+      - name: ruff format 检查
+        run: uv run ruff format --check .
+
+      - name: pytest
+        run: uv run pytest -q
+
+  frontend:
+    name: 前端 · 类型检查 + 构建
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "11.7.0"
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建（含 vue-tsc 类型检查）
+        run: pnpm build

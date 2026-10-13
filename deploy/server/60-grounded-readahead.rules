@@ -1,0 +1,12 @@
+# grounded-qa：保留 4 MiB 磁盘预读（原本由 tuned 的 throughput-performance 提供）
+#
+# ⚠️ ATTR 的值**必须带引号**。写成 ATTR{queue/read_ahead_kb}=4096 时，
+#    udevadm verify 会报 "Invalid key/value pair, ignoring"，
+#    规则被**静默丢弃** —— 文件在，参数却没设上。详见 AGENTS.md §10 已知坑。
+#
+# 验证方式（不要只看文件在不在）：
+#     echo 128 > /sys/block/vda/queue/read_ahead_kb
+#     udevadm trigger --subsystem-match=block --action=change --settle
+#     cat /sys/block/vda/queue/read_ahead_kb     # 应回到 4096
+
+ACTION=="add|change", KERNEL=="vda", ATTR{queue/read_ahead_kb}="4096"

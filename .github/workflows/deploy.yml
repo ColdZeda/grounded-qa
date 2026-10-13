@@ -1,0 +1,168 @@
+# ============================================================
+# 部署：构建镜像 → 推 ACR → SSH 到服务器 pull → 健康检查 → 失败自动回滚
+# ------------------------------------------------------------
+# 触发：推送到 main，或手动触发。
+#
+# ⚠️ 硬约束（AGENTS 硬约束 §2.4）：
+#    **镜像在 CI 构建 → 推 ACR → 服务器只 pull。**
+#    绝不在 2C2G 服务器上 docker build（必 OOM）。
+#
+# ⚠️ 镜像标签用 commit SHA，**不用 latest**（硬约束 §2.6）。
+#
+# 需要的仓库 Secrets：
+#    ACR_REGISTRY      例：registry.cn-shenzhen.aliyuncs.com/<命名空间>
+#    ACR_USERNAME      阿里云 ACR 用户名
+#    ACR_PASSWORD      ACR 密码
+#    SSH_HOST          服务器地址
+#    SSH_USER          登录用户（root）
+#    SSH_KEY           部署私钥
+#    SSH_KNOWN_HOSTS   ssh-keyscan 得到的 known_hosts 内容
+# ============================================================
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # 部署不能并发，否则回滚点会互相覆盖
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+  IMAGE_TAG: ${{ github.sha }}
+  REMOTE_DIR: /opt/grounded-qa
+  # ⚠️ 生产 compose 放在**仓库根**（不是 deploy/）：
+  #    compose 里的相对路径是按**该文件所在目录**解析的，
+  #    放根目录才能让 ./deploy/prometheus/... 与 .env 在本地和服务器上解析一致。
+  COMPOSE_FILE: docker-compose.prod.yml
+
+jobs:
+  # ------------------------------------------------------------
+  # 1. 构建并推送镜像
+  # ------------------------------------------------------------
+  build-and-push:
+    name: 构建并推送镜像到 ACR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 登录 ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: 构建并推送 api 镜像
+        run: |
+          set -euo pipefail
+          image="$ACR_REGISTRY/grounded-qa-api:$IMAGE_TAG"
+          docker build -t "$image" .
+          docker push "$image"
+
+      - name: 构建并推送 nginx 镜像（含前端产物）
+        run: |
+          set -euo pipefail
+          image="$ACR_REGISTRY/grounded-qa-nginx:$IMAGE_TAG"
+          docker build -f deploy/nginx/Dockerfile -t "$image" .
+          docker push "$image"
+
+  # ------------------------------------------------------------
+  # 2. 部署 + 健康检查 + 失败回滚
+  # ------------------------------------------------------------
+  deploy:
+    name: 部署到服务器
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 配置 SSH
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host target
+            HostName ${{ secrets.SSH_HOST }}
+            User ${{ secrets.SSH_USER }}
+            IdentityFile ~/.ssh/id_ed25519
+            StrictHostKeyChecking yes
+          EOF
+
+      - name: 同步 compose / nginx / prometheus 配置到服务器
+        run: |
+          set -euo pipefail
+          ssh target "mkdir -p $REMOTE_DIR/deploy/nginx $REMOTE_DIR/deploy/prometheus"
+          scp docker-compose.prod.yml        target:$REMOTE_DIR/docker-compose.prod.yml
+          scp deploy/nginx/grounded-qa.conf  target:$REMOTE_DIR/deploy/nginx/grounded-qa.conf
+          scp deploy/prometheus/prometheus.yml target:$REMOTE_DIR/deploy/prometheus/prometheus.yml
+          echo "ℹ️ 服务器上的 .env 由人工维护，CI 绝不覆盖（每个环境一份独立 .env）"
+
+      - name: 记录回滚点（当前版本标签）
+        id: prev
+        run: |
+          set -euo pipefail
+          prev="$(ssh target "cat $REMOTE_DIR/.current_tag 2>/dev/null || true")"
+          echo "tag=$prev" >> "$GITHUB_OUTPUT"
+          echo "回滚点：${prev:-（空，首次部署）}"
+
+      - name: 拉取新镜像并重启
+        run: |
+          set -euo pipefail
+          ssh target "cd $REMOTE_DIR && \
+            ACR_REGISTRY='$ACR_REGISTRY' IMAGE_TAG='$IMAGE_TAG' \
+            docker compose -f $COMPOSE_FILE pull && \
+            ACR_REGISTRY='$ACR_REGISTRY' IMAGE_TAG='$IMAGE_TAG' \
+            docker compose -f $COMPOSE_FILE up -d --remove-orphans"
+
+      - name: 轮询 /healthz
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if ssh target "curl -fsS http://127.0.0.1:8080/healthz" > /dev/null 2>&1; then
+              echo "✅ 第 ${i} 次探测通过"
+              exit 0
+            fi
+            echo "…第 ${i} 次未通过，5s 后重试"
+            sleep 5
+          done
+          echo "❌ 健康检查超时"
+          exit 1
+
+      - name: 部署成功 → 记录当前版本
+        if: success()
+        run: |
+          set -euo pipefail
+          ssh target "printf '%s\n' '$IMAGE_TAG' > $REMOTE_DIR/.current_tag"
+          echo "已记录当前版本：$IMAGE_TAG"
+
+      - name: 部署失败 → 自动回滚
+        if: failure()
+        run: |
+          set -euo pipefail
+          prev='${{ steps.prev.outputs.tag }}'
+          if [ -z "$prev" ]; then
+            echo "⚠️ 没有可回滚的版本（首次部署），请人工介入"
+            ssh target "cd $REMOTE_DIR && docker compose -f $COMPOSE_FILE ps" || true
+            exit 1
+          fi
+          echo "开始回滚到：$prev"
+          ssh target "cd $REMOTE_DIR && \
+            ACR_REGISTRY='$ACR_REGISTRY' IMAGE_TAG='$prev' \
+            docker compose -f $COMPOSE_FILE up -d --remove-orphans"
+          ssh target "curl -fsS http://127.0.0.1:8080/healthz" \
+            && echo "✅ 回滚成功" \
+            || { echo "❌ 回滚后仍不健康，请立即人工介入"; exit 1; }
+
+      - name: 失败时导出容器日志
+        if: failure()
+        run: |
+          ssh target "cd $REMOTE_DIR && docker compose -f $COMPOSE_FILE logs --tail=200" || true

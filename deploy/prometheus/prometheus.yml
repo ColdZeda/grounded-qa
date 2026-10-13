@@ -1,0 +1,30 @@
+# ============================================================
+# Prometheus 抓取配置（v1.1 启用）
+# ------------------------------------------------------------
+# 保留 3 天（--storage.tsdb.retention.time=3d），2C2G 上不留长期数据。
+# ============================================================
+
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+
+scrape_configs:
+  # 自研 API 的业务指标（/metrics 由 prometheus_client 暴露）
+  - job_name: grounded-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]
+        labels:
+          service: grounded-api
+
+  # 主机指标
+  - job_name: node
+    static_configs:
+      - targets: ["node_exporter:9100"]
+        labels:
+          service: node
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

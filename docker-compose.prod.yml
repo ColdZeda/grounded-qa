@@ -1,0 +1,188 @@
+# ============================================================
+# grounded-qa · 服务器生产 compose
+# ------------------------------------------------------------
+# ⚠️ 与本地开发用的 docker-compose.yml **不共用**：
+#    这份才带 nginx、严格的 mem_limit、镜像来自 ACR。
+#
+# 硬性要求（AGENTS.md §5.2）：每个服务都有
+#    mem_limit + healthcheck + restart: unless-stopped
+#
+# 内存预算（计划书 §2.3）：期望占用合计 ≈ 670 MB，
+# 可用 ≈ 1180 MB（瘦身后实测）。下面的 mem_limit 是**硬上限**，
+# 按"期望值 + 余量"设置，合计 ≈ 768 MB，留足系统余量。
+# ============================================================
+
+name: grounded-qa
+
+# 镜像来自 ACR（CI 构建并推送）。用变量而不是写死地址。
+x-api-image: &api-image
+  image: ${ACR_REGISTRY:?ACR_REGISTRY 未设置}/grounded-qa-api:${IMAGE_TAG:-0.1.0}
+
+x-api-common: &api-common
+  <<: *api-image
+  restart: unless-stopped
+  env_file:
+    - .env
+  environment:
+    POSTGRES_HOST: postgres
+    REDIS_HOST: redis
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  # ------------------------------------------------------------
+  # 网关 + 前端静态（:8080）
+  # ------------------------------------------------------------
+  nginx:
+    image: ${ACR_REGISTRY:?ACR_REGISTRY 未设置}/grounded-qa-nginx:${IMAGE_TAG:-0.1.0}
+    container_name: gq-nginx
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 32m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ------------------------------------------------------------
+  # 自研 API（FastAPI + SSE）
+  # ------------------------------------------------------------
+  api:
+    <<: *api-common
+    container_name: gq-api
+    # 只在内网暴露，公网入口只有 nginx:8080
+    expose:
+      - "8000"
+    mem_limit: 224m
+    # 内存紧张时优先杀它，而不是 PG
+    oom_score_adj: 100
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ------------------------------------------------------------
+  # 自研 mini worker（Redis BLPOP，不是 Celery）
+  # ------------------------------------------------------------
+  worker:
+    <<: *api-common
+    container_name: gq-worker
+    command: ["python", "-m", "app.workers.main"]
+    mem_limit: 96m
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'app.workers.main' > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ------------------------------------------------------------
+  # PostgreSQL 16 + pgvector
+  # ------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg16
+    container_name: gq-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-grounded_qa}
+      POSTGRES_USER: ${POSTGRES_USER:-grounded}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    mem_limit: 288m
+    # PG 被杀 = 数据服务中断，让它比 api 更"耐杀"
+    oom_score_adj: -200
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-grounded} -d ${POSTGRES_DB:-grounded_qa}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ------------------------------------------------------------
+  # Redis：语义缓存 + BLPOP 队列
+  # ------------------------------------------------------------
+  redis:
+    image: redis:7.4.1-alpine
+    container_name: gq-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-96mb}
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    volumes:
+      - redisdata:/data
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # ------------------------------------------------------------
+  # 可观测（v1.1 才启用）—— 用 profile 控制，v1.0 不占内存
+  #     docker compose --profile monitoring up -d
+  # ------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: gq-prometheus
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # 只保留 3 天，2C2G 上不能留长期数据
+      - --storage.tsdb.retention.time=3d
+      - --web.enable-lifecycle
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    expose:
+      - "9090"
+    mem_limit: 160m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  node_exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: gq-node-exporter
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    command:
+      - --path.rootfs=/host
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    expose:
+      - "9100"
+    mem_limit: 32m
+
+volumes:
+  pgdata:
+    name: gq-pgdata
+  redisdata:
+    name: gq-redisdata
+  promdata:
+    name: gq-promdata
