@@ -336,6 +336,8 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | **`docker pull` 报 `unexpected media type text/html`，层大小 `0B`** | **镜像加速器返回了 HTML 错误页**，不是 Dockerfile / 网络配置的错。本机 daemon 配了 20 个 mirror，排在最前的 `docker.1panelproxy.com` 就是坏的 | 换可用 mirror（**2026-10-14 实测 `docker.m.daocloud.io` 可用**）。**非侵入式做法**：`docker pull docker.m.daocloud.io/library/<镜像>` 再 `docker tag` 回规范名 —— 这样 compose 里保持规范镜像名，不用改全局 daemon.json |
 | **Dockerfile 里 `COPY --from=ghcr.io/...` 本地构建必挂** | GHCR 在大陆拉不动（硬约束 §2.5）。uv 的官方推荐写法正是 `COPY --from=ghcr.io/astral-sh/uv:...` | 别用 ghcr；改成 `pip install uv==<版本>`（走 PyPI）。已在 `Dockerfile` 里改掉 |
 | **本项目与项目 #1 的容器 / 端口 / 卷撞车** | 两个项目都用 PostgreSQL / Redis 的默认端口；项目 #1 的 `redis-stack-server` 占着 `6379` | 三道隔离：① 容器名加 `gq-` 前缀 ② 卷用 `gq-*` **显式命名**（不用 compose 自动前缀）③ 宿主机端口挪到 5 万段 |
+| **容器以退出码 127 无限重启，日志只有 `[FATAL tini] exec uvicorn failed: No such file or directory`** | 多阶段构建里 **venv 建在 A 路径、拷到 B 路径**：venv 的控制台脚本会把解释器**绝对路径烧进 shebang**（`#!/build/.venv/bin/python`），运行镜像里没有 `/build` → exec 报 ENOENT。**报错极具误导性：看着像"uvicorn 没装"，其实装了**。顺带：`ENV PATH="/app/.venv/bin:$PATH"` 那行删了也是 127，报错一模一样 | 两个阶段的 venv 路径必须**完全一致**（都放 `/app/.venv`）。排查手法：`docker run --rm --entrypoint head <镜像> -1 /app/.venv/bin/uvicorn` 直接看 shebang |
+| **worker 容器永远 `unhealthy`，但进程明明活着** | `python:3.13-slim` 里**没有 `pgrep` / `ps`**（procps 不在 slim 基础镜像中），healthcheck 里的 `pgrep` 直接失败 | 运行阶段补装 `procps`。**别在宿主机猜，要在镜像里验**：`docker run --rm --entrypoint which <镜像> pgrep` |
 
 ---
 
@@ -372,4 +374,40 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | 计划书版本 | `plan\PROJECT-PLAN.md` **v2（补坑版）**；v1 已逐字冻结在 `..\archive\PROJECT-PLAN-v1-2026-10-13.md` |
 | 下一步 | **补 v1.0 业务功能**：① 登录 + `tenant_id` 数据模型 ② 会话列表 + 聊天（引用溯源 + 拒答 + SSE）③ 知识库上传 + 入库 worker ④ 只读评测报告页 |
 | 未决项 | **无** |
-| 刚完成 | ✅ **系统瘦身**（2026-10-14，关 6 单元，`available` +100 MB，详见 §10）<br>✅ **v1.0 骨架**（2026-10-14，首个提交 `67b8d1d`，44 文件；`ruff`/`pytest`/`compose config`/`pnpm build` 全绿） |
+| 刚完成 | ✅ **系统瘦身**（2026-10-14，关 6 单元，`available` +100 MB，详见 §10）<br>✅ **v1.0 骨架**（2026-10-14，首个提交 `67b8d1d`，44 文件；`ruff`/`pytest`/`compose config`/`pnpm build` 全绿）<br>✅ **本地 compose 实跑通**（2026-10-14，提交 `7e3c02d`：4 容器 healthy、浏览器点通、修掉 4 个只在真跑时暴露的问题） |
+
+### 13.1 🔖 接续点（2026-10-14 03:14 记录 · 用户关机前）
+
+> **用途**：用户要关电脑，这一节供**重启后接着干**。恢复并确认无误后可以删掉本节。
+
+**一、关机不会丢的**
+- **代码**：3 个提交都在 `repo\`（`7e3c02d` / `9ac2886` / `67b8d1d`），工作区干净
+- **数据库数据**：在 Docker **具名卷 `gq-pgdata`** 里，重启不丢 —— 🔴 **别跑 `docker compose down -v`**（会删卷）
+- **本地镜像**：`grounded-qa-api:0.1.0` / `pgvector/pgvector:0.8.0-pg16` / `redis:7.4.1-alpine` / `python:3.13.1-slim-bookworm` 都已就绪，**开机后 `up -d` 不需要重新拉取**
+
+**二、关机会消失的**（本来也不需要留）
+- 4 个容器：`gq-api` / `gq-worker` / `gq-postgres` / `gq-redis`
+- Vite dev server（`http://localhost:5173`）
+
+**三、开机后第一步**
+```powershell
+# 1) 先起 Docker Desktop，等托盘图标变绿
+cd E:\projects\grounded-qa\repo
+docker compose up -d          # 镜像已就绪，不用 --build
+docker compose ps             # 4 个都应显示 (healthy)
+
+# 2) 前端（可选）
+cd web ; pnpm dev             # 然后开 http://localhost:5173
+```
+
+> ⚠️ 若 `up -d` 又开始拉镜像并报 `unexpected media type text/html`：**镜像加速器又坏了** ——
+> 见 §10 那条，用可用的 mirror（实测 `docker.m.daocloud.io`）拉取后 `docker tag` 回规范名。
+
+**四、下一步待办（优先级从高到低）**
+1. **主线：补 v1.0 业务功能**（见上表「下一步」四项）
+2. `repo\.env` 填真实 API Key（现在仍是占位值）
+3. **改 git 邮箱**：当前是 gitee 的 noreply（`12260707+wdnmded@user.noreply.gitee.com`），
+   推 GitHub 前要改，否则提交不会关联到账号
+4. 配 GitHub Secrets（`ACR_REGISTRY` / `ACR_USERNAME` / `ACR_PASSWORD` / `SSH_*`），CI 才真正跑得起来
+5. **服务器侧未做的两件**：第一次实测 **80 端口是否被阻断**、配 Docker daemon 的 **registry mirror**
+   （届时按 §9.2 报批：🟡 改动类，先公示命令）
