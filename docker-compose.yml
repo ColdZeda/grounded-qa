@@ -29,7 +29,11 @@ services:
       # 让容器内的初始化脚本也走 UTF-8
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     ports:
-      - "127.0.0.1:5432:5432"
+      # ⚠️ 宿主机端口刻意用 55432，**不是 5432**。
+      #    本机同时还有项目 #1（langgraph-mcp-code-agent），它的依赖栈占了
+      #    3307 / 6379 / 8888 / 80 —— 避开才能在两边同时跑。
+      #    容器内部仍是标准 5432（见 api/worker 的 POSTGRES_PORT 覆盖）。
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-55432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     mem_limit: 220m
@@ -59,7 +63,9 @@ services:
       - --appendonly
       - "no"
     ports:
-      - "127.0.0.1:6379:6379"
+      # ⚠️ 宿主机 56379，**不是 6379** —— 项目 #1 的 redis-stack-server 正占着 6379，
+      #    两边都用默认值就必撞。
+      - "127.0.0.1:${REDIS_HOST_PORT:-56379}:6379"
     mem_limit: 96m
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -84,8 +90,13 @@ services:
       # 容器内要用服务名，不是 localhost
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
+      # ⚠️ 容器内部**用标准端口**：宿主机映射出去的 55432 / 56379 只给本机工具用。
+      #    不显式写这两行的话，会继承 .env 里的值，容易和宿主机映射搞混。
+      POSTGRES_PORT: "5432"
+      REDIS_PORT: "6379"
     ports:
-      - "127.0.0.1:8000:8000"
+      # ⚠️ 宿主机 58000，不是 8000（避开同机其他项目）
+      - "127.0.0.1:${API_HOST_PORT:-58000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -115,6 +126,8 @@ services:
     environment:
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
+      POSTGRES_PORT: "5432"
+      REDIS_PORT: "6379"
     command: ["python", "-m", "app.workers.main"]
     depends_on:
       postgres:

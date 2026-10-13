@@ -1,0 +1,39 @@
+# ============================================================
+# Docker 构建上下文排除清单
+# ------------------------------------------------------------
+# 没有这个文件，`docker build` 会把 .venv / node_modules / web/dist
+# 整个传给 daemon —— 上下文几百 MB，每次构建都白等。
+# ============================================================
+
+# ---------- 版本控制 / IDE ----------
+.git
+.gitignore
+.gitattributes
+.github
+.idea
+.vscode
+
+# ---------- Python 本地环境与缓存 ----------
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+
+# ---------- 前端依赖与产物 ----------
+# 这两个必须在：nginx 镜像里会重新 pnpm install / pnpm build
+web/node_modules
+web/dist
+web/.vite
+
+# ---------- 本地私密与无关内容 ----------
+# .env 绝不进镜像：配置一律运行时注入（12-factor）
+.env
+.env.*
+!.env.example
+docs
+evals
+tests

@@ -118,14 +118,26 @@ cp .env.example .env
 ```bash
 docker compose up -d          # PostgreSQL + Redis + api + worker
 docker compose logs -f api    # 看日志
-curl http://127.0.0.1:8000/healthz
+curl http://127.0.0.1:58000/healthz
 ```
+
+> ⚠️ **本机端口规划（重要）**
+> 开发机上可能同时跑着别的项目（例如 `langgraph-mcp-code-agent`，它占了 `3307` / `6379` / `8888` / `80`），
+> 所以本项目把**宿主机端口**整块挪到 5 万段，避免撞车：
+>
+> | 服务 | 宿主机端口 | 容器内端口 |
+> |---|---|---|
+> | PostgreSQL | **55432** | 5432 |
+> | Redis | **56379** | 6379 |
+> | API | **58000** | 8000 |
+>
+> 从宿主机连（psql / redis-cli / GUI）用左列；容器之间互访用右列（compose 里已固定）。
 
 ### 3. 本地跑后端（不开容器）
 
 ```bash
 uv sync                                              # 装依赖
-uv run uvicorn app.main:app --reload --port 8000     # 起服务
+uv run uvicorn app.main:app --reload --port 8000     # 起服务（宿主机 8000）
 ```
 
 ### 4. 本地跑前端
@@ -135,6 +147,10 @@ cd web
 pnpm install
 pnpm dev          # http://127.0.0.1:5173（已配好 /healthz 等代理）
 ```
+
+> 前端代理默认指向**容器版 API**（`127.0.0.1:58000`）。
+> 若后端是用 `uv run uvicorn` 跑的（宿主机 8000），先设一下再启动：
+> `$env:VITE_API_TARGET = "http://127.0.0.1:8000"; pnpm dev`
 
 ### 5. 检查与测试
 

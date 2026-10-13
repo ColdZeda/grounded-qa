@@ -294,6 +294,10 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 
 **其他环境要求**：
 - 本地依赖服务（PostgreSQL / Redis）**用 docker compose 起，不要装到 Windows 宿主机**。
+- **本机端口必须与项目 #1 错开**：本机还跑着 `E:\projects\langgraph-mcp-code-agent`，
+  它的依赖栈占了 `3307`（MySQL）/ `6379`（Redis）/ `8888`（SearXNG）/ `80`（nginx）。
+  本项目**宿主机**端口用 **PostgreSQL 55432 / Redis 56379 / API 58000**（容器内仍是标准端口）。
+  详见 `.env.example` 的「本机端口规划」。容器名统一 `gq-` 前缀、卷统一 `gq-*` 显式命名，**绝不复用项目 #1 的容器/网络/卷**。
 - 服务器上任何**超过几十秒**的操作，**必须放进 tmux 会话 `grounded`**（防断线 + 用户可旁观）。
 - 写文本文件一律 **UTF-8 无 BOM**；`.gitattributes` 里固定 `text eol=lf` 避免 CRLF 事故。
 
@@ -329,6 +333,9 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | **udev 规则文件明明在，参数却没设上** | `ATTR{...}=4096` **不带引号**时，`udevadm verify` 报 `Invalid key/value pair, ignoring` → 规则被**静默丢弃** | 值**必须带引号**：`ATTR{queue/read_ahead_kb}="4096"`。改完必须做两步验证：`udevadm verify` **＋**"强制打回默认值 → `udevadm trigger` → 看是否被拉回" |
 | `systemd-sysctl: command not found` | 它不在 `PATH` | 用全路径：`/usr/lib/systemd/systemd-sysctl --cat-config`（查 sysctl 文件生效顺序） |
 | **用 `tmux send-keys` 投递长命令，写进文件的内容被吞掉** | 命令里的 `\n`、`\x22` 等转义序列在「PowerShell → Windows argv → ssh → tmux」多层传递中被层层吃掉 | 投递**短行 + heredoc**，别把转义序列当内容载体；写完**必须 `cat` 复核**（2026-10-14 因此把固化文件写成了垃圾 `1`） |
+| **`docker pull` 报 `unexpected media type text/html`，层大小 `0B`** | **镜像加速器返回了 HTML 错误页**，不是 Dockerfile / 网络配置的错。本机 daemon 配了 20 个 mirror，排在最前的 `docker.1panelproxy.com` 就是坏的 | 换可用 mirror（**2026-10-14 实测 `docker.m.daocloud.io` 可用**）。**非侵入式做法**：`docker pull docker.m.daocloud.io/library/<镜像>` 再 `docker tag` 回规范名 —— 这样 compose 里保持规范镜像名，不用改全局 daemon.json |
+| **Dockerfile 里 `COPY --from=ghcr.io/...` 本地构建必挂** | GHCR 在大陆拉不动（硬约束 §2.5）。uv 的官方推荐写法正是 `COPY --from=ghcr.io/astral-sh/uv:...` | 别用 ghcr；改成 `pip install uv==<版本>`（走 PyPI）。已在 `Dockerfile` 里改掉 |
+| **本项目与项目 #1 的容器 / 端口 / 卷撞车** | 两个项目都用 PostgreSQL / Redis 的默认端口；项目 #1 的 `redis-stack-server` 占着 `6379` | 三道隔离：① 容器名加 `gq-` 前缀 ② 卷用 `gq-*` **显式命名**（不用 compose 自动前缀）③ 宿主机端口挪到 5 万段 |
 
 ---
 

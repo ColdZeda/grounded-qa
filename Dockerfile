@@ -14,10 +14,18 @@ FROM python:3.13.1-slim-bookworm AS builder
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# uv：官方静态二进制，比 pip 快得多
-COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /bin/
+# uv：用 pip 装，**不从 ghcr.io 拉**。
+# ⚠️ 官方推荐写法是 `COPY --from=ghcr.io/astral-sh/uv:...`，
+#    但 **GHCR 在大陆拉不动**（AGENTS 硬约束 §2.5），本地构建必挂。
+#    pip 走 PyPI（或镜像源），是这里更可靠的路。
+RUN pip install --no-cache-dir uv==0.5.11
 
-WORKDIR /build
+# ⚠️ venv 必须建在**与运行阶段完全相同的路径** `/app/.venv`。
+#    原因：venv 的控制台脚本（uvicorn / alembic …）会把解释器的**绝对路径烧进 shebang**。
+#    若在 /build/.venv 建好再拷到 /app/.venv，shebang 仍写着 `#!/build/.venv/bin/python`，
+#    而运行镜像里没有 /build → `exec uvicorn failed: No such file or directory`，
+#    容器以**退出码 127 无限重启**（报错信息极具误导性：看着像 uvicorn 没装）。
+WORKDIR /app
 
 # 先只拷依赖清单，让这层能被缓存
 COPY pyproject.toml uv.lock ./
@@ -28,14 +36,18 @@ RUN uv sync --frozen --no-install-project --no-dev
 # ---------- 运行阶段：只带运行时 ----------
 FROM python:3.13.1-slim-bookworm AS runtime
 
-# 时区与编码；tini 负责正确转发信号（uvicorn 优雅退出要靠它）
+# ⚠️ PATH 必须带上 .venv/bin，否则 CMD 里的 uvicorn 会 "command not found"（退出码 127）。
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TZ=Asia/Shanghai \
     PATH="/app/.venv/bin:$PATH"
 
+# tini：正确转发信号（uvicorn / worker 的优雅退出要靠它）
+# procps：提供 pgrep —— worker 的 healthcheck 用它探进程。
+#         ⚠️ python:3.13-slim 里**没有 pgrep/ps**（procps 不在 slim 基础镜像中），
+#            不装的话 worker 会一直 unhealthy。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tini \
+    && apt-get install -y --no-install-recommends tini procps \
     && rm -rf /var/lib/apt/lists/*
 
 # 非 root 运行
@@ -43,7 +55,7 @@ RUN useradd --create-home --uid 10001 appuser
 
 WORKDIR /app
 
-COPY --from=builder /build/.venv /app/.venv
+COPY --from=builder /app/.venv /app/.venv
 COPY --chown=appuser:appuser app /app/app
 
 USER appuser
