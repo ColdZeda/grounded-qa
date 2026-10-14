@@ -20,6 +20,8 @@
 | 代码仓库 | `E:\projects\grounded-qa\repo`（git；将来推 GitHub） |
 | 运行时在哪 | **阿里云 ECS 2 核 2G**（Ubuntu 24.04），公网 `120.24.67.82` |
 | **完整决策在哪** | **`..\plan\PROJECT-PLAN.md`** —— 唯一有效的计划书，**动手前应当读一遍** |
+| **进度在哪** | **`..\plan\PHASES.md`** —— 阶段进度：现在做到哪、还剩哪些、哪些写了但没验 |
+| 计划书版本规则 | `plan\` 里**始终只放当前有效版**（文件名固定，版本号写在文件头）；**只有大改才推进版本**，旧版按「版本号+日期」移入 `..\archive\`；**小修就地改**。链条：**初稿 → v1 → v2 → ……** |
 | 辩论过程在哪 | `..\archive\model-fight\`（5 份）。**除非要追溯"某方案为什么被否掉"，否则不用读** |
 | 用户是谁 | 应届生求职者。**学习成本与交付时间是一等约束** —— 方案要"他学得会"，不是"理论上最优" |
 
@@ -189,7 +191,7 @@ docker compose logs -f api                 # 看日志
 ```powershell
 cd web
 pnpm install
-pnpm dev                                   # http://127.0.0.1:5173（已配好 /healthz 等代理）
+pnpm dev                                   # http://localhost:5173 ← 注意是 localhost，不是 127.0.0.1（见 §10）
 pnpm build                                 # vue-tsc 类型检查 + 构建
 ```
 
@@ -238,10 +240,10 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | 10 | **知识库 A 的既有结论是"RAG 增益很小"**，这是**诚实结论，不要粉饰** | 增益集中在**私有 / 长尾 / 版本敏感**的知识上 —— 这正是企业做 RAG 的真实动因 |
 | 11 | **所有可调项走配置 / 环境变量，不硬编码** | 配额、阈值、模型名、chunk 大小都会变；写死了就要改代码 |
 
-### 7.2 通用风格 —— ⚠️ **尚未落地，仅作参照**
+### 7.2 通用风格 —— ✅ **已落地**
 
-> **本仓库还没有代码，下面是沿用项目 #1 的做法**（不是我们现在"定"的）。
-> **落地时以 `pyproject.toml` / 前端配置文件里的实际配置为准**，本表只用来提醒"别自己另发明一套"。
+> 2026-10-14 起本仓库**已经有代码**，下面是**实际生效**的配置。
+> **权威来源仍是 `pyproject.toml` / 前端配置文件**，本表只用来提醒"别自己另发明一套"。
 
 - 格式 / lint：**ruff**（项目 #1 用 `line-length = 100`，`E501` 交给 formatter）
 - 测试：**pytest**（项目 #1 用 `asyncio_mode = "auto"`）
@@ -260,7 +262,7 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | `..\archive\**` | 🔴 **只增不改**。尤其 `model-fight\` —— **绝不修改、绝不删除** |
 | `..\ops\server-snapshot.md` | 初始快照是**基线**；要记改造后状态就**新开一节**，不要覆盖 |
 | `.env` / `*.key` / `*.pem` / `*credential*` | 🔴 **不读内容、不打印、不进 git**。只允许动 `.env.example` |
-| `..\plan\PROJECT-PLAN.md` | 改版走 §8 流程：**旧版带日期移入 `..\archive\`，再写新版**；不要原地大改 |
+| `..\plan\PROJECT-PLAN.md` | **当前有效版**（版本号写在文件头，文件名固定不变）。**只有大改才推进版本**：按「版本号 + 日期」移入 `..\archive\` 再写新版；**小修就地改**。`..\archive\**` 只增不改 |
 | `web\dist\`（构建产物） | ❌ 不手改，由构建生成 |
 | `.idea\` / `.vscode\` | 进 `.gitignore`，**不提交** |
 | `..\assets\**` | 大文件 / 私有数据，**不进 git** |
@@ -338,6 +340,7 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | **本项目与项目 #1 的容器 / 端口 / 卷撞车** | 两个项目都用 PostgreSQL / Redis 的默认端口；项目 #1 的 `redis-stack-server` 占着 `6379` | 三道隔离：① 容器名加 `gq-` 前缀 ② 卷用 `gq-*` **显式命名**（不用 compose 自动前缀）③ 宿主机端口挪到 5 万段 |
 | **容器以退出码 127 无限重启，日志只有 `[FATAL tini] exec uvicorn failed: No such file or directory`** | 多阶段构建里 **venv 建在 A 路径、拷到 B 路径**：venv 的控制台脚本会把解释器**绝对路径烧进 shebang**（`#!/build/.venv/bin/python`），运行镜像里没有 `/build` → exec 报 ENOENT。**报错极具误导性：看着像"uvicorn 没装"，其实装了**。顺带：`ENV PATH="/app/.venv/bin:$PATH"` 那行删了也是 127，报错一模一样 | 两个阶段的 venv 路径必须**完全一致**（都放 `/app/.venv`）。排查手法：`docker run --rm --entrypoint head <镜像> -1 /app/.venv/bin/uvicorn` 直接看 shebang |
 | **worker 容器永远 `unhealthy`，但进程明明活着** | `python:3.13-slim` 里**没有 `pgrep` / `ps`**（procps 不在 slim 基础镜像中），healthcheck 里的 `pgrep` 直接失败 | 运行阶段补装 `procps`。**别在宿主机猜，要在镜像里验**：`docker run --rm --entrypoint which <镜像> pgrep` |
+| **`http://127.0.0.1:5173` 打不开，但 Vite 明明说已启动** | Vite 默认绑 `localhost`；Windows 上 `localhost` 可能只解析到 IPv6 `::1`，于是 IPv4 的 `127.0.0.1` 被拒（浏览器报 `ERR_CONNECTION_REFUSED`，很容易误判成"服务没起"） | 用 **`http://localhost:5173`**。要让 IPv4 也能访问：`pnpm dev --host 127.0.0.1` |
 
 ---
 
@@ -348,6 +351,7 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | `repo\README.md` | **外人**（GitHub 访客 / 面试官） | 项目是干什么的、解决什么问题、**怎么安装 / 快速上手（可复制的命令）**、用法示例、截图、依赖、许可、贡献方式、联系方式 |
 | `repo\AGENTS.md`（本文件） | **AI 助手** | 流程 / 命令 / 代码风格与约定（尤其反直觉的）/ 禁区 / 环境要求 / 工作区架构 / 当前状态 |
 | `..\plan\PROJECT-PLAN.md` | **人 + AI** | 项目计划书：定位、约束、技术栈、架构、分期、缺口、**现在与后续的完整规划** |
+| `..\plan\PHASES.md` | **人 + AI** | **阶段进度**：现在做到哪、还剩哪些、**哪些写了但没验**（未验证清单） |
 | `..\ops\server-log.md` | 人 + AI | 服务器命令流水 |
 
 **规则**：不冗余、不写过程账、不写叙事；`archive\` 只增不改；`plan\` 只保留当前有效版。
@@ -371,43 +375,8 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | 项 | 值 |
 |---|---|
 | 阶段 | **v1.0 骨架已落地**（可跑通 lint / test / compose / 前端 build），业务功能尚未开始 |
-| 计划书版本 | `plan\PROJECT-PLAN.md` **v2（补坑版）**；v1 已逐字冻结在 `..\archive\PROJECT-PLAN-v1-2026-10-13.md` |
+| 计划书版本 | `plan\PROJECT-PLAN.md` **v1**（当前有效版，版本号写在文件头）；改版前的定稿已命名**初稿**，逐字冻结在 `..\archive\PROJECT-PLAN-初稿-2026-10-13.md` |
+| 阶段进度 | **`plan\PHASES.md`** —— 当前在 **阶段 1 · v1.0（约 30%）**，下一步是第 1 项「登录 + `tenant_id` 数据模型」 |
 | 下一步 | **补 v1.0 业务功能**：① 登录 + `tenant_id` 数据模型 ② 会话列表 + 聊天（引用溯源 + 拒答 + SSE）③ 知识库上传 + 入库 worker ④ 只读评测报告页 |
 | 未决项 | **无** |
 | 刚完成 | ✅ **系统瘦身**（2026-10-14，关 6 单元，`available` +100 MB，详见 §10）<br>✅ **v1.0 骨架**（2026-10-14，首个提交 `67b8d1d`，44 文件；`ruff`/`pytest`/`compose config`/`pnpm build` 全绿）<br>✅ **本地 compose 实跑通**（2026-10-14，提交 `7e3c02d`：4 容器 healthy、浏览器点通、修掉 4 个只在真跑时暴露的问题） |
-
-### 13.1 🔖 接续点（2026-10-14 03:14 记录 · 用户关机前）
-
-> **用途**：用户要关电脑，这一节供**重启后接着干**。恢复并确认无误后可以删掉本节。
-
-**一、关机不会丢的**
-- **代码**：3 个提交都在 `repo\`（`7e3c02d` / `9ac2886` / `67b8d1d`），工作区干净
-- **数据库数据**：在 Docker **具名卷 `gq-pgdata`** 里，重启不丢 —— 🔴 **别跑 `docker compose down -v`**（会删卷）
-- **本地镜像**：`grounded-qa-api:0.1.0` / `pgvector/pgvector:0.8.0-pg16` / `redis:7.4.1-alpine` / `python:3.13.1-slim-bookworm` 都已就绪，**开机后 `up -d` 不需要重新拉取**
-
-**二、关机会消失的**（本来也不需要留）
-- 4 个容器：`gq-api` / `gq-worker` / `gq-postgres` / `gq-redis`
-- Vite dev server（`http://localhost:5173`）
-
-**三、开机后第一步**
-```powershell
-# 1) 先起 Docker Desktop，等托盘图标变绿
-cd E:\projects\grounded-qa\repo
-docker compose up -d          # 镜像已就绪，不用 --build
-docker compose ps             # 4 个都应显示 (healthy)
-
-# 2) 前端（可选）
-cd web ; pnpm dev             # 然后开 http://localhost:5173
-```
-
-> ⚠️ 若 `up -d` 又开始拉镜像并报 `unexpected media type text/html`：**镜像加速器又坏了** ——
-> 见 §10 那条，用可用的 mirror（实测 `docker.m.daocloud.io`）拉取后 `docker tag` 回规范名。
-
-**四、下一步待办（优先级从高到低）**
-1. **主线：补 v1.0 业务功能**（见上表「下一步」四项）
-2. `repo\.env` 填真实 API Key（现在仍是占位值）
-3. **改 git 邮箱**：当前是 gitee 的 noreply（`12260707+wdnmded@user.noreply.gitee.com`），
-   推 GitHub 前要改，否则提交不会关联到账号
-4. 配 GitHub Secrets（`ACR_REGISTRY` / `ACR_USERNAME` / `ACR_PASSWORD` / `SSH_*`），CI 才真正跑得起来
-5. **服务器侧未做的两件**：第一次实测 **80 端口是否被阻断**、配 Docker daemon 的 **registry mirror**
-   （届时按 §9.2 报批：🟡 改动类，先公示命令）
