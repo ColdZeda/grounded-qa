@@ -45,19 +45,26 @@ class Settings(BaseSettings):
     redis_db: int = 0
     redis_maxmemory: str = "96mb"
 
-    # ---------- 对话 / 多模态（智谱免费档）----------
-    llm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    # ---------- 对话 / 多模态（任意 OpenAI 兼容端点）----------
+    # ⚠️ 刻意**不绑定厂商**：换供应商只改这几个值，不动代码。
+    #    当前默认走 DeepSeek；也可换智谱（glm-4-flash 免费档）等。
+    llm_base_url: str = "https://api.deepseek.com"
     llm_api_key: str = ""
-    llm_model: str = "glm-4-flash"
+    llm_model: str = "deepseek-flash"
 
-    # ---------- embedding / rerank（百炼）----------
+    # ---------- embedding ----------
     # ⚠️ embedding_model / embedding_dim 是**元数据锁**：
     #    换模型必须全量重嵌入，否则检索质量会静默变差（AGENTS §7.1 约定 3）。
+    # ⚠️ DeepSeek **不提供 embedding**，这一项必须另选一家（默认示例：阿里云百炼）。
     embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     embedding_api_key: str = ""
     embedding_model: str = "text-embedding-v3"
     embedding_dim: int = 1024
 
+    # ---------- rerank（精排）----------
+    # 可以和 embedding 共用同一家 / 同一把 key，但必须用**专门的 rerank 模型**：
+    # embedding 是双塔（query / doc 分开编码），rerank 是交叉编码，两者不能互相替代。
+    rerank_enabled: bool = True
     rerank_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
     rerank_api_key: str = ""
     rerank_model: str = "gte-rerank-v2"
