@@ -60,6 +60,7 @@ repo\
 │   └─ kb\               知识库入库脚本
 ├─ deploy\               nginx / compose / 服务器初始化
 ├─ docs\{architecture.md, evidence\, records\, archive\}
+│                        ⚠️ architecture.md = **解释层唯一归属地**（为什么这么做），见 §12 纪律 7
 ├─ .github\workflows\
 ├─ Dockerfile
 ├─ docker-compose.yml         本地开发栈（PG/Redis/api/worker）
@@ -396,6 +397,7 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | 文件 | 给谁看 | 写什么 |
 |---|---|---|
 | `repo\README.md` | **外人**（GitHub 访客 / 面试官） | 项目是干什么的、解决什么问题、**怎么安装 / 快速上手（可复制的命令）**、用法示例、截图、依赖、许可、贡献方式、联系方式 |
+| `repo\docs\architecture.md` | **人**（面试官 · 三个月后的你自己） | **"为什么这么做"** —— 每个不显然的设计决定：解决什么问题 / 天真做法会怎样 / 代价是什么。**解释层的唯一归属地**（见 §12 纪律 7） |
 | `repo\AGENTS.md`（本文件） | **AI 助手** | 流程 / 命令 / 代码风格与约定（尤其反直觉的）/ 禁区 / 环境要求 / 工作区架构 / 当前状态 |
 | `..\plan\PROJECT-PLAN.md` | **人 + AI** | 项目计划书（**细节的唯一归属地**）：定位、约束、技术栈、架构、**§8 功能分期与进度（含待定决策 §8.4 / 未验证清单 §8.5）**、缺口、下一步 |
 | `..\plan\PHASES.md` | **人 + AI** | **大方向**：只有一张阶段总览表（哪个阶段 / 还剩几个）。**刻意保持薄** |
@@ -405,6 +407,7 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 
 **规则**：不冗余、不写过程账、不写叙事；`archive\` 只增不改；`plan\` 只保留当前有效版。
 **`ops\` 只保留这 2 个文件**（见 §12 纪律 6）。
+**解释层的唯一归属地是 `repo\docs\architecture.md`**（见 §12 纪律 7）：**详细解释写那里，本文件 §7.1 只放一句话结论 + 指过去**。
 **`plan\` 内部分工**：**`PHASES.md` 放"大方向"（薄）、`PROJECT-PLAN.md` 放"细节"（厚）、`CANDIDATES.md` 放"没定的想法"（只增不删）**。
 
 ---
@@ -417,8 +420,9 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | **2** | **真要问，一次问清，只问一件。** 不许把决策拆成一串小问题慢慢挤 |
 | **3** | **要新增工作项，必须同时砍掉一个 —— 净增为零。** 答不出"换掉哪个"，就不许加 |
 | **4** | **想法不进计划书。** 还没定的一律放 `..\plan\CANDIDATES.md`（**只增不删**）；计划书写"已定"，候选池写"没定" |
-| **5** | **本文件（AGENTS.md）超过 65 KB 必须压缩。** 助手侧对**指令文件**有 **65 KB 预算**，超了会**从尾部静默截断** ⇒ **后面的内容等于不存在**（拿项目 #1 的实测教训）。<br>→ **加内容前先看体积**：`(Get-Item repo\AGENTS.md).Length / 1KB`。当前约 **36 KB**（2026-10-14）。快到线时优先把细节**外移**到 `plan\PROJECT-PLAN.md`（本文件只留"怎么做事"，不留"项目细节"）—— §10「已知坑」是最容易膨胀的一块 |
+| **5** | **本文件（AGENTS.md）超过 65 KB 必须压缩。** 助手侧对**指令文件**有 **65 KB 预算**，超了会**从尾部静默截断** ⇒ **后面的内容等于不存在**（拿项目 #1 的实测教训）。<br>→ **加内容前先看体积**：`(Get-Item repo\AGENTS.md).Length / 1KB`。当前约 **41 KB**（2026-10-15）。快到线时优先把细节**外移**：**"为什么"进 `docs\architecture.md`**（见纪律 7），**"坑"的完整案例进 `plan\PROJECT-PLAN.md`** —— 本文件只留"怎么做事 + 一句话结论"。§10「已知坑」和 §7.1「约定」是最容易膨胀的两块 |
 | **6** | **服务器的事分两个文件记，别混。**<br>· `..\ops\server-log.md` = **操作日志**（跑过什么命令 + 结果）—— **只追加，会越写越长**<br>· `..\ops\server-notes.md` = **记事**（基线快照 / 防火墙 / 端口判据 / 镜像加速器 / 瘦身等**结论性事实**）—— 就地更新<br>**判断标准**：这条是"**我跑了 X**"还是"**这台机器是这样**"？<br>⚠️ **2026-10-14 用户纠正**：我一开始把两者塞进同一个文件，理由是"少几个文件好找" —— **错的**。日志只增不减，把事实埋进流水里，等要找时就得翻几百行。**`ops\` 就这 2 个文件，不许再新开 md。** |
+| **7** | **解释必须落 `repo\docs\architecture.md`，不许只留在对话里。**<br>凡是"**为什么这么做 / 换成别的会怎样 / 代价是什么**"这类**解释性内容**，讲完就写进去。<br>**判断方法**：如果你说了"这里有个坑""为什么不这样""我认为最值得说的是……"，那它就该进 `architecture.md`。<br>⚠️ **2026-10-15 用户指出**：我把三条关键设计只在对话里讲了 —— 用户看完才发现"**连我自己都不知道你是这样做的**"。**对话流不是文档**，它会被压缩、会丢失，而且用户**没法回头查**。<br>📌 分工：**详细解释进 `architecture.md`；`AGENTS §7.1` 只放一句话结论 + 指过去**（避免两边各写一份然后慢慢跑偏） |
 
 **对话流不作为正式记录**（上下文压缩会丢信息，且可能换会话 / 换 agent）→ 该落文件的一律落文件。
 
@@ -433,4 +437,4 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | 大方向 | **`plan\PHASES.md`**（薄表）—— 当前在 **阶段 1 · v1.0（约 50%）**；明细见 **`plan\PROJECT-PLAN.md` §8** |
 | 下一步 | **v1.0 第 2 项的前端部分**：Vue 路由 + 登录页 + 会话列表 + 聊天页（消费 `POST /conversations/{id}/messages` 的 SSE）。后端已就绪 |
 | 未决项 | **无**（§8.4 D1 已**实测收口**：`pg_trgm` 在 `ctype=C` 下对中文完全失效，已改 `C.UTF-8`，路径不变） |
-| 刚完成 | ✅ **v1.0 第 2 项后端：问答主链路**（2026-10-14）：`app/rag/providers.py`（对话/embedding/rerank 三个客户端，只用 httpx、不用厂商 SDK）+ `retrieval.py`（`word_similarity` 全文 + pgvector 向量 → **RRF** 融合）+ `prompt.py`（提示词与拒答文案）+ `pipeline.py`（**先判拒答再决定调不调模型**）+ `POST /conversations/{id}/messages`（**SSE**：`sources`→`delta`*→`done`）+ `GET .../messages`<br>✅ **61 测试全绿**（RRF 纯单元 + 咨询链路的真库集成：**空库拒答且一次都不调模型**、相似度不够也拒答、引用落库且编号与提示词一致、**跨租户检索不到**、越权 404、超长问题 422）<br>✅ **端到端验过**：容器 healthy、9 条路由注册、**启动自检无告警**<br>✅ **实测揪出一个静默降级**：`pg_trgm` 在 `ctype=C` 下切不出中文三元组 → `word_similarity` **恒为 0**、全文路永远空召回**且不报错**。已把建库参数改成 `C.UTF-8`（实测 0 → 0.4）、加了启动自检告警（`app/db/checks.py`）<br>✅ **系统瘦身**（2026-10-14，关 6 单元，`available` +100 MB）<br>✅ **v1.0 骨架 + 本地 compose 实跑通 + git 身份改 noreply**<br>✅ **端口实测 + 8080 放行**：**80 完全可用**；8080 已放行，实测 `TIMEOUT` → **`REFUSED`**<br>✅ **`ops\` 定型为 2 个文件**：`server-log.md`（操作日志）+ `server-notes.md`（记事） |
+| 刚完成 | ✅ **新建 `docs/architecture.md`（解释层）**（2026-10-15，用户要求）：把此前**只在对话里讲过**的设计理由全部落盘 —— 多租户三道防线 / 越权测试为什么那样设计 / 拒答为什么在调模型之前 / RRF 为什么不能当阈值 / SSE 的四个坑 / 数据模型为什么这样定型 / **诚实的代价清单**。同时定下 **§12 纪律 7：解释不许只留在对话里**<br>✅ **v1.0 第 2 项后端：问答主链路**（2026-10-14）：`app/rag/providers.py`（对话/embedding/rerank 三个客户端，只用 httpx、不用厂商 SDK）+ `retrieval.py`（`word_similarity` 全文 + pgvector 向量 → **RRF** 融合）+ `prompt.py`（提示词与拒答文案）+ `pipeline.py`（**先判拒答再决定调不调模型**）+ `POST /conversations/{id}/messages`（**SSE**：`sources`→`delta`*→`done`）+ `GET .../messages`<br>✅ **61 测试全绿**（RRF 纯单元 + 咨询链路的真库集成：**空库拒答且一次都不调模型**、相似度不够也拒答、引用落库且编号与提示词一致、**跨租户检索不到**、越权 404、超长问题 422）<br>✅ **端到端验过**：容器 healthy、9 条路由注册、**启动自检无告警**<br>✅ **实测揪出一个静默降级**：`pg_trgm` 在 `ctype=C` 下切不出中文三元组 → `word_similarity` **恒为 0**、全文路永远空召回**且不报错**。已把建库参数改成 `C.UTF-8`（实测 0 → 0.4）、加了启动自检告警（`app/db/checks.py`）<br>✅ **系统瘦身**（2026-10-14，关 6 单元，`available` +100 MB）<br>✅ **v1.0 骨架 + 本地 compose 实跑通 + git 身份改 noreply**<br>✅ **端口实测 + 8080 放行**：**80 完全可用**；8080 已放行，实测 `TIMEOUT` → **`REFUSED`**<br>✅ **`ops\` 定型为 2 个文件**：`server-log.md`（操作日志）+ `server-notes.md`（记事） |
