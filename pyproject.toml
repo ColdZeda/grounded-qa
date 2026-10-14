@@ -16,11 +16,25 @@ dependencies = [
     # --- 配置 / 校验 ---
     "pydantic>=2.9,<3.0",
     "pydantic-settings>=2.6,<3.0",
+    # EmailStr 需要它（pydantic 自己的可选依赖，显式写出来更清楚）
+    "email-validator>=2.2,<3.0",
+    # ⚠️ Windows 上**没有系统时区数据库**，`zoneinfo.ZoneInfo("Asia/Shanghai")` 会抛
+    #    "Can't locate timezone"（Alembic 的 `timezone` 配置就会踩到）。
+    #    Linux 一般有 /usr/share/zoneinfo，但这个包纯数据、体积小，
+    #    装上能让本地和服务器行为一致，不值得省。
+    "tzdata>=2024.2",
     # --- 数据库 ---
     "sqlalchemy[asyncio]>=2.0.36,<3.0",
     "asyncpg>=0.30,<1.0",
     "pgvector>=0.3.6,<1.0",
     "alembic>=1.14,<2.0",
+    # --- 鉴权 ---
+    # bcrypt：密码哈希。⚠️ 选它而不是 argon2 —— bcrypt 有 **abi3 wheel**（cp39+ 通用），
+    #         Python 3.13 上直接装；argon2-cffi 的 C 扩展在 3.13 上不一定有预编译包，
+    #         一旦要现场编译，CI 变慢 / 容器构建可能失败。**能装上是第一位的。**
+    "bcrypt>=4.2,<5.0",
+    # PyJWT：纯 Python，无 C 扩展，签 / 验 token
+    "pyjwt>=2.10,<3.0",
     # --- 缓存 / 队列（自研 mini worker 用 BLPOP，不用 Celery）---
     "redis>=5.2,<6.0",
     # --- HTTP 客户端（所有模型都走 API）---

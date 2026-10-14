@@ -12,7 +12,13 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# ⚠️ 两个"开发默认值"抽成常量，方便启动校验直接比对（也避免在多处重复字面量）。
+# ⚠️ `DEV_JWT_SECRET` 给足 32 字节 —— 见 Settings.jwt_secret 的说明。
+DEV_JWT_SECRET = "dev-only-insecure-secret-change-me-in-production"
+DEFAULT_ADMIN_PASSWORD = "change-me"
 
 
 class Settings(BaseSettings):
@@ -34,7 +40,15 @@ class Settings(BaseSettings):
 
     # ---------- PostgreSQL ----------
     postgres_host: str = "localhost"
+    # ⚠️ **容器内互访**端口（容器网络里就是标准的 5432）
     postgres_port: int = 5432
+    # ⚠️ **宿主机侧**端口 —— compose 把容器的 5432 映射到宿主机的 55432
+    #    （避开项目 #1 的 3306/6379/8888/80，见 .env.example 的「本机端口规划」）。
+    #    用途：在 Windows 上直接跑 `uv run alembic ...` / `uv run pytest` 时，
+    #    连的必须是**映射出来的** 55432，而不是容器内的 5432。
+    #    判断规则见 `database_url`：**只有 host 是回环地址时才用它**。
+    #    容器里的 `POSTGRES_HOST` 是服务名 `postgres`（不是回环），所以不受影响。
+    postgres_host_port: int = 55432
     postgres_db: str = "grounded_qa"
     postgres_user: str = "grounded"
     postgres_password: str = "change-me"
@@ -82,19 +96,82 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 30
     token_quota_per_day: int = 200_000
 
-    # ---------- 管理端 ----------
-    admin_username: str = "admin"
-    admin_password: str = "change-me"
+    # ---------- 鉴权（JWT）----------
+    # ⚠️ 默认值**仅供本地开发**；生产必须由环境变量覆盖（下面的 `_guard_production_secrets` 会拦）。
+    #    它是"能签发任意身份"的钥匙，泄露 = 全站沦陷。
+    #
+    # ⚠️ 长度不是随便定的：**HS256 的密钥至少 32 字节**（RFC 7518 §3.2）。
+    #    短于 32 字节时 PyJWT 会抛 `InsecureKeyLengthWarning` ——
+    #    这类警告最容易被忽略，然后带着弱密钥上线。所以默认值直接给足长度。
+    jwt_secret: str = DEV_JWT_SECRET
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 720
+    # bcrypt 轮数。12 是 2024 年前后的常见取值；调高更安全但登录更慢。
+    # ⚠️ 登录接口跑在**线程池**里（见 app/api/auth.py），不会卡住事件循环。
+    password_hash_rounds: int = 12
+
+    # ---------- 管理端 bootstrap（首次建库用）----------
+    # ⚠️ 这两个值只在 `python -m app.db.seed` 里用一次；生产必须改掉默认值。
+    admin_email: str = "admin@example.com"
+    admin_password: str = DEFAULT_ADMIN_PASSWORD
+
+    # ---------- API ----------
+    api_prefix: str = "/api/v1"
+
+    @model_validator(mode="after")
+    def _guard_production_secrets(self) -> Settings:
+        """**生产环境不许用开发默认密钥启动。**
+
+        ⚠️ 这类校验必须"启动就炸"。等跑到某个请求才发现，意味着它**已经上线了** ——
+            而公网上一个 `dev-only-...` 的 JWT 密钥等于任何人都能伪造管理员身份。
+
+        ⚠️ 只在 `APP_ENV != "dev"` 时生效，所以本地开发零摩擦。
+            代价要说清楚：如果部署时忘了把 `APP_ENV` 改成 `prod`，这道闸**不会**拦你 ——
+            它防的是"知道要上生产但忘了换密钥"，不是"忘了设 APP_ENV"。
+        """
+        if self.app_env == "dev":
+            return self
+
+        problems: list[str] = []
+
+        secret_bytes = len(self.jwt_secret.encode("utf-8"))
+        if self.jwt_secret == DEV_JWT_SECRET:
+            problems.append("JWT_SECRET 仍是开发默认值")
+        elif secret_bytes < 32:
+            problems.append(
+                f"JWT_SECRET 只有 {secret_bytes} 字节，HS256 要求至少 32 字节（RFC 7518 §3.2）"
+            )
+
+        if self.admin_password == DEFAULT_ADMIN_PASSWORD:
+            problems.append("ADMIN_PASSWORD 仍是默认值")
+
+        if problems:
+            raise ValueError("配置不安全，拒绝启动 —— " + "；".join(problems))
+
+        return self
 
     # ---------- 可观测 ----------
     metrics_enabled: bool = True
+
+    @property
+    def postgres_effective_port(self) -> int:
+        """实际该连哪个端口：**容器内 5432，宿主机 55432**。
+
+        判断依据是 host 是不是回环地址 —— 很土，但准：
+            · 宿主机（Windows 开发）：`POSTGRES_HOST=localhost` → 走映射端口
+            · 容器内（compose）：`POSTGRES_HOST=postgres`（服务名）→ 走 5432
+        """
+        loopback = {"localhost", "127.0.0.1", "::1", ""}
+        if self.postgres_host.strip().lower() in loopback:
+            return self.postgres_host_port
+        return self.postgres_port
 
     @property
     def database_url(self) -> str:
         """SQLAlchemy 异步连接串（asyncpg 驱动）。"""
         return (
             f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+            f"@{self.postgres_host}:{self.postgres_effective_port}/{self.postgres_db}"
         )
 
     @property

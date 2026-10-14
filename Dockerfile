@@ -57,6 +57,11 @@ WORKDIR /app
 
 COPY --from=builder /app/.venv /app/.venv
 COPY --chown=appuser:appuser app /app/app
+# ⚠️ 迁移文件也**必须**进镜像 —— 部署时要在这个容器里跑 `alembic upgrade head`。
+#    只 COPY app/ 的话，容器里没有 alembic.ini 和 migrations/，
+#    部署脚本会在"执行迁移"这一步莫名其妙地失败。
+COPY --chown=appuser:appuser alembic.ini /app/alembic.ini
+COPY --chown=appuser:appuser migrations /app/migrations
 
 USER appuser
 

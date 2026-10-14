@@ -64,6 +64,8 @@ repo\
 ├─ Dockerfile
 ├─ docker-compose.yml         本地开发栈（PG/Redis/api/worker）
 ├─ docker-compose.prod.yml    生产栈（+ nginx/Prometheus，严格 mem_limit）
+├─ alembic.ini                迁移配置（⚠️ 必须保持**纯 ASCII**！见 §10）
+├─ migrations\                Alembic 迁移（env.py + versions\）—— 必须随镜像一起打包
 ├─ pyproject.toml
 ├─ AGENTS.md             ← 本文件
 └─ README.md             ← 给外人看
@@ -182,11 +184,30 @@ Copy-Item .env.example .env      # 然后填自己的 API Key（.env 已被 giti
 uv sync --all-groups                       # 安装依赖（含 dev 组）
 uv run ruff check .                        # lint
 uv run ruff format --check .               # 格式
-uv run pytest -q                           # 测试（不需要 docker）
+uv run pytest -q -rs                       # 测试（-rs 会列出"跳过原因"，别省）
 uv run uvicorn app.main:app --reload       # 本地起后端
 docker compose up -d                       # 起 PG/Redis/api/worker
 docker compose logs -f api                 # 看日志
 ```
+
+### 数据库迁移 / 初始化（**改了模型就必须做**）
+
+```powershell
+# ① 生成迁移（对着**真实** PG 比对，所以本地栈要先起来）
+uv run alembic revision --autogenerate -m "描述这次改了什么"
+# ② 人工过一遍生成的迁移文件！autogenerate 有两件事**管不了**，必须手补：
+#    · 用到 pgvector → 顶部 import pgvector.sqlalchemy，且 upgrade() 里要有
+#      CREATE EXTENSION IF NOT EXISTS vector（必须在建 chunks 表**之前**）
+# ③ 应用 + 校验（`check` 报 "No new upgrade operations detected" 才算模型与库一致）
+uv run alembic upgrade head
+uv run alembic check
+# ④ 建默认租户 + 管理员（幂等，可重复跑）
+uv run python -m app.db.seed
+```
+
+> ⚠️ **宿主机上跑这些命令不需要改端口**：`config.py` 会判断 host 是不是回环地址 ——
+> 是（Windows 开发）就走 `POSTGRES_HOST_PORT`（55432），不是（容器内 `postgres`）就走 5432。
+> 详见 §10「容器内 5432 / 宿主机 55432」那条。
 
 ### 本地前端
 
@@ -241,6 +262,11 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | 9 | **测试里不许真调 LLM API** | 烧钱 + 结果不稳定 + 评测失真 → 一律 **mock / 回放 / 缓存** |
 | 10 | **知识库 A 的既有结论是"RAG 增益很小"**，这是**诚实结论，不要粉饰** | 增益集中在**私有 / 长尾 / 版本敏感**的知识上 —— 这正是企业做 RAG 的真实动因 |
 | 11 | **所有可调项走配置 / 环境变量，不硬编码** | 配额、阈值、模型名、chunk 大小都会变；写死了就要改代码 |
+| 12 | **多租户查询一律走 `TenantScopedRepository`；禁止 `session.get(Model, id)`** | 仓储层把 `WHERE tenant_id = ?` 焊进查询构造，你**没有"忘记加条件"这个选项**。`session.get()` 只按主键查 —— 那是越权漏洞的经典写法（`app\db\repository.py` 的 docstring 有正反例）。写入侧同理：`repo.build()` 传 `tenant_id` 会直接报错 |
+| 13 | **隔离是两层的：租户之间 + 租户内部按用户** | 只做租户隔离的话，同租户的普通成员能互相看到会话。管理员是**租户内的**管理员，只多看本租户的数据，**不是**跨租户超级用户 |
+| 14 | **越权一律返回 404，不要 403** | 403 等于承认"这条数据存在" → 可以被用来**枚举**有效 id。只有当"已登录但角色不够"时才给 403（如普通成员调管理端） |
+| 15 | **枚举列用 `pg_enum()` + `enum_check()`，别用 PG 原生 ENUM、也别开 `Enum(create_constraint=True)`** | 原生 ENUM 加取值要 `ALTER TYPE`（老 PG 不能在事务里跑）；`create_constraint=True` 会让 autogenerate **生成两条重复 CHECK**。理由详见 `app\db\base.py` |
+| 16 | **测试不许共享全局数据库引擎，每个用例自建一个** | pytest-asyncio **每个测试一个新事件循环**，而 asyncpg 连接**绑定事件循环** → 复用连接池会撞上 `attached to a different loop`。见 `tests\conftest.py` |
 
 ### 7.2 通用风格 —— ✅ **已落地**
 
@@ -347,6 +373,13 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | **容器以退出码 127 无限重启，日志只有 `[FATAL tini] exec uvicorn failed: No such file or directory`** | 多阶段构建里 **venv 建在 A 路径、拷到 B 路径**：venv 的控制台脚本会把解释器**绝对路径烧进 shebang**（`#!/build/.venv/bin/python`），运行镜像里没有 `/build` → exec 报 ENOENT。**报错极具误导性：看着像"uvicorn 没装"，其实装了**。顺带：`ENV PATH="/app/.venv/bin:$PATH"` 那行删了也是 127，报错一模一样 | 两个阶段的 venv 路径必须**完全一致**（都放 `/app/.venv`）。排查手法：`docker run --rm --entrypoint head <镜像> -1 /app/.venv/bin/uvicorn` 直接看 shebang |
 | **worker 容器永远 `unhealthy`，但进程明明活着** | `python:3.13-slim` 里**没有 `pgrep` / `ps`**（procps 不在 slim 基础镜像中），healthcheck 里的 `pgrep` 直接失败 | 运行阶段补装 `procps`。**别在宿主机猜，要在镜像里验**：`docker run --rm --entrypoint which <镜像> pgrep` |
 | **`http://127.0.0.1:5173` 打不开，但 Vite 明明说已启动** | Vite 默认绑 `localhost`；Windows 上 `localhost` 可能只解析到 IPv6 `::1`，于是 IPv4 的 `127.0.0.1` 被拒（浏览器报 `ERR_CONNECTION_REFUSED`，很容易误判成"服务没起"） | 用 **`http://localhost:5173`**。要让 IPv4 也能访问：`pnpm dev --host 127.0.0.1` |
+| **`alembic` 一连库就挂，报 `UnicodeDecodeError: 'gbk' codec can't decode byte 0x80`** | Alembic 用 **`encoding="locale"`** 读 `alembic.ini`（`alembic/util/compat.py`）。中文 Windows 的 locale 是 **GBK** → 文件里的 **UTF-8 中文注释**直接把它读崩，**在连数据库之前**就失败。⚠️ Linux（C.UTF-8）上同样内容完全正常 ⇒ **只在开发机复现，服务器上永远看不到** | `alembic.ini` **保持纯 ASCII**（连注释都用英文）；另外 `migrations/env.py` 里 `fileConfig(..., encoding="utf-8")` 也显式给了编码。2026-10-14 实测踩中 |
+| **`alembic` 报 `Can't locate timezone: Asia/Shanghai`** | Windows **没有系统时区数据库**，`zoneinfo.ZoneInfo("Asia/Shanghai")` 找不到。Linux 一般有 `/usr/share/zoneinfo`，所以又是"只在开发机复现" | 装 **`tzdata`**（已加进主依赖）。纯数据包、体积小，装上让两边行为一致 |
+| **在 PowerShell 里跑 python 脚本，中文输出变成 `�½��⻧` 这种乱码** | 两边编码对不上：**Python 的 stdout 是 `gbk`**（locale=cp936），而 **PowerShell 的 `[Console]::OutputEncoding` 是 `utf-8`** → GBK 字节被当 UTF-8 解读 | 让 Python 统一输出 UTF-8：设环境变量 **`PYTHONUTF8=1`**（推荐，一次性写进用户环境变量，对所有 Python 工具都生效，顺带消掉一整类"用 GBK 读 UTF-8 文件"的坑）：<br>`[Environment]::SetEnvironmentVariable('PYTHONUTF8','1','User')`<br>⚠️ **这是改你机器上的用户级设置，AI 不替你动** |
+| **迁移文件里出现两条一模一样的 CHECK 约束** | `Enum(..., create_constraint=True)` 会把约束**同时**挂在"列类型"和"表约束"两处，Alembic autogenerate 就生成两条（一条叫 `document_status`、一条叫 `ck_documents_document_status`） | 别开 `create_constraint=True`；用 `app\db\base.py` 的 **`enum_check()`** 显式生成（见 §7.1 约定 15） |
+| **`alembic --autogenerate` 生成的迁移一跑就 `NameError` 或建表失败** | autogenerate **管不了两件事**：① 向量列会引用 `pgvector.sqlalchemy.vector.VECTOR` 但**不导入** ② **不会**生成 `CREATE EXTENSION vector` | 每次生成迁移都要**人工过一遍**：顶部补 `import pgvector.sqlalchemy`；`upgrade()` 开头补 `op.execute("CREATE EXTENSION IF NOT EXISTS vector")`（**必须在建 `chunks` 表之前**）。已写进 §6 的迁移流程 |
+| **测试之间互相干扰、报 `Task got Future attached to a different loop`，而单跑每个测试都过** | pytest-asyncio **每个测试函数一个新事件循环**，而 asyncpg 连接**绑定事件循环** —— 共享一个进程级连接池就会跨循环复用连接。这个报错完全看不出和"测试隔离"有关，极易误判成业务代码 bug | 每个测试**自建引擎**且用 **`NullPool`**（不复用连接）。见 `tests\conftest.py` 与 §7.1 约定 16 |
+| **容器内连 5432、宿主机要连 55432，改来改去老是连错库** | compose 把容器的 5432 映射到宿主机 55432（避开项目 #1）。两个端口各有各的用途，靠"记得改 `.env`"必然出错 | 让**代码自己判断**：`config.py` 看 `POSTGRES_HOST` 是不是回环地址 —— 是（Windows 开发）用 `POSTGRES_HOST_PORT`（55432），不是（容器内 `postgres` 服务名）用 `POSTGRES_PORT`（5432）。**所以宿主机上跑 alembic / pytest 不用改任何东西** |
 
 ---
 
@@ -376,7 +409,7 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | **2** | **真要问，一次问清，只问一件。** 不许把决策拆成一串小问题慢慢挤 |
 | **3** | **要新增工作项，必须同时砍掉一个 —— 净增为零。** 答不出"换掉哪个"，就不许加 |
 | **4** | **想法不进计划书。** 还没定的一律放 `..\plan\CANDIDATES.md`（**只增不删**）；计划书写"已定"，候选池写"没定" |
-| **5** | **本文件（AGENTS.md）超过 65 KB 必须压缩。** 助手侧对**指令文件**有 **65 KB 预算**，超了会**从尾部静默截断** ⇒ **后面的内容等于不存在**（拿项目 #1 的实测教训）。<br>→ **加内容前先看体积**：`(Get-Item repo\AGENTS.md).Length / 1KB`。当前约 **27 KB**。快到线时优先把细节**外移**到 `plan\PROJECT-PLAN.md`（本文件只留"怎么做事"，不留"项目细节"） |
+| **5** | **本文件（AGENTS.md）超过 65 KB 必须压缩。** 助手侧对**指令文件**有 **65 KB 预算**，超了会**从尾部静默截断** ⇒ **后面的内容等于不存在**（拿项目 #1 的实测教训）。<br>→ **加内容前先看体积**：`(Get-Item repo\AGENTS.md).Length / 1KB`。当前约 **36 KB**（2026-10-14）。快到线时优先把细节**外移**到 `plan\PROJECT-PLAN.md`（本文件只留"怎么做事"，不留"项目细节"）—— §10「已知坑」是最容易膨胀的一块 |
 | **6** | **服务器的事只记一个文件：`..\ops\server-log.md`。** 凡是"服务器上做了什么 / 服务器现在是什么样"，**一律追加到它**（A 流水 / B 备忘）——**不许再新开 md**（2026-10-14 用户要求：原先散着 3 份，找起来费劲）。<br>**唯一例外**：`server-snapshot.md` 是**一次性基线快照**，只新开一节，**不覆盖**，也**不当记事本用** |
 
 **对话流不作为正式记录**（上下文压缩会丢信息，且可能换会话 / 换 agent）→ 该落文件的一律落文件。
@@ -387,9 +420,9 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 
 | 项 | 值 |
 |---|---|
-| 阶段 | **v1.0 骨架已落地**（可跑通 lint / test / compose / 前端 build），业务功能尚未开始 |
+| 阶段 | **v1.0 开发中**：骨架 + **登录 / 多租户数据模型**已落地（41 测试全绿，含真库集成测试） |
 | 计划书版本 | `plan\PROJECT-PLAN.md` **v1**（当前有效版，版本号写在文件头）；改版前的定稿已命名**初稿**，逐字冻结在 `..\archive\PROJECT-PLAN-初稿-2026-10-13.md` |
-| 大方向 | **`plan\PHASES.md`**（薄表）—— 当前在 **阶段 1 · v1.0（约 36%）**；明细见 **`plan\PROJECT-PLAN.md` §8** |
-| 下一步 | **补 v1.0 业务功能**：① 登录 + `tenant_id` 数据模型 ② 会话列表 + 聊天（引用溯源 + 拒答 + SSE）③ 知识库上传 + 入库 worker ④ 只读评测报告页 |
-| 未决项 | **无** |
-| 刚完成 | ✅ **系统瘦身**（2026-10-14，关 6 单元，`available` +100 MB，详见 §10）<br>✅ **v1.0 骨架**（2026-10-14，首个提交 `47f44a8`，44 文件；`ruff`/`pytest`/`compose config`/`pnpm build` 全绿）<br>✅ **本地 compose 实跑通**（2026-10-14，提交 `5464f26`：4 容器 healthy、浏览器点通、修掉 4 个只在真跑时暴露的问题）<br>✅ **git 身份改为 GitHub noreply**（`ColdZeda <214781303+ColdZeda@users.noreply.github.com>`，仓库级；**全部历史提交的作者已一并改写**，所以哈希与改写前不同）<br>✅ **端口实测（结论推翻原假设）**：**80 完全可用（TCP 通 + HTTP 200）**，反而 **8080 没放行**（轻量的「防火墙」默认只开 80/443/22）。详见 §10 与 `plan\PROJECT-PLAN.md` §2.1.1<br>✅ **8080 已放行**（2026-10-14，用户在轻量「防火墙」加 TCP 8080 → 0.0.0.0/0；外网复测 `TIMEOUT` → **`REFUSED`**）<br>✅ **`ops\` 已收敛为 2 个文件**（2026-10-14，用户要求）：`registry-mirror.md` + `slimming-record.md` **并入 `server-log.md`**；今后服务器记录**只写 `server-log.md`**（§11 / §12 纪律 6） |
+| 大方向 | **`plan\PHASES.md`**（薄表）—— 当前在 **阶段 1 · v1.0（约 42%）**；明细见 **`plan\PROJECT-PLAN.md` §8** |
+| 下一步 | **v1.0 第 2 项：会话列表 + 聊天**（引用溯源 + 拒答 + SSE 流式）。全文检索那一路按 **§8.4 D1 的已定路径**先用 `pg_trgm` 起步 |
+| 未决项 | **无**（§8.4 D1 的**演进路径已定**：先 `pg_trgm`，之后按离线评测的数字决定是否升级 `zhparser`） |
+| 刚完成 | ✅ **v1.0 第 1 项：登录 + `tenant_id` 数据模型**（2026-10-14）：6 张表全带 `tenant_id`、Alembic 首个迁移（`alembic check` 无差异）、bcrypt + JWT、`/auth/login` `/auth/me`、**强制注入租户条件的仓储层**、会话列表/详情/新建端点、管理端仅管理员端点、seed 脚本<br>✅ **41 个测试全绿**（含**真库**集成测试：登录拒绝路径 + **跨租户越权** + 租户内按用户隔离 + 元测试"所有业务表必须有 tenant_id"）<br>✅ **端到端验过**：镜像重建 → 4 容器 healthy → 容器内 `alembic current` = `head`、6 条新路由注册、受保护端点全 401<br>✅ **系统瘦身**（2026-10-14，关 6 单元，`available` +100 MB）<br>✅ **v1.0 骨架**（2026-10-14，`ruff`/`pytest`/`compose config`/`pnpm build` 全绿）<br>✅ **本地 compose 实跑通**（2026-10-14：4 容器 healthy、浏览器点通）<br>✅ **git 身份改为 GitHub noreply**（`ColdZeda <214781303+ColdZeda@users.noreply.github.com>`；历史作者已一并改写，哈希与改写前不同）<br>✅ **端口实测 + 8080 放行**：**80 完全可用**（推翻原假设）；8080 已由用户在轻量「防火墙」放行，实测 `TIMEOUT` → **`REFUSED`**<br>✅ **`ops\` 已收敛为 2 个文件**：`registry-mirror.md` + `slimming-record.md` **并入 `server-log.md`** |
