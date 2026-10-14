@@ -379,4 +379,4 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | 阶段进度 | **`plan\PHASES.md`** —— 当前在 **阶段 1 · v1.0（约 30%）**，下一步是第 1 项「登录 + `tenant_id` 数据模型」 |
 | 下一步 | **补 v1.0 业务功能**：① 登录 + `tenant_id` 数据模型 ② 会话列表 + 聊天（引用溯源 + 拒答 + SSE）③ 知识库上传 + 入库 worker ④ 只读评测报告页 |
 | 未决项 | **无** |
-| 刚完成 | ✅ **系统瘦身**（2026-10-14，关 6 单元，`available` +100 MB，详见 §10）<br>✅ **v1.0 骨架**（2026-10-14，首个提交 `67b8d1d`，44 文件；`ruff`/`pytest`/`compose config`/`pnpm build` 全绿）<br>✅ **本地 compose 实跑通**（2026-10-14，提交 `7e3c02d`：4 容器 healthy、浏览器点通、修掉 4 个只在真跑时暴露的问题） |
+| 刚完成 | ✅ **系统瘦身**（2026-10-14，关 6 单元，`available` +100 MB，详见 §10）<br>✅ **v1.0 骨架**（2026-10-14，首个提交 `47f44a8`，44 文件；`ruff`/`pytest`/`compose config`/`pnpm build` 全绿）<br>✅ **本地 compose 实跑通**（2026-10-14，提交 `5464f26`：4 容器 healthy、浏览器点通、修掉 4 个只在真跑时暴露的问题）<br>✅ **git 身份改为 GitHub noreply**（`ColdZeda <214781303+ColdZeda@users.noreply.github.com>`，仓库级；**全部历史提交的作者已一并改写**，所以哈希与改写前不同） |
