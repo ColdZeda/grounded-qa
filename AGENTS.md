@@ -268,6 +268,9 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | 14 | **越权一律返回 404，不要 403** | 403 等于承认"这条数据存在" → 可以被用来**枚举**有效 id。只有当"已登录但角色不够"时才给 403（如普通成员调管理端） |
 | 15 | **枚举列用 `pg_enum()` + `enum_check()`，别用 PG 原生 ENUM、也别开 `Enum(create_constraint=True)`** | 原生 ENUM 加取值要 `ALTER TYPE`（老 PG 不能在事务里跑）；`create_constraint=True` 会让 autogenerate **生成两条重复 CHECK**。理由详见 `app\db\base.py` |
 | 16 | **测试不许共享全局数据库引擎，每个用例自建一个** | pytest-asyncio **每个测试一个新事件循环**，而 asyncpg 连接**绑定事件循环** → 复用连接池会撞上 `attached to a different loop`。见 `tests\conftest.py` |
+| 17 | **拒答必须由「调模型之前」的确定性代码决定，不许问模型** | 模型天然倾向于给出一个听起来合理的答案 —— 让它自己判断"要不要拒答"，拒答率就变成了模型心情的副产品，**统计不出来也优化不了**。做法见 `app\rag\pipeline.py`：证据不够 → 直接返回固定文案，**一次模型都不调**（不花 token、也不会被"润色"成看似有依据的话） |
+| 18 | **置信度阈值只能挂在 rerank 分数或向量余弦上，绝不能用 RRF 分数** | RRF 是**名次**的函数（`1/(k+rank)`）：库里只有一条毫不相关的内容时，它照样排第一、照样得 0.016 → 拿它比阈值 = **永远不拒答**。三条路的取舍写在 `pipeline.py` 的 `_should_refuse` |
+| 19 | **模型客户端一律走「构造时注入」，不许在业务代码里 new** | 一是不用厂商 SDK（换供应商只改 `.env`）；二是**测试必须能塞假实现**（约定 9）。入口：`app\rag\pipeline.py` 的 `build_clients()` + `app\api\chat.py` 的 `get_clients` 依赖 |
 
 ### 7.2 通用风格 —— ✅ **已落地**
 
@@ -381,6 +384,10 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | **`alembic --autogenerate` 生成的迁移一跑就 `NameError` 或建表失败** | autogenerate **管不了两件事**：① 向量列会引用 `pgvector.sqlalchemy.vector.VECTOR` 但**不导入** ② **不会**生成 `CREATE EXTENSION vector` | 每次生成迁移都要**人工过一遍**：顶部补 `import pgvector.sqlalchemy`；`upgrade()` 开头补 `op.execute("CREATE EXTENSION IF NOT EXISTS vector")`（**必须在建 `chunks` 表之前**）。已写进 §6 的迁移流程 |
 | **测试之间互相干扰、报 `Task got Future attached to a different loop`，而单跑每个测试都过** | pytest-asyncio **每个测试函数一个新事件循环**，而 asyncpg 连接**绑定事件循环** —— 共享一个进程级连接池就会跨循环复用连接。这个报错完全看不出和"测试隔离"有关，极易误判成业务代码 bug | 每个测试**自建引擎**且用 **`NullPool`**（不复用连接）。见 `tests\conftest.py` 与 §7.1 约定 16 |
 | **容器内连 5432、宿主机要连 55432，改来改去老是连错库** | compose 把容器的 5432 映射到宿主机 55432（避开项目 #1）。两个端口各有各的用途，靠"记得改 `.env`"必然出错 | 让**代码自己判断**：`config.py` 看 `POSTGRES_HOST` 是不是回环地址 —— 是（Windows 开发）用 `POSTGRES_HOST_PORT`（55432），不是（容器内 `postgres` 服务名）用 `POSTGRES_PORT`（5432）。**所以宿主机上跑 alembic / pytest 不用改任何东西** |
+| **中文全文检索一条都搜不到，但接口不报错、状态码 200** | `pg_trgm` 按数据库的 **ctype** 决定"什么字符算词"。`ctype = C` 时**中文不算字母** → `show_trgm('退款政策')` 返回**空集** → `word_similarity()` **恒为 0**。于是混合检索的「全文路」永远召回不出任何东西，系统**不报错**，看起来就像"知识库里确实没有" —— **典型的静默降级**（2026-10-14 实测：`C` → 0；`C.UTF-8` → 0.4） | 建库参数用 **`C.UTF-8`**：`POSTGRES_INITDB_ARGS="--encoding=UTF8 --lc-collate=C.UTF-8 --lc-ctype=C.UTF-8"`（**dev 与 prod 必须一致**）。📌 **已有库只能重建**：`DROP DATABASE` → `CREATE DATABASE ... TEMPLATE template0 LC_COLLATE 'C.UTF-8' LC_CTYPE 'C.UTF-8'` → `alembic upgrade head` → `python -m app.db.seed`。⚠️ 应用**启动时会自检并打告警**（`app/db/checks.py`），别把这个告警当噪音 |
+| **`word_similarity` 与 `similarity` 混用** | 两者都是 pg_trgm 的，但语义不同：`similarity(a,b)` 是**整体**相似度，拿 10 字提问去比 800 字 chunk 必然很低（分母是长文本）；`word_similarity(query, text)` 衡量"query 有多像 text 里的**某一小段**" | 检索场景**一律用 `word_similarity`**（pg_trgm ≥ 1.6，PG 16 自带）。见 `app/rag/retrieval.py` |
+| **给模型 API 的 `base_url` 少写 `/v1`** | 客户端是拼 `{base}/chat/completions` 的。DeepSeek 两种写法都认，所以本地没问题，**换到只认 `/v1` 的服务时才炸** | 配置里**带上 `/v1`**（`LLM_BASE_URL=https://api.deepseek.com/v1`）。已在 `config.py` 与 `.env.example` 里写全 |
+| **SSE 本地好使、部署后变成"憋一大坨再一次性出来"** | nginx 默认会**缓冲**上游响应。直连（不经 nginx）时看不出来，只有过网关才复现 —— 很容易误判成前端 bug | 响应头带 **`X-Accel-Buffering: no`**（`app/api/chat.py` 已加），同时 nginx 那边对该 location 关 `proxy_buffering` |
 
 ---
 
@@ -421,9 +428,9 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 
 | 项 | 值 |
 |---|---|
-| 阶段 | **v1.0 开发中**：骨架 + **登录 / 多租户数据模型**已落地（41 测试全绿，含真库集成测试） |
+| 阶段 | **v1.0 开发中**：骨架 + 登录/多租户 + **问答主链路（检索→精排→拒答→SSE）后端**已落地（**61 测试全绿**，含真库集成测试） |
 | 计划书版本 | `plan\PROJECT-PLAN.md` **v1**（当前有效版，版本号写在文件头）；改版前的定稿已命名**初稿**，逐字冻结在 `..\archive\PROJECT-PLAN-初稿-2026-10-13.md` |
-| 大方向 | **`plan\PHASES.md`**（薄表）—— 当前在 **阶段 1 · v1.0（约 42%）**；明细见 **`plan\PROJECT-PLAN.md` §8** |
-| 下一步 | **v1.0 第 2 项：会话列表 + 聊天**（引用溯源 + 拒答 + SSE 流式）。全文检索那一路按 **§8.4 D1 的已定路径**先用 `pg_trgm` 起步 |
-| 未决项 | **无**（§8.4 D1 的**演进路径已定**：先 `pg_trgm`，之后按离线评测的数字决定是否升级 `zhparser`） |
-| 刚完成 | ✅ **v1.0 第 1 项：登录 + `tenant_id` 数据模型**（2026-10-14）：6 张表全带 `tenant_id`、Alembic 首个迁移（`alembic check` 无差异）、bcrypt + JWT、`/auth/login` `/auth/me`、**强制注入租户条件的仓储层**、会话列表/详情/新建端点、管理端仅管理员端点、seed 脚本<br>✅ **41 个测试全绿**（含**真库**集成测试：登录拒绝路径 + **跨租户越权** + 租户内按用户隔离 + 元测试"所有业务表必须有 tenant_id"）<br>✅ **端到端验过**：镜像重建 → 4 容器 healthy → 容器内 `alembic current` = `head`、6 条新路由注册、受保护端点全 401<br>✅ **系统瘦身**（2026-10-14，关 6 单元，`available` +100 MB）<br>✅ **v1.0 骨架**（2026-10-14，`ruff`/`pytest`/`compose config`/`pnpm build` 全绿）<br>✅ **本地 compose 实跑通**（2026-10-14：4 容器 healthy、浏览器点通）<br>✅ **git 身份改为 GitHub noreply**（`ColdZeda <214781303+ColdZeda@users.noreply.github.com>`；历史作者已一并改写，哈希与改写前不同）<br>✅ **端口实测 + 8080 放行**：**80 完全可用**（推翻原假设）；8080 已由用户在轻量「防火墙」放行，实测 `TIMEOUT` → **`REFUSED`**<br>✅ **`ops\` 结构已定型为 2 个文件**：`server-log.md`（**只放操作日志**）+ `server-notes.md`（**事件无关的记事**：基线快照 / 防火墙 / 端口判据 / 镜像加速器 / 瘦身）—— 2026-10-14 用户纠正了我把两者塞进一个文件的做法 |
+| 大方向 | **`plan\PHASES.md`**（薄表）—— 当前在 **阶段 1 · v1.0（约 50%）**；明细见 **`plan\PROJECT-PLAN.md` §8** |
+| 下一步 | **v1.0 第 2 项的前端部分**：Vue 路由 + 登录页 + 会话列表 + 聊天页（消费 `POST /conversations/{id}/messages` 的 SSE）。后端已就绪 |
+| 未决项 | **无**（§8.4 D1 已**实测收口**：`pg_trgm` 在 `ctype=C` 下对中文完全失效，已改 `C.UTF-8`，路径不变） |
+| 刚完成 | ✅ **v1.0 第 2 项后端：问答主链路**（2026-10-14）：`app/rag/providers.py`（对话/embedding/rerank 三个客户端，只用 httpx、不用厂商 SDK）+ `retrieval.py`（`word_similarity` 全文 + pgvector 向量 → **RRF** 融合）+ `prompt.py`（提示词与拒答文案）+ `pipeline.py`（**先判拒答再决定调不调模型**）+ `POST /conversations/{id}/messages`（**SSE**：`sources`→`delta`*→`done`）+ `GET .../messages`<br>✅ **61 测试全绿**（RRF 纯单元 + 咨询链路的真库集成：**空库拒答且一次都不调模型**、相似度不够也拒答、引用落库且编号与提示词一致、**跨租户检索不到**、越权 404、超长问题 422）<br>✅ **端到端验过**：容器 healthy、9 条路由注册、**启动自检无告警**<br>✅ **实测揪出一个静默降级**：`pg_trgm` 在 `ctype=C` 下切不出中文三元组 → `word_similarity` **恒为 0**、全文路永远空召回**且不报错**。已把建库参数改成 `C.UTF-8`（实测 0 → 0.4）、加了启动自检告警（`app/db/checks.py`）<br>✅ **系统瘦身**（2026-10-14，关 6 单元，`available` +100 MB）<br>✅ **v1.0 骨架 + 本地 compose 实跑通 + git 身份改 noreply**<br>✅ **端口实测 + 8080 放行**：**80 完全可用**；8080 已放行，实测 `TIMEOUT` → **`REFUSED`**<br>✅ **`ops\` 定型为 2 个文件**：`server-log.md`（操作日志）+ `server-notes.md`（记事） |

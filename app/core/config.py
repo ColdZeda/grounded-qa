@@ -62,7 +62,9 @@ class Settings(BaseSettings):
     # ---------- 对话 / 多模态（任意 OpenAI 兼容端点）----------
     # ⚠️ 刻意**不绑定厂商**：换供应商只改这几个值，不动代码。
     #    当前默认走 DeepSeek；也可换智谱（glm-4-flash 免费档）等。
-    llm_base_url: str = "https://api.deepseek.com"
+    # ⚠️ `base_url` 要**带上 `/v1`**：客户端会拼 `{base}/chat/completions`。
+    #    DeepSeek 两种写法都认，但写全了换到只认 `/v1` 的服务时不会踩坑。
+    llm_base_url: str = "https://api.deepseek.com/v1"
     llm_api_key: str = ""
     llm_model: str = "deepseek-flash"
 
@@ -90,6 +92,14 @@ class Settings(BaseSettings):
     chunk_overlap: int = 100
     rrf_k: int = 60
     answer_min_score: float = 0.35
+    # pg_trgm 的 `word_similarity` 下限。低于它的 chunk 不进融合。
+    # ⚠️ 刻意设得很低：这一步**只做粗筛**，真正的取舍交给 RRF + rerank。
+    #    把粗筛阈值调高 = 在检索早期就把可能正确的答案丢掉，后面再也救不回来。
+    fulltext_min_similarity: float = 0.05
+    # 多轮对话带几轮历史（按消息条数）。带太多会把模型带偏，且 token 成本线性上涨。
+    history_messages: int = 6
+    # 外部模型 API 超时（秒）。2C2G 上不能让一个卡住的请求把连接池占死。
+    model_request_timeout_seconds: float = 60.0
 
     # ---------- 多租户 / 限流 / 配额 ----------
     default_tenant_id: str = "default"

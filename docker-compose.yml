@@ -27,7 +27,13 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-grounded}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
       # 让容器内的初始化脚本也走 UTF-8
-      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+      # ⚠️ **ctype 必须是 C.UTF-8，不能是 C。**
+      #    `pg_trgm` 判断"什么字符算词"用的是数据库的 **ctype**。
+      #    在 `C` 下，中文不算字母 → `show_trgm('退款政策')` 返回**空集** →
+      #    `word_similarity()` 恒为 0 → **全文检索对中文彻底失效，而且不报错**。
+      #    2026-10-14 实测：`C` → 0；`C.UTF-8` → 0.4（正常）。
+      #    📌 改这一行只影响**新建**的库；已有库要重建（见 AGENTS §10）。
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C.UTF-8 --lc-ctype=C.UTF-8"
     ports:
       # ⚠️ 宿主机端口刻意用 55432，**不是 5432**。
       #    本机同时还有项目 #1（langgraph-mcp-code-agent），它的依赖栈占了

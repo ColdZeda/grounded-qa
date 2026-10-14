@@ -20,18 +20,26 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.router import api_router
 from app.core.config import get_settings
+from app.db.checks import warn_if_fulltext_degraded
 from app.db.session import dispose_engine
+from app.rag.providers import aclose_http_client
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """应用生命周期。
 
+    ⚠️ 启动时先跑一次**全文检索自检**（`app/db/checks.py`）：
+        中文全文检索失效时**不报错、只是搜不到** —— 这类静默降级必须主动喊出来。
+
     ⚠️ 退出时**必须显式关连接池**：uvicorn 收到 SIGTERM 后如果连接还挂在池里，
         PostgreSQL 那边要等 TCP 超时才知道对端没了，期间连接数一直占着。
         容器滚动更新频繁时会把数据库的连接数堆满。
+        HTTP 客户端（打模型 API 的那个）同理 —— 留着不关，优雅退出会被拖住。
     """
+    await warn_if_fulltext_degraded()
     yield
+    await aclose_http_client()
     await dispose_engine()
 
 

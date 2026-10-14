@@ -1,10 +1,17 @@
-"""rag：解析 → 切分 → 嵌入 → 检索 → 精排 → 生成 → 拒答。
+"""RAG 链路：检索 → 精排 → 拒答判定 → 生成。
 
-深度锚所在。v1.0 规划（骨架阶段先占位）：
-    loaders.py     文档解析（Markdown / HTML）
-    splitter.py    切分（走配置里的 chunk_size / chunk_overlap）
-    embedder.py    embedding（走 API；带 embedding_model / embedding_dim 元数据锁校验）
-    retriever.py   混合检索：全文 + 向量 → RRF 融合
-    reranker.py    精排（走 API）
-    generator.py   生成 + 引用溯源 + 低置信拒答
+加载 / 切分在 `app/workers/`（离线入库）；这里只负责**在线问答**那一段。
+
+模块划分（**按"变的东西"分，不是按"类型"分**）：
+
+| 模块 | 只管什么 | 什么时候会改 |
+|---|---|---|
+| `providers.py` | 跟外部模型 API 说话 | 换供应商 / 加一个模型能力 |
+| `retrieval.py` | 把候选找出来并排序 | 换检索策略（分词、融合算法、top-k） |
+| `prompt.py` | 提示词与拒答文案 | 调整回答风格 / 引用格式 |
+| `pipeline.py` | 把它们串起来、决定"答还是拒答" | 调整整条链的顺序与阈值 |
+
+⚠️ **测试里禁止真调模型 API**（AGENTS §7.1 约定 9）：烧钱 + 结果不稳定 + 评测失真。
+    做法：`pipeline.py` 的客户端是**构造时注入**的，测试塞假实现即可 ——
+    见 `tests/test_chat_api.py`。
 """

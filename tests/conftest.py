@@ -25,6 +25,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
 import pytest
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import (
@@ -98,16 +99,27 @@ async def session(db_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
 
 
 @pytest.fixture
-async def client(db_engine: AsyncEngine) -> AsyncIterator[AsyncClient]:
+def app() -> FastAPI:
+    """应用实例。
+
+    ⚠️ 单独暴露出来，是为了让测试能往 `app.dependency_overrides` 里塞替身 ——
+        典型场景：把模型客户端换成假的，避免真花钱（AGENTS §7.1 约定 9）。
+        覆盖表是**请求时**才读的，所以测试在拿到 `client` 之后再设置也生效。
+    """
+    return create_app()
+
+
+@pytest.fixture
+async def client(app: FastAPI, db_engine: AsyncEngine) -> AsyncIterator[AsyncClient]:
     """走 ASGI 的应用客户端。
 
     ⚠️ **用 `dependency_overrides` 把会话依赖换成测试引擎**，而不是让应用用它的全局引擎 ——
         全局引擎是进程级单例，会跨事件循环复用连接，正是上面说的那类 flaky 来源。
 
     ⚠️ **不跑 lifespan**（`ASGITransport` 默认不触发）：
-        lifespan 退出时会 `dispose_engine()`，而这里根本没用到那个全局引擎。
+        lifespan 启动时会做全文检索自检、退出时会 `dispose_engine()` / 关 HTTP 客户端，
+        而这里根本没用到那些全局对象。
     """
-    app = create_app()
     factory = async_sessionmaker(db_engine, expire_on_commit=False, autoflush=False)
 
     async def _override_get_session() -> AsyncIterator[AsyncSession]:
