@@ -115,7 +115,8 @@ LangChain（最小集）· Function Calling · MCP Server（把检索封成 MCP 
 Docker + Compose · 阿里云 ACR 个人版 · nginx(:8080)
 Prometheus + node_exporter + 自研看板 · GitHub Actions
 lark-oapi（飞书长连接，自研适配器）
-模型全走 API：对话/多模态=智谱免费档；embedding/rerank=百炼
+模型全走 API（**不落本地**）：配置按**能力**命名、**不绑厂商**；
+当前 对话 = DeepSeek `deepseek-flash`，embedding / rerank = 百炼（详见计划书 §4.2）
 ```
 
 **异步任务 = 自研 mini worker（Redis `BLPOP`，~40 行），不是 Celery。**
@@ -323,7 +324,8 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | 现象 | 原因 | 解法 |
 |---|---|---|
 | CI 里 `FROM python:...` 拉取超时 | 大陆直连 Docker Hub 不可用 | daemon registry mirror / 常用基础镜像推进 ACR |
-| `:80` 打不开 | 大陆未备案服务器 80/443 可能被阻断 | 服务按 **:8080** 规划；**v1.0 第一天实测** |
+| **（已被实测推翻）原以为 `:80` 会被阻断** | 大陆未备案服务器 80/443 **传闻**会被阻断 | **2026-10-14 实测：80 完全可用（TCP 通 + HTTP 200）**；反而是 **8080 被安全组挡住**。→ 继续用 8080 是"计划已定稿"的取舍，**不是"80 不可用"**；要用 8080 必须去控制台放行。详见 `plan\PHASES.md`「端口实测」 |
+| **"我电脑上 80 是开的" / 在服务器上 `curl localhost:80` 测安全组** | 端口是**服务端**的事：客户端连出去用临时高位端口，**不需要"开"任何端口**；服务器上 `curl localhost` 走**本地回环，根本不经过安全组** | 测安全组**必须从外部发起**（本机 → 服务器公网 IP）。判据：**`REFUSED`** = 安全组放行了但没服务在听；**`TIMEOUT`** = 被安全组丢弃 |
 | 检索质量悄悄变差、不报错 | 换过 embedding 模型，新旧向量混用 | `embedding_model`/`embedding_dim` 校验，不一致就拒绝并提示重嵌入 |
 | 整机卡死、SSH 失联 | 容器把内存吃光，OOM 杀了 sshd | 全服务 `mem_limit` + 给 PG/sshd 设 `oom_score_adj` |
 | 服务在"换页"、响应忽快忽慢 | `vm.swappiness` 默认 60，内核过早换出 anon 页 | 已设 `vm.swappiness=10~20` |
@@ -380,7 +382,7 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 |---|---|
 | 阶段 | **v1.0 骨架已落地**（可跑通 lint / test / compose / 前端 build），业务功能尚未开始 |
 | 计划书版本 | `plan\PROJECT-PLAN.md` **v1**（当前有效版，版本号写在文件头）；改版前的定稿已命名**初稿**，逐字冻结在 `..\archive\PROJECT-PLAN-初稿-2026-10-13.md` |
-| 阶段进度 | **`plan\PHASES.md`** —— 当前在 **阶段 1 · v1.0（约 30%）**，下一步是第 1 项「登录 + `tenant_id` 数据模型」 |
+| 阶段进度 | **`plan\PHASES.md`** —— 当前在 **阶段 1 · v1.0（约 36%）**，下一步是第 1 项「登录 + `tenant_id` 数据模型」 |
 | 下一步 | **补 v1.0 业务功能**：① 登录 + `tenant_id` 数据模型 ② 会话列表 + 聊天（引用溯源 + 拒答 + SSE）③ 知识库上传 + 入库 worker ④ 只读评测报告页 |
 | 未决项 | **无** |
-| 刚完成 | ✅ **系统瘦身**（2026-10-14，关 6 单元，`available` +100 MB，详见 §10）<br>✅ **v1.0 骨架**（2026-10-14，首个提交 `47f44a8`，44 文件；`ruff`/`pytest`/`compose config`/`pnpm build` 全绿）<br>✅ **本地 compose 实跑通**（2026-10-14，提交 `5464f26`：4 容器 healthy、浏览器点通、修掉 4 个只在真跑时暴露的问题）<br>✅ **git 身份改为 GitHub noreply**（`ColdZeda <214781303+ColdZeda@users.noreply.github.com>`，仓库级；**全部历史提交的作者已一并改写**，所以哈希与改写前不同） |
+| 刚完成 | ✅ **系统瘦身**（2026-10-14，关 6 单元，`available` +100 MB，详见 §10）<br>✅ **v1.0 骨架**（2026-10-14，首个提交 `47f44a8`，44 文件；`ruff`/`pytest`/`compose config`/`pnpm build` 全绿）<br>✅ **本地 compose 实跑通**（2026-10-14，提交 `5464f26`：4 容器 healthy、浏览器点通、修掉 4 个只在真跑时暴露的问题）<br>✅ **git 身份改为 GitHub noreply**（`ColdZeda <214781303+ColdZeda@users.noreply.github.com>`，仓库级；**全部历史提交的作者已一并改写**，所以哈希与改写前不同）<br>✅ **端口实测（结论推翻原假设）**：**80 完全可用（TCP 通 + HTTP 200）**，反而 **8080 被安全组挡住**。详见 §10 与 `plan\PHASES.md` |
