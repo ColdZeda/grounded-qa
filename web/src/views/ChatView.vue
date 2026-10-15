@@ -1,0 +1,386 @@
+<script setup lang="ts">
+/**
+ * 聊天页 —— 消费 SSE 的那一端。
+ *
+ * 这个文件里有两处**不看注释就一定会写错**的地方，都标了 ⚠️：
+ *   1. 流式消息必须用 `reactive()` 包一层再 push（否则界面不动）
+ *   2. 输入框必须判 `isComposing`（否则中文输入法选词时按回车会被提前发出去）
+ */
+
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+
+import AppHeader from '@/components/AppHeader.vue'
+import MessageItem from '@/components/MessageItem.vue'
+import { ApiError } from '@/api/client'
+import { streamAnswer } from '@/api/chat'
+import { createConversation, getConversation, listMessages } from '@/api/conversations'
+import type { MessageOut } from '@/types/api'
+import type { UiMessage } from '@/types/ui'
+
+const props = defineProps<{ id?: string }>()
+const router = useRouter()
+
+const conversationTitle = ref('')
+const messages = ref<UiMessage[]>([])
+const draft = ref('')
+const loading = ref(true)
+const loadError = ref('')
+
+/** `retrieving` = 检索中（还没收到 sources）；`generating` = 正在出字。 */
+const phase = ref<'idle' | 'retrieving' | 'generating'>('idle')
+const abort = ref<AbortController | null>(null)
+
+const scroller = ref<HTMLElement | null>(null)
+/** 用户是不是"贴着底部"。不贴就说明他在往上翻历史 —— 这时**不能**把他拽回来。 */
+const stick = ref(true)
+
+const phaseLabel = computed(() => {
+  if (phase.value === 'retrieving') return '正在检索知识库…'
+  if (phase.value === 'generating') return '正在生成回答…'
+  return ''
+})
+
+/**
+ * ⚠️ 懒创建会话后我们会自己 `router.replace` 到真实 id，
+ *    那会让下面这个 watch 触发一次 `load()` —— 而此刻回答**正在流式接收中**，
+ *    重新拉消息会把还没落库的助手消息抹掉（后端要到流结束才落库）。
+ *    所以这一次要跳过。
+ */
+let skipNextLoad = false
+
+function toUi(message: MessageOut): UiMessage {
+  return {
+    id: message.id,
+    role: message.role === 'user' ? 'user' : 'assistant',
+    content: message.content,
+    citations: message.citations,
+    refused: message.refused,
+    latencyMs: message.latency_ms,
+    // 历史消息里没有单独的"置信度"字段（它没落库），所以刷新后这个徽标会消失。
+    // ⚠️ 这是**已知的不完美**，不是 bug：要保留得给 messages 表加一列。
+    confidence: null,
+    createdAt: message.created_at,
+  }
+}
+
+let localSeq = 0
+function nextLocalId(): string {
+  localSeq += 1
+  return `local-${localSeq}`
+}
+
+async function load(): Promise<void> {
+  loading.value = true
+  loadError.value = ''
+
+  const id = props.id
+  if (!id) {
+    // `/conversations/new`：还没有会话，等第一条提问时才建。
+    conversationTitle.value = ''
+    messages.value = []
+    loading.value = false
+    return
+  }
+
+  try {
+    const [conversation, history] = await Promise.all([getConversation(id), listMessages(id)])
+    conversationTitle.value = conversation.title
+    messages.value = history.map(toUi)
+    await scrollToBottom(true)
+  } catch (err) {
+    loadError.value =
+      err instanceof ApiError && err.status === 404
+        ? '这个会话不存在，或者不属于你。'
+        : `加载失败：${(err as Error).message}`
+  } finally {
+    loading.value = false
+  }
+}
+
+watch(
+  () => props.id,
+  () => {
+    if (skipNextLoad) {
+      skipNextLoad = false
+      return
+    }
+    void load()
+  },
+  { immediate: true },
+)
+
+// ------------------------------------------------------------
+// 滚动
+// ------------------------------------------------------------
+function onScroll(): void {
+  const el = scroller.value
+  if (!el) return
+  stick.value = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+}
+
+async function scrollToBottom(force = false): Promise<void> {
+  if (!force && !stick.value) return
+  await nextTick()
+  const el = scroller.value
+  if (el) el.scrollTop = el.scrollHeight
+}
+
+// ------------------------------------------------------------
+// 提问
+// ------------------------------------------------------------
+/** 拿提问当会话标题。后端限 200 字符，这里截短一点，列表里才不会挤成一团。 */
+function titleFrom(question: string): string {
+  return question.length <= 30 ? question : `${question.slice(0, 30)}…`
+}
+
+async function send(): Promise<void> {
+  const question = draft.value.trim()
+  if (!question || phase.value !== 'idle') return
+
+  draft.value = ''
+  messages.value.push({
+    id: nextLocalId(),
+    role: 'user',
+    content: question,
+    citations: [],
+    refused: false,
+    latencyMs: null,
+    confidence: null,
+    createdAt: new Date().toISOString(),
+  })
+
+  // ⚠️⚠️ **必须 `reactive()` 包一层。**
+  //     `ref([])` 的深层响应式是**读取时**才把元素换成 Proxy 的；
+  //     如果 push 一个普通对象、然后攥着那个**原始对象**的引用来改它，
+  //     改动会绕过 Proxy → **界面完全不动**，控制台也不报错。
+  //     这是 Vue 3 里最经典的"数据变了页面不变"，而且极难往响应式上联想。
+  const pending = reactive<UiMessage>({
+    id: nextLocalId(),
+    role: 'assistant',
+    content: '',
+    citations: [],
+    refused: false,
+    latencyMs: null,
+    confidence: null,
+    createdAt: new Date().toISOString(),
+    streaming: true,
+    error: null,
+  })
+  messages.value.push(pending)
+
+  phase.value = 'retrieving'
+  void scrollToBottom()
+
+  const controller = new AbortController()
+  abort.value = controller
+
+  try {
+    let conversationId = props.id
+    if (!conversationId) {
+      // 会话**在这时候才建**，为了把提问当标题（见文件头说明）。
+      const created = await createConversation(titleFrom(question))
+      conversationTitle.value = created.title
+      conversationId = created.id
+      skipNextLoad = true
+      await router.replace({ name: 'chat', params: { id: created.id } })
+    }
+
+    await streamAnswer(
+      conversationId,
+      question,
+      {
+        onSources: (event) => {
+          pending.citations = event.citations
+          pending.refused = event.refused
+          pending.confidence = event.confidence
+          // 拒答是**直接给结论**的：后端不会再调模型，所以不会再有 delta。
+          // 把它当成"生成中"会让界面一直转圈。
+          phase.value = event.refused ? 'idle' : 'generating'
+        },
+        onDelta: (text) => {
+          pending.content += text
+          void scrollToBottom()
+        },
+        onDone: (event) => {
+          pending.refused = event.refused
+          pending.confidence = event.confidence
+          pending.latencyMs = event.latency_ms
+        },
+        onError: (event) => {
+          pending.error = event.detail
+        },
+      },
+      controller.signal,
+    )
+  } catch (err) {
+    if (controller.signal.aborted) {
+      // 用户点了"停止"。⚠️ 后端**照样会把已生成的部分落库**（生成器的 finally），
+      // 所以这里说的是"停止接收"，不是"丢弃"。
+      pending.cancelled = true
+      pending.error = '已取消'
+    } else if (err instanceof ApiError) {
+      pending.error = err.message
+    } else {
+      pending.error = (err as Error).message
+    }
+  } finally {
+    pending.streaming = false
+    phase.value = 'idle'
+    abort.value = null
+    void scrollToBottom()
+  }
+}
+
+function stop(): void {
+  abort.value?.abort()
+}
+
+function onKeydown(event: KeyboardEvent): void {
+  // ⚠️ `isComposing` 这一判是**中文界面的必修课**：
+  //    用输入法打字时按回车是"确认候选词"，不是"发送"。
+  //    不判的话，用户刚打完拼音就被发出去了 —— 而且只在中文输入法下复现。
+  //    （`keyCode === 229` 是部分浏览器在组合输入期间给的旧标记，一并兜住。）
+  if (event.isComposing || event.keyCode === 229) return
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault()
+    void send()
+  }
+}
+
+onBeforeUnmount(() => {
+  // 离开页面就别再收流了。⚠️ 后端会继续把它生成完并落库 —— 这是刻意的
+  // （否则"我看到了半截，刷新却没了"）。这里只是不再占用这个连接。
+  abort.value?.abort()
+})
+</script>
+
+<template>
+  <div class="shell">
+    <AppHeader>
+      <span class="conv-title" :title="conversationTitle">{{ conversationTitle || '新会话' }}</span>
+      <button class="btn btn--ghost btn--sm" type="button" @click="router.push({ name: 'chat-new' })">
+        ＋ 新会话
+      </button>
+    </AppHeader>
+
+    <main ref="scroller" class="stream" @scroll.passive="onScroll">
+      <p v-if="loadError" class="alert alert--danger">{{ loadError }}</p>
+      <p v-else-if="loading" class="muted">加载中…</p>
+
+      <p v-else-if="messages.length === 0" class="intro">
+        问点什么吧。回答会带上引用来源；如果知识库里找不到依据，它会直接拒答，而不是编一个。
+      </p>
+
+      <div v-else class="thread">
+        <MessageItem v-for="message in messages" :key="message.id" :message="message" />
+      </div>
+    </main>
+
+    <footer class="composer">
+      <p v-if="phaseLabel" class="phase">{{ phaseLabel }}</p>
+      <div class="composer__row">
+        <textarea
+          v-model="draft"
+          class="field composer__input"
+          rows="2"
+          placeholder="输入问题，Enter 发送，Shift + Enter 换行"
+          :disabled="phase !== 'idle'"
+          @keydown="onKeydown"
+        ></textarea>
+
+        <button
+          v-if="phase !== 'idle'"
+          class="btn btn--ghost composer__send"
+          type="button"
+          @click="stop"
+        >
+          停止
+        </button>
+        <button
+          v-else
+          class="btn composer__send"
+          type="button"
+          :disabled="!draft.trim()"
+          @click="send"
+        >
+          发送
+        </button>
+      </div>
+    </footer>
+  </div>
+</template>
+
+<style scoped>
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.conv-title {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stream {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 20px;
+}
+
+.thread {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  max-width: 820px;
+  margin: 0 auto;
+}
+
+.muted {
+  max-width: 820px;
+  margin: 0 auto;
+  color: var(--text-muted);
+}
+
+.intro {
+  max-width: 560px;
+  margin: 12vh auto 0;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.composer {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  padding: 10px 20px 14px;
+}
+
+.phase {
+  max-width: 820px;
+  margin: 0 auto 6px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.composer__row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  max-width: 820px;
+  margin: 0 auto;
+}
+
+.composer__input {
+  resize: none;
+  line-height: 1.5;
+}
+
+.composer__send {
+  flex-shrink: 0;
+  height: 38px;
+}
+</style>
