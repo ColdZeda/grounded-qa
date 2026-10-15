@@ -389,6 +389,7 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | **`word_similarity` 与 `similarity` 混用** | 两者都是 pg_trgm 的，但语义不同：`similarity(a,b)` 是**整体**相似度，拿 10 字提问去比 800 字 chunk 必然很低（分母是长文本）；`word_similarity(query, text)` 衡量"query 有多像 text 里的**某一小段**" | 检索场景**一律用 `word_similarity`**（pg_trgm ≥ 1.6，PG 16 自带）。见 `app/rag/retrieval.py` |
 | **给模型 API 的 `base_url` 少写 `/v1`** | 客户端是拼 `{base}/chat/completions` 的。DeepSeek 两种写法都认，所以本地没问题，**换到只认 `/v1` 的服务时才炸** | 配置里**带上 `/v1`**（`LLM_BASE_URL=https://api.deepseek.com/v1`）。已在 `config.py` 与 `.env.example` 里写全 |
 | **SSE 本地好使、部署后变成"憋一大坨再一次性出来"** | nginx 默认会**缓冲**上游响应。直连（不经 nginx）时看不出来，只有过网关才复现 —— 很容易误判成前端 bug | 响应头带 **`X-Accel-Buffering: no`**（`app/api/chat.py` 已加），同时 nginx 那边对该 location 关 `proxy_buffering` |
+| **重启电脑后四个容器一个都不在，`restart: unless-stopped` 却没把它们拉回来** | `unless-stopped` 的语义是"**除非被人为停过**"。**手动停掉的容器会被记为"人为停止"**（包括在 Docker Desktop 里停掉整个 compose 项目组），Docker 下次启动时**不会**自动拉起 —— **这是设计，不是故障**（2026-10-15 用户因此白等一场，`seed` 报"连接被拒绝"） | `docker compose up -d` 拉回来即可。⚠️ **数据不受影响**：库在命名卷 `gq-pgdata` 里，重启电脑 / 重启 Docker 都不丢。<br>📌 **判断依据**：`docker ps -a` 里容器**存在**但状态是 `Exited` → 是"被停过"；**根本不存在** → 才是被删了（那就要重建） |
 
 ---
 
