@@ -9,13 +9,22 @@
 #
 # ⚠️ 镜像标签用 commit SHA，**不用 latest**（硬约束 §2.6）。
 #
-# 需要的仓库 Secrets：
-#    ACR_REGISTRY      例：registry.cn-shenzhen.aliyuncs.com/<命名空间>
-#    ACR_USERNAME      阿里云 ACR 用户名
-#    ACR_PASSWORD      ACR 密码
+# 需要的仓库 Secrets
+# （⚠️ 密码 / 私钥**只从 GitHub 界面填**：Settings → Secrets and variables → Actions。
+#   绝不贴进对话、绝不提交进仓库。）
+#    ACR_REGISTRY      ⚠️ **含命名空间**，不是纯域名。
+#                      例：cri-xxxxxxxxxxxx.cn-shenzhen.personal.cr.aliyuncs.com/grounded-qa
+#                      理由：下面的镜像名写的是 `$ACR_REGISTRY/grounded-qa-api`，
+#                            拼出来正好等于阿里云控制台给的推送地址。
+#                      ⚠️ **新版个人版**实例的域名形如
+#                            `cri-xxxx.cn-shenzhen.personal.cr.aliyuncs.com`；
+#                            `registry.cn-shenzhen.aliyuncs.com` 是**旧版 / 企业版**的写法。
+#                            填错会推到不存在的仓库 —— 好在它会**报错**，不会静默。
+#    ACR_USERNAME      阿里云 ACR **用户名**（不是密码，形如 `aliyun0490812142`）
+#    ACR_PASSWORD      ACR 的 Registry 登录密码（控制台里单独设的那个）
 #    SSH_HOST          服务器地址
 #    SSH_USER          登录用户（root）
-#    SSH_KEY           部署私钥
+#    SSH_KEY           部署**专用**私钥（新生成一对，别复用你的登录私钥）
 #    SSH_KNOWN_HOSTS   ssh-keyscan 得到的 known_hosts 内容
 # ============================================================
 
@@ -113,6 +122,25 @@ jobs:
           prev="$(ssh target "cat $REMOTE_DIR/.current_tag 2>/dev/null || true")"
           echo "tag=$prev" >> "$GITHUB_OUTPUT"
           echo "回滚点：${prev:-（空，首次部署）}"
+
+      - name: 服务器侧登录 ACR
+        # ⚠️ **这一步不能省。**
+        #    两个镜像仓库都是**私有**的，而服务器**从没登录过** ——
+        #    上面 `build-and-push` 里那次 `docker login` 发生在 **GitHub 的 runner** 上，
+        #    跟服务器是两台机器、两套 docker 凭据，一点关系都没有。
+        #    少了它，第一次部署会在 `compose pull` 上 `unauthorized`
+        #    → 触发自动回滚 → 而首次部署**又没有回滚点** → 只能人工介入。
+        #    （回滚那一步的 `compose up -d` 如果本地没有旧镜像也会去 pull，同样吃这一步。）
+        #
+        # ⚠️ 密码走 **stdin**（`--password-stdin`）：不进 argv、不进进程列表、不进日志。
+        #    经 `env:` 传入而不是把 `${{ secrets.* }}` 插值进脚本文本 ——
+        #    后者在密码含引号 / 反引号时会被 shell 解释，也更容易被日志捞到。
+        env:
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ACR_PASSWORD" | ssh target \
+            "docker login '$ACR_REGISTRY' --username='${{ secrets.ACR_USERNAME }}' --password-stdin"
 
       - name: 拉取新镜像并重启
         run: |
