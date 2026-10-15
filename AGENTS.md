@@ -52,7 +52,7 @@ repo\
 │   ├─ channels\         渠道适配层（web / feishu）—— v1.0 就预留
 │   ├─ db\               表模型、迁移、仓储层
 │   └─ workers\          异步任务（自研 mini worker）
-├─ web\                  前端（Vue 3 + TypeScript + Vite）
+├─ web\                  前端（Vue 3 + TS + Vite）· src\{api,components,router,stores,types,views}
 ├─ evals\                评测体系（题集 / 断言 / 跑批 / 报告）
 ├─ tests\
 ├─ scripts\
@@ -389,6 +389,9 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | **给模型 API 的 `base_url` 少写 `/v1`** | 客户端是拼 `{base}/chat/completions` 的。DeepSeek 两种写法都认，所以本地没问题，**换到只认 `/v1` 的服务时才炸** | 配置里**带上 `/v1`**（`LLM_BASE_URL=https://api.deepseek.com/v1`）。已在 `config.py` 与 `.env.example` 里写全 |
 | **SSE 本地好使、部署后变成"憋一大坨再一次性出来"** | nginx 默认会**缓冲**上游响应。直连（不经 nginx）时看不出来，只有过网关才复现 —— 很容易误判成前端 bug | 响应头带 **`X-Accel-Buffering: no`**（`app/api/chat.py` 已加），同时 nginx 那边对该 location 关 `proxy_buffering` |
 | **重启电脑后四个容器一个都不在，`restart: unless-stopped` 却没把它们拉回来** | `unless-stopped` 的语义是"**除非被人为停过**"。**手动停掉的容器会被记为"人为停止"**（包括在 Docker Desktop 里停掉整个 compose 项目组），Docker 下次启动时**不会**自动拉起 —— **这是设计，不是故障**（2026-10-15 用户因此白等一场，`seed` 报"连接被拒绝"） | `docker compose up -d` 拉回来即可。⚠️ **数据不受影响**：库在命名卷 `gq-pgdata` 里，重启电脑 / 重启 Docker 都不丢。<br>📌 **判断依据**：`docker ps -a` 里容器**存在**但状态是 `Exited` → 是"被停过"；**根本不存在** → 才是被删了（那就要重建） |
+| **想用 `EventSource` 消费问答流** | 它**只能发 GET**，而我们的接口是 `POST` + JSON body（把提问塞 URL 有三个问题：长度、**进 access log**、写操作语义不对） | 用 `fetch` + `ReadableStream` **手写按规范切帧**（`web\src\api\sse.ts`）。⚠️ 三个坑：帧会被切开／多字节字符会被切开（`TextDecoder` 必须 `{stream:true}`）／换行是字段分隔符。→ `architecture.md` §9.12 |
+| **Vue 3：把流式消息 push 进 `ref([])` 后改它，界面一个字不动，而且不报错** | `ref([])` 的深层响应式是**读取时**才把元素换成 Proxy；攥着 push 进去的**原始对象**改，就绕过了 Proxy | push **之前**先 `reactive()` 包一层 —— 这样手里的引用本身就是 Proxy。→ `architecture.md` §9.13 |
+| **中文输入法下打字，回车把没选完的拼音发出去了** | 输入法激活期间按 Enter 是"**确认候选词**"，浏览器照样派发 `keydown`。**只在中文输入法下复现** | 判 `event.isComposing`（或旧标记 `keyCode === 229`）就直接 return。→ `architecture.md` §9.14 |
 
 ---
 
@@ -433,9 +436,9 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 
 | 项 | 值 |
 |---|---|
-| 阶段 | **v1.0 开发中**：骨架 + 登录/多租户 + **问答主链路（检索→精排→拒答→SSE）后端**已落地（**61 测试全绿**，含真库集成测试） |
+| 阶段 | **v1.0 开发中**：骨架 + 登录/多租户 + **问答主链路（检索→精排→拒答→SSE）后端** + **客服工作台前端**已落地（**61 测试全绿**，含真库集成测试；前端已在浏览器里真实点通） |
 | 计划书版本 | `plan\PROJECT-PLAN.md` **v2**（当前有效版，版本号写在文件头）。历史版本逐字冻结在 `..\archive\`：**初稿** `PROJECT-PLAN-初稿-2026-10-13.md`、**v1** `PROJECT-PLAN-v1-2026-10-15.md`。<br>📌 **v2 起划定边界**：**已完成历史 → `git log`**；执行细节 → `..\ops\`；解释 → `repo\docs\architecture.md` |
 | 大方向 | **`plan\PHASES.md`**（薄表）—— 当前在 **阶段 1 · v1.0（约 50%）**；明细见 **`plan\PROJECT-PLAN.md` §8** |
-| 下一步 | **v1.0 第 2 项的前端部分**：Vue 路由 + 登录页 + 会话列表 + 聊天页（消费 `POST /conversations/{id}/messages` 的 SSE）。后端已就绪 |
+| 下一步 | **知识库入库链路**（`scripts\kb\ingest.py` ＋ `assets\knowledge-base\` 的语料）。<br>⚠️ **2026-10-15 实测发现：三个语料目录（`knowledge-base` / `synthetic-docs` / `eval-sets`）全是空的，`scripts\kb\` 只有 `.gitkeep`。** 后果是**页面问什么都只会拒答** —— 引用溯源、逐字流式这些**最该展示的东西在演示里是隐形的**。所以这一项应当**紧接着做**，不要往后排 |
 | 未决项 | **无**（§8.4 D1 已**实测收口**：`pg_trgm` 在 `ctype=C` 下对中文完全失效，已改 `C.UTF-8`，路径不变） |
-| 刚完成 | ✅ **文档体系整理**（2026-10-15）：本文件压缩（重复内容收成一句 ＋ 指针）；**计划书升 v2** 并划定边界 —— **已完成历史不再逐条记，`git log` 就是权威记录**（详见 `plan\PROJECT-PLAN.md` 文件头）<br>✅ **修掉控制台中文乱码**（2026-10-15）：根因 **Python stdout=`gbk` / PowerShell 控制台=`utf-8`** → 设用户级 `PYTHONUTF8=1`。⚠️ 只对**新启动**的进程生效。详见 §10<br>✅ **v1.0 第 2 项后端：问答主链路**（2026-10-14）：混合检索 → RRF → 精排 → **先判拒答再决定调不调模型** → SSE。**61 测试全绿**。⚠️ 顺带实测揪出 `pg_trgm` 在 `ctype=C` 下对中文**完全失效**（见 §10）<br>📎 **更早的完成记录** → **`git log`**（提交信息里写了"为什么"）。**本文件不再逐条累积** |
+| 刚完成 | ✅ **v1.0 第 2 项前端：客服工作台**（2026-10-15）：Vue 路由 ＋ 登录页 ＋ 会话列表 ＋ 聊天页。SSE **手写按规范切帧**（`EventSource` 用不了 —— 见 §10）；引用来源可点、拒答横幅、逐字流式、中文输入法不误发。**已在浏览器里真实点通**（登录 → 新建 → 提问 → 拒答 → 列表 → 退出），并顺手确认了部署侧那两处依赖：nginx 的 **SPA 兜底**（`try_files`，history 模式必需）与 **SSE 不缓冲**（`proxy_buffering off`）。设计决定写在 `docs\architecture.md` §9.12–9.17<br>✅ **文档体系整理**（2026-10-15）：本文件压缩（重复内容收成一句 ＋ 指针）；**计划书升 v2** 并划定边界 —— **已完成历史不再逐条记，`git log` 就是权威记录**（详见 `plan\PROJECT-PLAN.md` 文件头）<br>✅ **修掉控制台中文乱码**（2026-10-15）：根因 **Python stdout=`gbk` / PowerShell 控制台=`utf-8`** → 设用户级 `PYTHONUTF8=1`。⚠️ 只对**新启动**的进程生效。详见 §10<br>✅ **v1.0 第 2 项后端：问答主链路**（2026-10-14）：混合检索 → RRF → 精排 → **先判拒答再决定调不调模型** → SSE。**61 测试全绿**。⚠️ 顺带实测揪出 `pg_trgm` 在 `ctype=C` 下对中文**完全失效**（见 §10）<br>📎 **更早的完成记录** → **`git log`**（提交信息里写了"为什么"）。**本文件不再逐条累积** |
