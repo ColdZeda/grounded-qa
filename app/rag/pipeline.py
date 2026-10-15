@@ -300,13 +300,23 @@ class RagPipeline:
     def _should_refuse(self, hits: Sequence[RetrievedChunk], confidence: float | None) -> bool:
         """判拒答。**这是幻觉治理最关键的一行判断。**
 
-        ⚠️ 三种情况分开看，不要混成一句 `confidence < threshold`：
+        ⚠️ 分**四种**情况看，不要混成一句 `confidence < threshold`：
 
         | 情况 | 结论 | 为什么 |
         |---|---|---|
         | 一条都没检索到 | **拒答** | 没有任何证据，答什么都是编 |
-        | 有 rerank 分数 | 按 `answer_min_score` 判 | 交叉编码的分数是**校准过的相关性**，可以定阈值 |
-        | 没有 rerank 分数 | **不拒答** | 只有 trgm 相似度时，那个数字**不是相关性语义**，拿它比阈值等于瞎判 |
+        | 有 **rerank** 分数 | 按 `answer_min_score` 判 | 交叉编码的分数是**校准过的相关性**，可以定阈值 |
+        | 只有**向量余弦** | **也按 `answer_min_score` 判** | 余弦至少有"相似"的语义。<br>⚠️ **但这是将就** —— 那个阈值是照 rerank 分数标的，两者分布不同 |
+        | 只有 **trgm** 相似度 | **不拒答** | trgm 那个数字**不是相关性语义**，拿它比阈值等于瞎判 |
+
+        ⚠️ **2026-10-16 更正**：这张表原先只有三行，把后两种合并成
+            "没有 rerank 分数 → 不拒答" —— **那是错的**。
+            判据是 `confidence is None`（只有 trgm 命中才是），而 `vector_cosine`
+            分支**给得出 `confidence`**，于是同一个阈值会被拿去比余弦。
+            合并那一行会让读者以为"rerank 一挂就不判了"，
+            而真实行为是"**照样判，只是拿错了尺子**" —— 后者才是要知道的事。
+
+            完整解释与代价 → `docs\\architecture.md` §5.3 / §10.3。
         """
         if not hits:
             return True
