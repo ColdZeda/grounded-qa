@@ -236,11 +236,22 @@ ssh aliyun 'docker compose logs --tail=100 api'
 ssh aliyun 'tmux attach -t grounded'           # 长任务旁观
 ```
 
-### 知识库入库
+### 知识库入库（✅ 已有离线脚本 `scripts\kb\ingest.py`）
 
-```bash
+```powershell
+# ① 先看切分效果 —— 不连库、不调模型、不花钱。**调切分参数时先跑这个**
+uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/fastapi --dry-run
+
+# ② 真入库（需要 EMBEDDING_API_KEY）
 uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/fastapi
+
+# ③ 还没有 embedding key？先只落文本 —— 全文检索路（pg_trgm）不需要向量，照样能用
+uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/fastapi --no-embed
 ```
+
+> ⚠️ **`--no-embed` 入库的 chunk 没有向量，补向量只能加 `--replace` 重跑** ——
+> 不加的话文档被判成"已入库过"直接跳过，**向量永远补不上，而且不报错**。
+> 取语料的清单固化在脚本末尾的 `CORPUS_FILES`；设计取舍见 `architecture.md` §9.18。
 
 ---
 
@@ -439,6 +450,6 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | 阶段 | **v1.0 开发中**：骨架 + 登录/多租户 + **问答主链路（检索→精排→拒答→SSE）后端** + **客服工作台前端**已落地（**61 测试全绿**，含真库集成测试；前端已在浏览器里真实点通） |
 | 计划书版本 | `plan\PROJECT-PLAN.md` **v2**（当前有效版，版本号写在文件头）。历史版本逐字冻结在 `..\archive\`：**初稿** `PROJECT-PLAN-初稿-2026-10-13.md`、**v1** `PROJECT-PLAN-v1-2026-10-15.md`。<br>📌 **v2 起划定边界**：**已完成历史 → `git log`**；执行细节 → `..\ops\`；解释 → `repo\docs\architecture.md` |
 | 大方向 | **`plan\PHASES.md`**（薄表）—— 当前在 **阶段 1 · v1.0（约 50%）**；明细见 **`plan\PROJECT-PLAN.md` §8** |
-| 下一步 | **知识库入库链路**（`scripts\kb\ingest.py` ＋ `assets\knowledge-base\` 的语料）。<br>⚠️ **2026-10-15 实测发现：三个语料目录（`knowledge-base` / `synthetic-docs` / `eval-sets`）全是空的，`scripts\kb\` 只有 `.gitkeep`。** 后果是**页面问什么都只会拒答** —— 引用溯源、逐字流式这些**最该展示的东西在演示里是隐形的**。所以这一项应当**紧接着做**，不要往后排 |
+| 下一步 | **① 把 `repo\.env` 的三个 API Key 填上。** ⚠️ **2026-10-15 实测：`LLM_API_KEY` / `EMBEDDING_API_KEY` / `RERANK_API_KEY` 全是空的。**<br>不填的后果：**回答一个字都出不来**（生成阶段报 `Illegal header value b'Bearer '`）；引用来源**能**显示（全文路不需要 key），所以看起来"半好不坏"，很容易误判成前端 bug。<br>**② 填完 `--replace` 重跑入库补向量**（`--no-embed` 落的那批没有向量）。<br>**③ 然后才是 v1.0 第 3 项的 Web 部分**：上传 UI ＋ Redis 队列（`app\workers\main.py` 的 `handle_job` 仍是 TODO） |
 | 未决项 | **无**（§8.4 D1 已**实测收口**：`pg_trgm` 在 `ctype=C` 下对中文完全失效，已改 `C.UTF-8`，路径不变） |
-| 刚完成 | ✅ **v1.0 第 2 项前端：客服工作台**（2026-10-15）：Vue 路由 ＋ 登录页 ＋ 会话列表 ＋ 聊天页。SSE **手写按规范切帧**（`EventSource` 用不了 —— 见 §10）；引用来源可点、拒答横幅、逐字流式、中文输入法不误发。**已在浏览器里真实点通**（登录 → 新建 → 提问 → 拒答 → 列表 → 退出），并顺手确认了部署侧那两处依赖：nginx 的 **SPA 兜底**（`try_files`，history 模式必需）与 **SSE 不缓冲**（`proxy_buffering off`）。设计决定写在 `docs\architecture.md` §9.12–9.17<br>✅ **文档体系整理**（2026-10-15）：本文件压缩（重复内容收成一句 ＋ 指针）；**计划书升 v2** 并划定边界 —— **已完成历史不再逐条记，`git log` 就是权威记录**（详见 `plan\PROJECT-PLAN.md` 文件头）<br>✅ **修掉控制台中文乱码**（2026-10-15）：根因 **Python stdout=`gbk` / PowerShell 控制台=`utf-8`** → 设用户级 `PYTHONUTF8=1`。⚠️ 只对**新启动**的进程生效。详见 §10<br>✅ **v1.0 第 2 项后端：问答主链路**（2026-10-14）：混合检索 → RRF → 精排 → **先判拒答再决定调不调模型** → SSE。**61 测试全绿**。⚠️ 顺带实测揪出 `pg_trgm` 在 `ctype=C` 下对中文**完全失效**（见 §10）<br>📎 **更早的完成记录** → **`git log`**（提交信息里写了"为什么"）。**本文件不再逐条累积** |
+| 刚完成 | ✅ **知识库入库（离线最小版）**（2026-10-15）：`scripts\kb\ingest.py` —— 清洗 → 切分（每块带**标题路径**）→ 嵌入 → 写库，幂等；带 `--dry-run` / `--no-embed`。灌了 FastAPI 官方文档 15 篇 → **240 块**（2.7s），**全文检索路实测能召回**（问 "dependencies with yield" 命中的就是那几篇，且引用摘要干净可读）。⚠️ 顺带发现**三个 API key 全是空的**（见「下一步」）。取舍见 `docs\architecture.md` §9.18<br>✅ **v1.0 第 2 项前端：客服工作台**（2026-10-15）：Vue 路由 ＋ 登录页 ＋ 会话列表 ＋ 聊天页。SSE **手写按规范切帧**（`EventSource` 用不了 —— 见 §10）；引用来源可点、拒答横幅、逐字流式、中文输入法不误发。**已在浏览器里真实点通**（登录 → 新建 → 提问 → 拒答 → 列表 → 退出），并顺手确认了部署侧那两处依赖：nginx 的 **SPA 兜底**（`try_files`，history 模式必需）与 **SSE 不缓冲**（`proxy_buffering off`）。设计决定写在 `docs\architecture.md` §9.12–9.17<br>✅ **文档体系整理**（2026-10-15）：本文件压缩（重复内容收成一句 ＋ 指针）；**计划书升 v2** 并划定边界 —— **已完成历史不再逐条记，`git log` 就是权威记录**（详见 `plan\PROJECT-PLAN.md` 文件头）<br>✅ **修掉控制台中文乱码**（2026-10-15）：根因 **Python stdout=`gbk` / PowerShell 控制台=`utf-8`** → 设用户级 `PYTHONUTF8=1`。⚠️ 只对**新启动**的进程生效。详见 §10<br>✅ **v1.0 第 2 项后端：问答主链路**（2026-10-14）：混合检索 → RRF → 精排 → **先判拒答再决定调不调模型** → SSE。**61 测试全绿**。⚠️ 顺带实测揪出 `pg_trgm` 在 `ctype=C` 下对中文**完全失效**（见 §10）<br>📎 **更早的完成记录** → **`git log`**（提交信息里写了"为什么"）。**本文件不再逐条累积** |
