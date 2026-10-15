@@ -261,7 +261,13 @@ class RagPipeline:
             yield Answer(
                 text=prompt_module.REFUSAL_ANSWER,
                 refused=True,
-                citations=[],
+                # ⚠️ **拒答时也带上 citations**（2026-10-15 定，见 `architecture.md` §9.19）。
+                #    它们不是"引用"（并没有被引用），而是**"检索到了、但都不够好"的证据** ——
+                #    这正是 badcase 归因的入口。丢掉它，就等于每次拒答都只说"我不知道"，
+                #    却**不留下任何"我为什么不知道"**。
+                #    ⚠️ 副作用：`Answer.citations` 从此混装两种含义（引用 / 候选），
+                #       字段名是将就的，记在 `architecture.md` §10.3。
+                citations=citations,
                 confidence=confidence,
                 latency_ms=_elapsed_ms(started),
                 extra={"reason": "no_evidence" if not hits else "low_confidence"},

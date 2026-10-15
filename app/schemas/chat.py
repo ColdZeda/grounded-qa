@@ -31,9 +31,15 @@ class MessageOut(BaseModel):
     content: str
     #: `[{"index": 1, "chunk_id": "...", "document_id": "...", "score": 0.87,
     #:    "score_kind": "rerank", "snippet": "..."}]`
-    #: ⚠️ 空列表有两种含义：**用户消息**、以及**拒答**（拒答没有依据可引）。
-    #:    要区分它们得看 `refused`。
+    #: ⚠️ **空列表现在只有一种含义了：用户消息。**
+    #:    **拒答也会带 `citations`**（2026-10-15 定，见 `architecture.md` §9.19）——
+    #:    那时它们是"检索到了、但都不够好"的**候选**，而不是"引用"。
+    #:    （这条注释以前写的是"空列表有两种含义：用户消息、以及拒答"，已作废。）
     citations: list[dict[str, object]]
     refused: bool
+    #: 置信度（`rerank` 分数，或退化时的**向量余弦**）—— 口径跟着 `citations[].score_kind`。
+    #: ⚠️ 用户消息恒为 `None`；助手消息在"**只有全文命中**"时也是 `None`
+    #:    （那时没有可信的置信度，见 `architecture.md` §5.2）。
+    confidence: float | None
     latency_ms: int | None
     created_at: datetime

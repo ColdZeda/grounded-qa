@@ -9,6 +9,9 @@
     2. **跨租户检索隔离** —— 检索是最容易漏 `tenant_id` 的地方（它不走标准 list/get）
     3. **有命中但相似度太低也要拒答** —— 别把"检索到点什么"当成"有证据"
     4. 引用要落库，且编号与提示词一致
+    5. **拒答时也要落"我找到了什么 ＋ 在哪个分数上拒的"**（`citations` ＋ `confidence`）——
+       否则同一句拒答"**直播有来源、刷新就没了**"，而且连"为什么不知道"都留不下痕迹
+       （见 `architecture.md` §9.19）。
 """
 
 from __future__ import annotations
@@ -221,6 +224,53 @@ async def test_refuses_when_similarity_is_below_threshold(
     assert chat.calls == []
 
 
+async def test_refusal_also_persists_citations_and_confidence(
+    client: AsyncClient, app: Any, make_account, login, session: AsyncSession
+) -> None:
+    """**拒答时也要把「我找到了什么」和「在哪个分数上拒的」落库。**
+
+    ⚠️ 这条防的是一个很难发现的不一致（`architecture.md` §9.19）：
+        改之前 `sources` 事件带着检索到的候选，但落库的 `Answer.citations` 是**空数组** ——
+        于是**同一句拒答，看直播有来源、刷新之后来源消失**。
+
+    这两样东西是 badcase 归因与阈值调优的入口：没有它们，每次拒答都只是一句"我不知道"，
+    **不留下任何"我为什么不知道"的证据**。
+    """
+    chat = FakeChat()
+    app.dependency_overrides[get_clients] = lambda: (chat, FakeEmbedder(UNIT_VECTOR), None)
+    account = await make_account()
+    # 全文路能命中（内容含查询词）→ hits 非空；但向量正交 → 相似度 0 → 拒答
+    await _seed_chunk(
+        session,
+        tenant_id=account.tenant_id,
+        content="退款政策是另一个话题，这里是完全不相关的内容。",
+        embedding=ORTHOGONAL_VECTOR,
+    )
+    token = await login(account.email, account.password)
+    conversation = await _new_conversation(client, token)
+
+    _status, events = await _ask(client, token, conversation["id"], "退款政策")
+
+    # ① 直播：sources 带着候选（改之前就是这样）
+    sources = events_of(events, "sources")[0]
+    assert sources["refused"] is True
+    assert len(sources["citations"]) == 1, "拒答之前确实检索到了东西"
+
+    # ② 回放：落库的**也不能是空的** —— 这正是改之前会挂的地方
+    resp = await client.get(
+        f"{PREFIX}/conversations/{conversation['id']}/messages",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    assistant = resp.json()[1]
+
+    assert assistant["refused"] is True
+    assert len(assistant["citations"]) == 1, "拒答也要留下'我找到了什么'"
+    assert assistant["confidence"] is not None, "拒答也要留下'在哪个分数上拒的'"
+    # 是**因为低于阈值**才拒的 —— 这条把"落库"和"拒答判据"钉在一起
+    assert assistant["confidence"] < get_settings().answer_min_score
+
+
 # ------------------------------------------------------------
 # 正常回答 + 引用溯源
 # ------------------------------------------------------------
@@ -295,8 +345,12 @@ async def test_citations_and_refused_flag_are_persisted(
     assert assistant["refused"] is False
     assert len(assistant["citations"]) == 1
     assert assistant["citations"][0]["score_kind"] == "vector_cosine"
+    assert assistant["confidence"] is not None
     assert assistant["latency_ms"] is not None
+
     assert messages[0]["citations"] == []
+    # ⚠️ 用户消息**没有置信度可言** —— 这一列的可空性是有含义的，不是漏填
+    assert messages[0]["confidence"] is None
 
 
 # ------------------------------------------------------------

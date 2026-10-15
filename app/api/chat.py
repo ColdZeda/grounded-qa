@@ -256,6 +256,10 @@ async def _persist_answer(
         content=final.text,
         citations=[c.as_dict() for c in final.citations],
         refused=final.refused,
+        # ⚠️ 置信度也落库（2026-10-15，见 `architecture.md` §9.19）：
+        #    不落的话，事后只能知道"它拒答了"，**答不出"它在哪个分数上拒的"** ——
+        #    那样阈值调优就只能靠猜，badcase 也归因不了。
+        confidence=final.confidence,
         latency_ms=final.latency_ms,
     )
     session.add(message)

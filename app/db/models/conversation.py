@@ -4,8 +4,13 @@
     这两列现在就要有，而不是等"生成模块做完再加"：
     它们决定了前端能渲染什么、评测能断言什么。
     - `citations`：这条回答引用了哪几个 chunk、各自得分多少 → 前端可点开溯源
+      ⚠️ **拒答时这一列也可能不是空的**（见 `architecture.md` §9.19）：
+         那时它装的是"检索到了、但都不够好"的**候选** ——
+         概念上是"候选"而不是"引用"，**字段名是将就的**（记在 §10.3）。
     - `refused`：这条回答是"证据不足拒答"而不是正常作答 → **拒答必须可被统计**
       （拒答率是幻觉治理的核心指标之一，混在普通回答里就统计不出来了）
+    - `confidence`：**拒答是在哪个分数上做出的判断** → 阈值调优与 badcase 复盘都要它。
+      不落库的后果是：每次拒答都只说"我不知道"，**却不留下任何"我为什么不知道"的证据**。
 """
 
 from __future__ import annotations
@@ -14,7 +19,7 @@ import enum
 import uuid
 from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -92,6 +97,10 @@ class Message(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
 
     # 低置信拒答标记 —— 见模块 docstring
     refused: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    #: 置信度（`rerank` 分数，或退化时的向量余弦 —— 口径跟着 `citations[].score_kind` 走）。
+    #: ⚠️ **用户消息恒为 NULL**（它没有置信度可言）；
+    #:    助手消息在"只有全文命中"时也是 NULL（那时**没有可信的置信度**，见 §5.2）。
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     # 端到端耗时（毫秒）。可观测性要求：没有这个数就没法谈"答辩体验"。
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
