@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 class UserRole(enum.StrEnum):
     """角色。
 
-    ⚠️ v1.0 只要两种，**刻意不做完整 RBAC**（AGENTS §4 已排除）：
+    ⚠️ v1.0 只要两种，**刻意不做完整 RBAC**（理由见 `docs\architecture.md` §10.2）：
         - `ADMIN`：能进管理端（上传知识库、看评测报告）
         - `MEMBER`：只能问答
     权限点写死在代码里（`app/api/deps.py` 的 `require_admin`），不建权限表。

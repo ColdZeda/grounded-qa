@@ -126,14 +126,15 @@ lark-oapi（飞书长连接，自研适配器）
 
 ---
 
-## 4. 已排除（**不要再提议**）
+## 4. 不做清单（**不要再提议**）
 
 **Celery · LangBot · Open WebUI · Grafana · LangGraph · Milvus/Qdrant/Chroma/FAISS · Elasticsearch ·
-K8s · HTTPS · 微调/SFT/LoRA · 工单/转人工/坐席 · 完整 RBAC · 跨模态向量检索 · Docker Hub/GHCR ·
-把项目 #1 部署到公网 · 时间表/排期**
+K8s · HTTPS · 微调/SFT/LoRA · 工单/转人工/坐席 · 完整 RBAC/配额 UI · 跨模态向量检索/音视频 ·
+Docker Hub/GHCR · 把项目 #1 部署到公网 · 时间表/排期**
 
-> 📌 这里是**负面清单**（防止重新提议），**刻意不写理由**。
-> **每条"为什么否掉 ＋ 什么时候该重新考虑"** → `docs\architecture.md` **§10 诚实的代价清单**；
+> 📌 **这里只放名字** —— 目的是让 AI **一开口就被拦住**（本文件每次会话自动加载）。
+> **每条"为什么否掉 ＋ 什么时候该重新考虑"** → `docs\architecture.md` **§10 不做清单**
+> （**理由的唯一归属地**，21 条，分「技术选型 / 功能范围 / 已知不完美」三类）；
 > **辩论过程** → `..\archive\model-fight\`。
 
 ---
