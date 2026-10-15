@@ -10,15 +10,32 @@
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+logger = logging.getLogger(__name__)
+
 # ⚠️ 两个"开发默认值"抽成常量，方便启动校验直接比对（也避免在多处重复字面量）。
 # ⚠️ `DEV_JWT_SECRET` 给足 32 字节 —— 见 Settings.jwt_secret 的说明。
 DEV_JWT_SECRET = "dev-only-insecure-secret-change-me-in-production"
 DEFAULT_ADMIN_PASSWORD = "change-me"
+
+#: **已实测校准过** `answer_min_score` 的 rerank 模型。
+#:
+#: ⚠️ 判定只用「模型在不在这个表里」—— **在表外 = 从没校准过 = 那个阈值是抄来的**。
+#:    表里的值是一句话记录，**仅供人看、不参与判定** ——
+#:    一旦参与判定，就变成"改一处要同步两处"，那必然漂移（`AGENTS §4` 刻意不写条数就是这个道理）。
+#:
+#: 📌 **重新标定完，把新模型名加进来** —— 这是"校准记录"，不是配置项。
+CALIBRATED_RERANK_MODELS: dict[str, str] = {
+    "qwen3.7-text-rerank": (
+        "2026-10-15 · 20 条样本 · 取 0.60"
+        "（相关 0.786~0.990 ／ 无关 0.009~0.466，完全分离，中间空 0.32）"
+    ),
+}
 
 
 class Settings(BaseSettings):
@@ -74,7 +91,11 @@ class Settings(BaseSettings):
     # ⚠️ DeepSeek **不提供 embedding**，这一项必须另选一家（默认示例：阿里云百炼）。
     embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     embedding_api_key: str = ""
-    embedding_model: str = "text-embedding-v3"
+    # ⚠️ **默认值必须与已定选型一致**（`plan\PROJECT-PLAN.md` §4.2④）。
+    #    理由不是"好看"，而是：`.env` 漏写这一行时**不会报错** ——
+    #    如果默认值是个已废弃的模型名，就会静默用到错模型；检索质量变差，badcase 还归因不出来。
+    #    （2026-10-15 之前这里还写着 `text-embedding-v3`，就是一颗这种雷。）
+    embedding_model: str = "qwen3.7-text-embedding-flash"
     embedding_dim: int = 1024
 
     # ---------- rerank（精排）----------
@@ -83,7 +104,10 @@ class Settings(BaseSettings):
     rerank_enabled: bool = True
     rerank_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
     rerank_api_key: str = ""
-    rerank_model: str = "gte-rerank-v2"
+    # ⚠️ 同 `embedding_model`：默认值必须与已定选型一致（§4.2④）。
+    #    `gte-rerank-v2` 是**保底**选项、**不是**默认 —— 它没被校准过
+    #    （见 `CALIBRATED_RERANK_MODELS`），配套阈值与它**不通用**。
+    rerank_model: str = "qwen3.7-text-rerank"
 
     # ---------- 检索 / 生成 ----------
     retrieve_top_k: int = 20
@@ -91,7 +115,15 @@ class Settings(BaseSettings):
     chunk_size: int = 800
     chunk_overlap: int = 100
     rrf_k: int = 60
-    answer_min_score: float = 0.35
+    # 低于该置信度直接**拒答**，不要硬答。
+    # ⚠️ 比的是 **rerank 分数**；rerank 不可用时退化去比**向量余弦**（见 `_should_refuse`）。
+    # ⚠️ **这个值是实测标出来的，不是拍的**（2026-10-15，`qwen3.7-text-rerank`，20 条样本）：
+    #      相关 0.786~0.990 ／ 无关 0.009~0.466 → 取 0.60（两侧余量 0.13 / 0.19）。
+    #      旧值 0.35 配 qwen **误答 4/9**；而它本来是照 `gte-rerank-v2` 定的，
+    #      那个模型同批数据**最高才 0.17** → 「gte + 0.35」会**全拒答**。
+    # 📌 **换 rerank 模型、或换语料之后都必须重新标定** —— 分布跟着这两者走。
+    #    启动自检 `warn_if_rerank_calibration_missing()` 会检查"模型与阈值是否配套"。
+    answer_min_score: float = 0.60
     # pg_trgm 的 `word_similarity` 下限。低于它的 chunk 不进融合。
     # ⚠️ 刻意设得很低：这一步**只做粗筛**，真正的取舍交给 RRF + rerank。
     #    把粗筛阈值调高 = 在检索早期就把可能正确的答案丢掉，后面再也救不回来。
@@ -197,3 +229,60 @@ def get_settings() -> Settings:
     用 lru_cache 而不是模块级常量：测试里改环境变量后可以 ``get_settings.cache_clear()`` 重读。
     """
     return Settings()
+
+
+def warn_if_rerank_calibration_missing(settings: Settings | None = None) -> None:
+    """启动自检：**拒答阈值必须与 rerank 模型配套** —— 不配套就打显眼的告警。
+
+    ⚠️ 为什么需要它（这是本项目**第三次**遇到同一类病：**静默失效**）：
+
+        `answer_min_score` 比的是 **rerank 分数**；rerank 不可用时退化为比**向量余弦**
+        （`app/rag/pipeline.py` 的 `vector_cosine` 分支）。这两种分数**量纲与分布完全不同**，
+        而且分布跟着 **模型 + 语料** 走 —— 同一批 20 条样本（2026-10-15）：
+
+            qwen3.7-text-rerank  →  相关 0.786~0.990 ／ 无关 0.009~0.466
+            gte-rerank-v2        →  最高才 0.17
+
+        所以「换了模型却留着旧阈值」的结果是**全拒答或全放行**，而且**不报错**。
+
+    ⚠️ **只告警，不阻止启动** —— 理由同 `app/db/checks.py`：
+        阈值不配套时问答**仍然能跑**（只是判得不准）。为了一个"不准"而拒绝启动，
+        等于把**质量问题**升级成**可用性事故**。
+
+    Args:
+        settings: 便于测试注入；不传则取全局单例。
+    """
+    settings = settings or get_settings()
+
+    if not settings.rerank_enabled:
+        logger.warning(
+            "\n"
+            + "=" * 72
+            + "\n⚠️  RERANK_ENABLED=false —— 拒答阈值比的不再是 rerank 分数\n"
+            + "=" * 72
+            + f"\n当前 ANSWER_MIN_SCORE = {settings.answer_min_score}，"
+            + "它是照 **rerank 分数** 校准的。\n"
+            + "关掉 rerank 后，同一个阈值会被拿去比 **向量余弦相似度** —— 两者分布不同，\n"
+            + "可能全拒答或全放行，而且**不会报错**。\n"
+            + "修法：要么打开 rerank；要么针对向量余弦另标一个阈值（当前代码只有一套阈值）。\n"
+            + "=" * 72
+        )
+        return
+
+    if settings.rerank_model in CALIBRATED_RERANK_MODELS:
+        return
+
+    logger.warning(
+        "\n"
+        + "=" * 72
+        + f"\n⚠️  rerank 模型 `{settings.rerank_model}` **没有校准记录**\n"
+        + "=" * 72
+        + f"\n当前 ANSWER_MIN_SCORE = {settings.answer_min_score}，"
+        + "但这个阈值是给别的模型标的。\n"
+        + "现象：**全拒答或全放行，且不报错**。\n"
+        + "修法：拿一批「相关 ／ 无关」样本重新标定，再把模型名加进\n"
+        + "      `app/core/config.py` 的 `CALIBRATED_RERANK_MODELS`（那是校准记录）。\n"
+        + f"已校准过：{'、'.join(CALIBRATED_RERANK_MODELS) or '（无）'}\n"
+        + "详见 `plan\\PROJECT-PLAN.md` §4.2⑤。\n"
+        + "=" * 72
+    )
