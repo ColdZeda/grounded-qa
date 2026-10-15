@@ -199,6 +199,9 @@ uv run alembic revision --autogenerate -m "描述这次改了什么"
 # ② 人工过一遍生成的迁移文件！autogenerate 有两件事**管不了**，必须手补：
 #    · 用到 pgvector → 顶部 import pgvector.sqlalchemy，且 upgrade() 里要有
 #      CREATE EXTENSION IF NOT EXISTS vector（必须在建 chunks 表**之前**）
+#    · ⚠️ 顺手 `uv run ruff format <那个文件>` —— autogenerate 产出的是**单引号**，
+#      过不了 CI 的 `ruff format --check`（2026-10-16 首次推送前发现，
+#      上一次的迁移就因此躺了一颗 CI 必红的雷）
 # ③ 应用 + 校验（`check` 报 "No new upgrade operations detected" 才算模型与库一致）
 uv run alembic upgrade head
 uv run alembic check
