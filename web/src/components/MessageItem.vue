@@ -14,6 +14,7 @@
 import { computed, ref } from 'vue'
 
 import CitationList from './CitationList.vue'
+import { isDetailed } from '@/stores/prefs'
 import type { UiMessage } from '@/types/ui'
 
 const props = defineProps<{ message: UiMessage }>()
@@ -82,8 +83,12 @@ const segments = computed<Segment[]>(() => {
       <span v-if="message.latencyMs !== null && !isUser" class="chip">
         {{ message.latencyMs }} ms
       </span>
+      <!--
+        置信度只在**详细**档显示 —— 它是最典型的"实现细节"（architecture.md §9.19）。
+        ⚠️ `isDetailed()` 是**函数调用**：裸标识符会被编译器当常量折叠（见 prefs.ts）。
+      -->
       <span
-        v-if="message.confidence !== null && !isUser"
+        v-if="message.confidence !== null && !isUser && isDetailed()"
         class="chip"
         title="置信度取自精排分（或退化时的向量余弦）。绝不用 RRF 分数——RRF 是名次的函数，库里只有一条不相关内容时它照样排第一。"
       >

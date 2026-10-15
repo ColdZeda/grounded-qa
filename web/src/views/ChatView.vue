@@ -57,9 +57,9 @@ function toUi(message: MessageOut): UiMessage {
     citations: message.citations,
     refused: message.refused,
     latencyMs: message.latency_ms,
-    // 历史消息里没有单独的"置信度"字段（它没落库），所以刷新后这个徽标会消失。
-    // ⚠️ 这是**已知的不完美**，不是 bug：要保留得给 messages 表加一列。
-    confidence: null,
+    // 2026-10-15 起置信度**落库了**（`architecture.md` §9.19）→ 刷新后徽标不再消失。
+    // （这里以前写死 `null`，注释还写着"这是已知的不完美" —— 现在修掉了。）
+    confidence: message.confidence,
     createdAt: message.created_at,
   }
 }

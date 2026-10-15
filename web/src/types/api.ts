@@ -69,9 +69,18 @@ export interface MessageOut {
   id: string
   role: MessageRole
   content: string
-  /** ⚠️ 空数组有两种含义：**用户消息**、以及**拒答**（拒答没有依据可引）。区分靠 `refused`。 */
+  /**
+   * ⚠️ **空数组现在只有一种含义了：用户消息。**
+   *    **拒答也会带 `citations`**（2026-10-15 定，见 `architecture.md` §9.19）——
+   *    那时它们是"检索到了、但都不够好"的**候选**，而不是"引用"。
+   */
   citations: Citation[]
   refused: boolean
+  /**
+   * 置信度（`rerank` 分数，或退化时的向量余弦）—— 口径跟着 `citations[].score_kind`。
+   * 用户消息恒为 `null`；助手消息在"只有全文命中"时也是 `null`。
+   */
+  confidence: number | null
   latency_ms: number | null
   created_at: string
 }

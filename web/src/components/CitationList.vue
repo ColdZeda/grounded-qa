@@ -14,6 +14,7 @@
  */
 
 import type { Citation, ScoreKind } from '@/types/api'
+import { isDetailed } from '@/stores/prefs'
 
 defineProps<{
   citations: Citation[]
@@ -47,7 +48,13 @@ function kindHint(kind: string): string {
     <div v-for="cite in citations" :key="cite.chunk_id" class="cite" :class="{ 'cite--active': cite.index === activeIndex }">
       <div class="cite__head">
         <span class="cite__index">[{{ cite.index }}]</span>
-        <span class="chip" :title="kindHint(cite.score_kind)">
+        <!--
+          ⚠️ 分数只在**详细**档显示（architecture.md §9.19）。
+             「简洁」档藏的是**分数**，不是来源 —— 来源要留着，它建立信任。
+          ⚠️ 写成 `isDetailed()`（**函数调用**）而不是 `isDetailed`：
+             裸标识符会被编译器当常量折叠掉，`v-if` 直接消失（见 prefs.ts 的注释）。
+        -->
+        <span v-if="isDetailed()" class="chip" :title="kindHint(cite.score_kind)">
           {{ kindLabel(cite.score_kind) }} {{ cite.score.toFixed(3) }}
         </span>
       </div>
