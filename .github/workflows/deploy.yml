@@ -1,5 +1,5 @@
 # ============================================================
-# 部署：构建镜像 → 推 ACR → SSH 到服务器 pull → 健康检查 → 失败自动回滚
+# 部署：构建镜像 → 推 ACR → SSH 到服务器 pull → **执行迁移 + seed** → 健康检查 → 失败自动回滚
 # ------------------------------------------------------------
 # 触发：推送到 main，或手动触发。
 #
@@ -167,6 +167,46 @@ jobs:
             docker compose -f $COMPOSE_FILE pull && \
             ACR_REGISTRY='$ACR_REGISTRY' IMAGE_TAG='$IMAGE_TAG' \
             docker compose -f $COMPOSE_FILE up -d --remove-orphans"
+
+      # ------------------------------------------------------------
+      # ⚠️ **迁移与 seed 为什么必须由 CI 跑**（2026-10-17 补）
+      #
+      #    原来这条链里**没有**这两步 —— 而 `Dockerfile` 的 CMD 只有 uvicorn，
+      #    数据库表不会自己长出来。后果是**最坏的那种**：
+      #
+      #        .env 建好 → up -d 成功 → /healthz 返回 200 → 部署"绿了"
+      #                                              ↓
+      #                                 users 表不存在 → 登录 500
+      #
+      #    `/healthz` **故意不查数据库**（`app/main.py` 写了理由：避免依赖抖动引发无谓重启），
+      #    所以**它绿 ≠ 能用**。把迁移放在"健康检查之前"，这个绿才有意义。
+      #
+      # 📌 两步都**幂等**，所以每次部署都跑是安全的：
+      #    · `alembic upgrade head`：跑过的迁移记在 `alembic_version` 表里，会跳过
+      #    · `app.db.seed`：按邮箱查，已存在就**完全不动**（尤其**不覆盖改过的密码**）
+      #
+      # ⚠️ 用 `run --rm --no-deps` 而**不是** `exec`：
+      #    `exec` 要求 api 容器**已经在跑**，而 `up -d` 返回时它可能还在 "Created"，
+      #    存在竞态。`run` 起一个一次性容器跑完就删，不依赖 api 的启动状态。
+      #    加 `--no-deps` 是因为 postgres 已经由上面的 `up -d` 起好了。
+      #
+      # ⚠️ **回滚不动数据库**：迁移是「向前单行道」。万一这次部署失败回滚到旧镜像，
+      #    库里已经是新 schema —— 老代码遇到多出来的列/表通常无害，但**反向不成立**。
+      #    这是刻意的取舍（写 downgrade 的收益远小于风险），不是漏了。
+      # ------------------------------------------------------------
+      - name: 执行数据库迁移（幂等）
+        run: |
+          set -euo pipefail
+          ssh target "cd $REMOTE_DIR && \
+            ACR_REGISTRY='$ACR_REGISTRY' IMAGE_TAG='$IMAGE_TAG' \
+            docker compose -f $COMPOSE_FILE run --rm --no-deps api alembic upgrade head"
+
+      - name: 建默认租户与管理员（幂等）
+        run: |
+          set -euo pipefail
+          ssh target "cd $REMOTE_DIR && \
+            ACR_REGISTRY='$ACR_REGISTRY' IMAGE_TAG='$IMAGE_TAG' \
+            docker compose -f $COMPOSE_FILE run --rm --no-deps api python -m app.db.seed"
 
       - name: 轮询 /healthz
         run: |
