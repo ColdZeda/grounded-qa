@@ -237,7 +237,7 @@ class RagPipeline:
         hits, confidence, score_kind = await self._retrieve(question)
         hits = hits[: settings.rerank_top_n]
 
-        refused = self._should_refuse(hits, confidence)
+        refused = self._should_refuse(hits, confidence, score_kind)
         # 引用卡片上的分数口径：`none` 只可能是"纯全文命中"，那就是 trgm 分数
         citation_kind = "fulltext_trgm" if score_kind == "none" else score_kind
         citations = [
@@ -297,7 +297,12 @@ class RagPipeline:
             extra={"score_kind": score_kind},
         )
 
-    def _should_refuse(self, hits: Sequence[RetrievedChunk], confidence: float | None) -> bool:
+    def _should_refuse(
+        self,
+        hits: Sequence[RetrievedChunk],
+        confidence: float | None,
+        score_kind: str = "none",
+    ) -> bool:
         """判拒答。**这是幻觉治理最关键的一行判断。**
 
         ⚠️ 分**四种**情况看，不要混成一句 `confidence < threshold`：
@@ -305,9 +310,18 @@ class RagPipeline:
         | 情况 | 结论 | 为什么 |
         |---|---|---|
         | 一条都没检索到 | **拒答** | 没有任何证据，答什么都是编 |
-        | 有 **rerank** 分数 | 按 `answer_min_score` 判 | 交叉编码的分数是**校准过的相关性**，可以定阈值 |
-        | 只有**向量余弦** | **也按 `answer_min_score` 判** | 余弦至少有"相似"的语义。<br>⚠️ **但这是将就** —— 那个阈值是照 rerank 分数标的，两者分布不同 |
+        | 有 **rerank** 分数 | 按 `answer_min_score`（0.60）判 | 交叉编码的分数是**校准过的相关性**，可以定阈值 |
+        | 只有**向量余弦** | 按 `answer_min_cosine`（0.45）判 | ⚠️ **必须换一把尺子** —— 见下面那条 |
         | 只有 **trgm** 相似度 | **不拒答** | trgm 那个数字**不是相关性语义**，拿它比阈值等于瞎判 |
+
+        ⚠️ **2026-10-17（D2 收口）：两套阈值，按 `score_kind` 分。**
+            原来无论哪种分数都用 `answer_min_score`（0.60）。但两种分数**分布不同** ——
+            B 库实测：可答 25 题余弦 0.409~0.688 ／ 不可答 13 题 0.352~0.578，
+            **重叠区 0.409~0.578 几乎分不开**。拿 0.60 去比余弦会**误拒 19/25 个可答题**
+            （接口照样 200，看起来像"知识库里确实没有" —— **静默的坏**）。
+            换成 0.45 后：正确拒答 8/13、误拒可答 1/25（偏向"宁可放过"，因为误拒更伤体验）。
+            ⟹ **rerank 关掉时拒答能力显著下降，这是降级，不是等价配置。**
+            完整数据 → `docs\\architecture.md` §5.3 / §9.25，`..\\plan\\PROJECT-PLAN.md` §8.4 D2。
 
         ⚠️ **2026-10-16 更正**：这张表原先只有三行，把后两种合并成
             "没有 rerank 分数 → 不拒答" —— **那是错的**。
@@ -315,8 +329,6 @@ class RagPipeline:
             分支**给得出 `confidence`**，于是同一个阈值会被拿去比余弦。
             合并那一行会让读者以为"rerank 一挂就不判了"，
             而真实行为是"**照样判，只是拿错了尺子**" —— 后者才是要知道的事。
-
-            完整解释与代价 → `docs\\architecture.md` §5.3 / §10.3。
         """
         if not hits:
             return True
@@ -324,7 +336,13 @@ class RagPipeline:
             # 纯全文命中（没有 embedding / 没开 rerank）→ 没有可信的置信度。
             # 宁可答（并在引用里给出处让人核对），也不要用一个无意义的数字假装判断过。
             return False
-        return confidence < self._settings.answer_min_score
+        # ⚠️ **不能合并成一个阈值**：`rerank` 分与余弦不是同一个量纲。
+        threshold = (
+            self._settings.answer_min_score
+            if score_kind == "rerank"
+            else self._settings.answer_min_cosine
+        )
+        return confidence < threshold
 
 
 def _chunk_text(text: str, *, size: int = 24) -> list[str]:

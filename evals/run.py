@@ -86,7 +86,7 @@ def load_retrieval_questions(path: Path) -> list[RetrievalQuestion]:
         RetrievalQuestion(
             id=item["id"],
             question=item["question"],
-            must_hit=list(item["must_hit"]),
+            must_hit=list(item.get("must_hit", [])),
             why_not_obvious=item.get("why_not_obvious", ""),
         )
         for item in raw
@@ -137,6 +137,10 @@ class QuestionResult:
     must_hit: list[str]
     rank: int | None = None  # 第一个命中的目标文档的位次（1 起）；None = 未命中
     top_docs: list[str] = field(default_factory=list)
+    #: top-1 候选的**该路原分**（向量路=余弦，精排路=rerank 分数）。
+    #: 用来标定"两套阈值"（PLAN §8.4 D2）—— 这是消融跑批的副产品，不额外花钱。
+    top1_score: float | None = None
+    top1_doc: str = ""
     error: str | None = None
 
 
@@ -259,13 +263,29 @@ async def _run_one_ablation(
                         top_n=min(len(hits), 10),
                     )
                     by_index = dict(ranked)
-                    reordered = [
-                        hits[index]
-                        for index in sorted(by_index, key=lambda i: by_index[i], reverse=True)
-                        if 0 <= index < len(hits)
-                    ]
-                    hits = reordered
+                    # ⚠️ 必须把 rerank 分**写回** RetrievedChunk，不能只改顺序：
+                    #    原来这里直接重排原对象，`.score` 还是 search() 给的那一路分（余弦），
+                    #    于是"精排 top-1 分数"其实是余弦 —— 2026-10-17 用它标定阈值时踩到，
+                    #    得到"中位数 0.539 < 阈值 0.60"这种和事实相反的结论（真实 rerank 分是 0.95+）。
+                    reranked_chunks: list[RetrievedChunk] = []
+                    for index in sorted(by_index, key=lambda i: by_index[i], reverse=True):
+                        if not (0 <= index < len(hits)):
+                            continue
+                        base = hits[index]
+                        reranked_chunks.append(
+                            RetrievedChunk(
+                                chunk_id=base.chunk_id,
+                                document_id=base.document_id,
+                                ordinal=base.ordinal,
+                                content=base.content,
+                                score=by_index[index],
+                            )
+                        )
+                    hits = reranked_chunks
 
+            if hits:
+                result.top1_score = hits[0].score
+                result.top1_doc = paths.path_of(hits[0].document_id)
             docs = paths.doc_ranking(hits, limit=top_k)
             result.top_docs = docs
             result.rank = _rank_of(docs, item.must_hit)
@@ -290,9 +310,19 @@ def _print_report(reports: Sequence[AblationReport], *, top_k: int, total: int) 
             f"{rep.hit_count:>5}/{total:<2} {rank_text:>14} {rep.errors:>6}"
         )
     print()
+    for rep in reports:
+        scores = [r.top1_score for r in rep.results if r.top1_score is not None]
+        if not scores:
+            continue
+        scores.sort()
+        print(
+            f"【{rep.name}】top-1 原分：n={len(scores)}  min={scores[0]:.3f}  "
+            f"中位={statistics.median(scores):.3f}  max={scores[-1]:.3f}"
+        )
+    print()
 
     for rep in reports:
-        misses = [r for r in rep.results if r.rank is None and r.error is None]
+        misses = [r for r in rep.results if r.rank is None and r.error is None and r.must_hit]
         if not misses:
             continue
         print(f"【{rep.name}】没进 top-{top_k} 的 {len(misses)} 题：")
@@ -335,6 +365,8 @@ def _dump(
                         "id": r.id,
                         "must_hit": r.must_hit,
                         "rank": r.rank,
+                        "top1_score": r.top1_score,
+                        "top1_doc": r.top1_doc,
                         "top_docs": r.top_docs,
                         **({"error": r.error} if r.error else {}),
                     }
@@ -352,7 +384,8 @@ def _dump(
 
 async def _run_retrieval(args: argparse.Namespace) -> int:
     settings = get_settings()
-    questions = load_retrieval_questions(QUESTIONS_DIR / "retrieval.yaml")
+    qpath = Path(args.questions) if args.questions else QUESTIONS_DIR / "retrieval.yaml"
+    questions = load_retrieval_questions(qpath)
     if args.limit:
         questions = questions[: args.limit]
 
@@ -506,6 +539,9 @@ class AnswerResult:
     llm_calls: int
     cited: list[str]
     text: str
+    #: pipeline 判拒答时**真正用的**置信度（rerank 分或余弦）。
+    #: 标定阈值（D2）必须看这个 —— 我自己算的 top-1 与它口径不同就会得到相反结论。
+    confidence: float | None = None
     points: list[tuple[str, bool, bool]] = field(default_factory=list)  # (要点, 命中, 弱判定)
     forbidden_hit: list[str] = field(default_factory=list)
     cite_ok: bool | None = None
@@ -592,6 +628,7 @@ async def _run_answer_layer(args: argparse.Namespace, *, layer: str) -> int:
                     else:
                         result.text = final.text
                         result.refused = final.refused
+                        result.confidence = final.confidence
                         result.cited = [paths.path_of(c.document_id) for c in final.citations]
                 except ModelAPIError as exc:
                     result.error = f"ModelAPIError: {exc}"
@@ -627,6 +664,7 @@ async def _run_answer_layer(args: argparse.Namespace, *, layer: str) -> int:
 
                 if args.show_answers and layer == "generation":
                     print(f"\n--- {result.id} · {result.question}")
+                    print(f"    confidence={result.confidence} refused={result.refused}")
                     print(f"    {result.text[:400]}")
                     print(f"    引用：{' | '.join(result.cited[:3])}")
                 if result.error:
@@ -699,6 +737,7 @@ def _report_answer_layer(
                         "question": r.question,
                         "passed": r.passed,
                         "refused": r.refused,
+                        "confidence": r.confidence,
                         "llm_calls": r.llm_calls,
                         "cited": r.cited,
                         "points": [
@@ -795,6 +834,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--top-k", type=int, default=5, help="hit@k 的 k")
     parser.add_argument("--only", default="all", choices=["all", *ABLATIONS], help="只跑某一组消融")
     parser.add_argument("--limit", type=int, default=0, help="只跑前 N 题（试水用）")
+    parser.add_argument("--questions", default=None, help="换一个题集文件（默认 retrieval.yaml）")
     parser.add_argument(
         "--fulltext-min",
         type=float,
