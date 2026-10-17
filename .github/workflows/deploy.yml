@@ -13,13 +13,16 @@
 # （⚠️ 密码 / 私钥**只从 GitHub 界面填**：Settings → Secrets and variables → Actions。
 #   绝不贴进对话、绝不提交进仓库。）
 #    ACR_REGISTRY      ⚠️ **含命名空间**，不是纯域名。
-#                      例：cri-xxxxxxxxxxxx.cn-shenzhen.personal.cr.aliyuncs.com/grounded-qa
+#                      例：crpi-xxxxxxxxxxxx.cn-shenzhen.personal.cr.aliyuncs.com/grounded-qa
 #                      理由：下面的镜像名写的是 `$ACR_REGISTRY/grounded-qa-api`，
 #                            拼出来正好等于阿里云控制台给的推送地址。
 #                      ⚠️ **新版个人版**实例的域名形如
-#                            `cri-xxxx.cn-shenzhen.personal.cr.aliyuncs.com`；
+#                            `crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com`（**`crpi-`**，不是 `cri-`）；
 #                            `registry.cn-shenzhen.aliyuncs.com` 是**旧版 / 企业版**的写法。
 #                            填错会推到不存在的仓库 —— 好在它会**报错**，不会静默。
+#                      📌 但 **`docker login` 要的是【纯域名】**（不带 `/grounded-qa`）——
+#                         所以 workflow 里用 `${ACR_REGISTRY%%/*}` 现剥一个 `ACR_HOST` 出来，
+#                         **不另存第 8 个 secret**。见 B5。
 #    ACR_USERNAME      阿里云 ACR **用户名**（不是密码，形如 `aliyun0490812142`）
 #    ACR_PASSWORD      ACR 的 Registry 登录密码（控制台里单独设的那个）
 #    SSH_HOST          服务器地址
@@ -59,10 +62,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 从 ACR_REGISTRY 剥出「纯域名」
+        # ⚠️ **`docker login` 要的是【纯域名】，不带命名空间。**
+        #    阿里云「操作指南」给的官方示例就是
+        #      `docker login --username=… crpi-xxx….aliyuncs.com`
+        #    而 `ACR_REGISTRY` 里**含** `/grounded-qa`（拼镜像名要用它）→ **两个用途必须分开**：
+        #      · **登录** → 用剥出来的 `ACR_HOST`
+        #      · **拼镜像名** → 用原值 `ACR_REGISTRY`
+        # 📌 为什么不拆成第 8 个 secret（B5 的老方案）：**能算出来的东西不要另存一份** ——
+        #    多一个 secret 就多一处要手工同步，而两处迟早会悄悄不一致。
+        run: echo "ACR_HOST=${ACR_REGISTRY%%/*}" >> "$GITHUB_ENV"
+
       - name: 登录 ACR
         uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.ACR_REGISTRY }}
+          registry: ${{ env.ACR_HOST }}
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
 
@@ -139,8 +153,11 @@ jobs:
           ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
         run: |
           set -euo pipefail
+          # ⚠️ 与 build-and-push 那一步同一个道理：**登录用纯域名**，不是含命名空间的原值。
+          #    在这里剥一次再传过去 —— 服务器上就不必再写一遍同样的逻辑。
+          ACR_HOST="${ACR_REGISTRY%%/*}"
           printf '%s' "$ACR_PASSWORD" | ssh target \
-            "docker login '$ACR_REGISTRY' --username='${{ secrets.ACR_USERNAME }}' --password-stdin"
+            "docker login '$ACR_HOST' --username='${{ secrets.ACR_USERNAME }}' --password-stdin"
 
       - name: 拉取新镜像并重启
         run: |
