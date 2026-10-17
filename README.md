@@ -162,7 +162,11 @@
 ### 前置要求
 
 - [uv](https://docs.astral.sh/uv/)（Python 包管理）
-- Node.js ≥ 20 + [pnpm](https://pnpm.io/)
+- **Node.js ≥ 22.13** + [pnpm](https://pnpm.io/) 11.7
+  > ⚠️ **不是"≥ 20"**。`web/package.json` 钉了 `packageManager: pnpm@11.7.0`，
+  > 而 **pnpm 11.7 要求 Node ≥ 22.13** —— 低于它 pnpm 会直接拒绝运行，
+  > 报 `This version of pnpm requires at least Node.js v22.13`。
+  > 📌 这行原来写的是"≥ 20"，**2026-10-17 首次 CI 就红在这**（见 `AGENTS.md` §10）。
 - Docker（本地依赖服务一律用 compose 起，**不要装到宿主机**）
 
 ### 1. 配置环境变量
