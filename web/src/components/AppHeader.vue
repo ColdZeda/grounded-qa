@@ -2,12 +2,28 @@
 /** 顶栏：品牌 + 当前用户 + 退出。中间留一个插槽给页面放自己的东西。 */
 
 import { computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import { currentUser, signOut } from '@/stores/auth'
 import { detailLevel, setDetailLevel } from '@/stores/prefs'
 
 const router = useRouter()
+const route = useRoute()
+
+/**
+ * 「会话」这一格在**聊天页也要亮**。
+ *
+ * ⚠️ 只靠 `router-link-active` 做不到：`/conversations/:id` 在路由表里是一条
+ * **独立的记录**（`chat`），不是 `conversations` 的子路由 —— vue-router 的
+ * active class 按**记录嵌套**算，不按 URL 前缀算。所以这里自己判。
+ *
+ * ⚠️ 写成**普通函数**而不是 `computed`：模板里要用 `inChat()` 这种**调用形式**
+ * （AGENTS §10 那个坑：裸标识符当整个条件时会被编译器常量折叠）。
+ * `route` 本身是响应式的，函数式写法照样跟着路由变。
+ */
+function inChat(): boolean {
+  return ['conversations', 'chat', 'chat-new'].includes(String(route.name ?? ''))
+}
 
 /**
  * 详细程度档位（设计理由见 `architecture.md` §9.19）。
@@ -38,7 +54,9 @@ function logout(): void {
     </RouterLink>
 
     <nav class="nav">
-      <RouterLink :to="{ name: 'conversations' }">会话</RouterLink>
+      <RouterLink :to="{ name: 'conversations' }" :class="{ 'is-active': inChat() }">
+        会话
+      </RouterLink>
       <RouterLink :to="{ name: 'documents' }">知识库</RouterLink>
       <RouterLink :to="{ name: 'reports' }">评测报告</RouterLink>
     </nav>
@@ -112,7 +130,8 @@ function logout(): void {
   color: var(--text);
 }
 
-.nav a.router-link-active {
+.nav a.router-link-active,
+.nav a.is-active {
   background: var(--primary-soft);
   color: var(--primary);
 }

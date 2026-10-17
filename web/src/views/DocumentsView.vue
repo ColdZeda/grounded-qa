@@ -80,6 +80,11 @@ onBeforeUnmount(() => {
   }
 })
 
+/** 打开系统文件选择框（真正的控件是隐藏的 input）。 */
+function pickFile(): void {
+  fileInput.value?.click()
+}
+
 async function onPick(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -125,17 +130,29 @@ onMounted(load)
 <template>
   <div class="shell">
     <AppHeader>
-      <label v-if="isAdmin" class="btn btn--sm" :class="{ 'btn--busy': uploading }">
+      <button
+        v-if="isAdmin"
+        class="btn btn--sm"
+        type="button"
+        :disabled="uploading"
+        @click="pickFile"
+      >
         {{ uploading ? '上传中…' : '＋ 上传文档' }}
-        <input
-          ref="fileInput"
-          class="picker"
-          type="file"
-          accept=".md,.markdown,.txt"
-          :disabled="uploading"
-          @change="onPick"
-        />
-      </label>
+      </button>
+      <!--
+        ⚠️ 文件选择框**用按钮去 `click()` 它**，而不是把它包在 `<label>` 里。
+           两种都常见，但按钮这条路只依赖一件事（元素的 click 事件），
+           而 label 那条要依赖"label 激活行为 + 隐藏控件的兼容性"——
+           后者在 `display:none` / `pointer-events:none` 的边界上各浏览器历史上不一致。
+      -->
+      <input
+        ref="fileInput"
+        class="picker"
+        type="file"
+        accept=".md,.markdown,.txt"
+        :disabled="uploading"
+        @change="onPick"
+      />
       <button class="btn btn--ghost btn--sm" type="button" :disabled="loading" @click="load">
         刷新
       </button>
@@ -216,23 +233,9 @@ onMounted(load)
   font-size: 0.8rem;
 }
 
-/* 文件选择框藏起来，但**不能用 display:none** —— 那样 label 点不动 */
+/* 文件选择框藏起来（真正的入口是上面那个按钮） */
 .picker {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-label.btn {
-  position: relative;
-  cursor: pointer;
-}
-
-.btn--busy {
-  opacity: 0.6;
-  pointer-events: none;
+  display: none;
 }
 
 .muted {
