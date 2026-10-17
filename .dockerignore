@@ -35,5 +35,10 @@ web/.vite
 .env.*
 !.env.example
 docs
-evals
+# ⚠️ **不能整目录排除 `evals`**：知识库 B 的语料要随镜像走，生产才有东西可灌
+#    （`deploy.yml` 里那步「灌知识库（幂等）」读的就是镜像内的 /app/evals/corpus）。
+#    题集与历史结果不需要进镜像 —— 它们只在开发机上跑评测时用。
+evals/questions
+evals/results
+evals/run.py
 tests

@@ -62,6 +62,13 @@ COPY --chown=appuser:appuser app /app/app
 #    部署脚本会在"执行迁移"这一步莫名其妙地失败。
 COPY --chown=appuser:appuser alembic.ini /app/alembic.ini
 COPY --chown=appuser:appuser migrations /app/migrations
+# ⚠️ **`scripts/` 与语料也要进镜像**（2026-10-17）：生产上「灌知识库」那一步是
+#    在容器里跑 `python scripts/kb/ingest.py`，语料读 /app/evals/corpus。
+#    不带它们，部署到"灌库"这步就会 `No such file or directory` ——
+#    而且和"迁移文件没进镜像"是同一类错误（本地跑得好好的，容器里就找不到）。
+#    语料只有 ~100 KB，题集/结果已在 .dockerignore 里排除，不会把评测材料带上线。
+COPY --chown=appuser:appuser scripts /app/scripts
+COPY --chown=appuser:appuser evals/corpus /app/evals/corpus
 
 USER appuser
 

@@ -238,6 +238,28 @@ jobs:
             ACR_REGISTRY='$ACR_REGISTRY' IMAGE_TAG='$IMAGE_TAG' \
             docker compose -f $COMPOSE_FILE run --rm --no-deps api python -m app.db.seed"
 
+      - name: 灌知识库（幂等）
+        # ⚠️ **为什么要放在部署链里**（2026-10-17 补）：
+        #    生产库原本 `chunks = 0` —— 站点能登录、能拒答，但**答不了任何业务问题**。
+        #    语料会随 api 镜像一起发布（见 Dockerfile 的 `COPY evals/corpus`），
+        #    但**镜像里有 ≠ 库里有**：这一步才是真正把文本切块、嵌入、写进库。
+        #
+        # ⚠️ **幂等**：`ingest.py` 按 `(tenant_id, content_hash)` 判重，已入库的文件直接跳过。
+        #    所以日常部署**不会重复调 embedding**（只有语料变了才花那点钱）。
+        # ⚠️ **必须在 seed 之后**：ingest 要按 slug 找租户，租户不存在就会报错退出。
+        #
+        # ⚠️ **`PYTHONPATH=/app` 不能省**：镜像是 `uv sync --no-install-project` 装的，
+        #    `app` 包**没进 venv**；跑 `python scripts/kb/ingest.py` 时 sys.path[0] 是
+        #    脚本所在目录（/app/scripts/kb），**cwd 不在里面** → `import app` 直接
+        #    ModuleNotFoundError。（uvicorn 能跑是因为它自己把 cwd 插进 sys.path。）
+        run: |
+          set -euo pipefail
+          ssh target "cd $REMOTE_DIR && \
+            ACR_REGISTRY='$ACR_REGISTRY' IMAGE_TAG='$IMAGE_TAG' \
+            docker compose -f $COMPOSE_FILE run --rm --no-deps api \
+              env PYTHONPATH=/app \
+              python scripts/kb/ingest.py --kb senyu --path evals/corpus/senyu-home"
+
       - name: 轮询 /healthz
         run: |
           set -euo pipefail
