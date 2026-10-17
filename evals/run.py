@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import statistics
 import uuid
 from collections.abc import Sequence
@@ -49,8 +50,8 @@ from app.core.config import Settings, get_settings
 from app.db.models.knowledge import Document
 from app.db.models.tenant import Tenant
 from app.db.session import dispose_engine, get_session_factory
-from app.rag.pipeline import build_clients
-from app.rag.providers import ModelAPIError, aclose_http_client
+from app.rag.pipeline import Answer, RagPipeline, build_clients
+from app.rag.providers import ChatClient, ModelAPIError, aclose_http_client
 from app.rag.retrieval import HybridRetriever, RetrievedChunk
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -410,9 +411,386 @@ async def _run_retrieval(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- 生成层 / 拒答层
+
+#: 判分时只认"数字"和"拉丁词"这两类原子 —— 它们是政策文档里**最不可替换**的部分。
+#: （"7 天"和"30 天"是同义词吗？不是。而"退货"和"退换"在语义上等价，不该强判。）
+_ATOM = re.compile(r"\d+(?:\.\d+)?%?|[A-Za-z]{2,}")
+
+
+def _strip_citation_marks(text: str) -> str:
+    """去掉 `[1]` `[2]` 这类引用标记。
+
+    ⚠️ 必须去掉：回答里的 `[1]` 会把数字 "1" 送进匹配，
+       于是要点里写 "电子件 1 年" 这种**其实没答到**的项也会被误判为命中。
+    """
+    return re.sub(r"\[\d+\]", "", text)
+
+
+def _norm(text: str) -> str:
+    """只抹掉空白与中文标点，**保留数字、%、.、~、-、/ 与拉丁字母**。
+
+    ⚠️ 不要把 `-` `/` `~` 也抹掉：抹了之后 "3~5" 会变成 "35"，
+       于是"3~5 个工作日"能被"35 天"这种无关文本命中 —— 假阳性比漏判更伤评测。
+    """
+    return re.sub(r"[\s，,、；;：:。！!？?（）()【】\[\]「」『』\"'“”‘’—－]", "", text).lower()
+
+
+def _bigrams(text: str) -> set[str]:
+    """只取**中文**字符的相邻二元组，作为"语义指纹"。
+
+    为什么不用逐字包含：中文里同义/近义的替换太常见 ——
+    "运费**与**关税" vs "运费**和**关税"、"用积分抵扣" vs "用积分**或优惠券**抵扣"，
+    逐字匹配全判不中，于是**判分器把满分答案判成错**（2026-10-17 实测踩到）。
+    二元组覆盖率对这类插入/替换是容忍的，同时又比"整句相似度"细。
+    """
+    # ⚠️ 必须**按连续中文段**取，不能把所有汉字先捞出来再拼：
+    #    "总则 7 天" 捞出来是 ["总","则","天"]，会造出"则天"这种跨数字的假二元组，
+    #    于是要点永远凑不够覆盖率 —— 这是 2026-10-17 实测踩到的第二个判分坑。
+    grams: set[str] = set()
+    for run in re.findall(r"[\u4e00-\u9fff]+", text):
+        grams.update(run[i : i + 2] for i in range(len(run) - 1))
+    return grams
+
+
+def _point_hit(point: str, answer_norm: str) -> tuple[bool, bool]:
+    """一条要点是否命中。返回 `(命中, 是否"弱判定")`。
+
+    判定规则（刻意简单、可解释，**不用 LLM 当裁判**）：
+
+    1. 要点里的**数字/百分比/拉丁词**必须**全部**出现在回答里 —— 硬条件；
+    2. 中文部分看**二元组覆盖率**：要点里的中文二元组有多少比例出现在回答里，
+       阈值 0.6（去掉括号补充说明后再算）。
+
+    ⚠️ "弱判定" = 要点里既没数字也没拉丁词，只靠二元组覆盖 ——
+       这种判定天然偏松，输出里单独计数，别和数字型要点同等看待。
+    """
+    atoms = _ATOM.findall(point)
+    if atoms:
+        # 有数字/拉丁词 ⟹ **以它为准**。它们才是政策里不可替换的证据
+        # （"7 天"和"30 天"不是同义词；而"新马"与"新加坡/马来西亚"是同义的 —— 后者不该扣分）。
+        return all(_norm(atom) in answer_norm for atom in atoms), False
+
+    plain = re.sub(r"[（(][^）)]*[）)]", "", point)
+    want = _bigrams(plain)
+    if not want:
+        return False, True
+    got = _bigrams(answer_norm)
+    coverage = len(want & got) / len(want)
+    return coverage >= 0.6, True
+
+
+class SpyChat:
+    """把 `ChatClient` 包一层，数**生成模型到底被调了几次**，其余原样透传。
+
+    ⚠️ 拒答层的核心断言不是"回答看起来像拒答"，而是**根本没花 token**。
+       只看文案的话，"模型自己决定不答"也能骗过判分 —— 那正是本项目要避免的设计。
+    ⚠️ 必须**透传**而不是吞掉：生成层要的是真实回答，只有拒答层才断言"0 次"。
+    """
+
+    def __init__(self, inner: ChatClient) -> None:
+        self._inner = inner
+        self.calls = 0
+
+    async def stream(self, messages: Sequence[dict[str, str]]) -> Any:
+        self.calls += 1
+        async for piece in self._inner.stream(messages):
+            yield piece
+
+
+@dataclass
+class AnswerResult:
+    id: str
+    question: str
+    refused: bool
+    llm_calls: int
+    cited: list[str]
+    text: str
+    points: list[tuple[str, bool, bool]] = field(default_factory=list)  # (要点, 命中, 弱判定)
+    forbidden_hit: list[str] = field(default_factory=list)
+    cite_ok: bool | None = None
+    must_say_ok: bool | None = None
+    ok: bool | None = None
+    expect_refuse: bool | None = None
+    error: str | None = None
+
+    @property
+    def points_hit(self) -> int:
+        return sum(1 for _, hit, _ in self.points if hit)
+
+    @property
+    def points_total(self) -> int:
+        return len(self.points)
+
+    @property
+    def weak_points(self) -> int:
+        return sum(1 for _, _, weak in self.points if weak)
+
+    @property
+    def passed(self) -> bool:
+        if self.error:
+            return False
+        if self.forbidden_hit:
+            return False
+        if self.cite_ok is False:
+            return False
+        return self.points_hit == self.points_total
+
+
+def _load_items(path: Path) -> list[dict[str, Any]]:
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise SystemExit(f"{path} 的顶层结构不是列表")
+    return raw
+
+
+async def _run_answer_layer(args: argparse.Namespace, *, layer: str) -> int:
+    settings = get_settings()
+    if layer == "generation":
+        items = _load_items(QUESTIONS_DIR / "generation.yaml")
+    else:
+        items = _load_items(QUESTIONS_DIR / "refusal.yaml")
+    if args.limit:
+        items = items[: args.limit]
+
+    chat, embedder, reranker = build_clients(settings)
+    spy = SpyChat(chat)
+    factory = get_session_factory()
+    results: list[AnswerResult] = []
+    started = datetime.now(tz=UTC)
+
+    try:
+        async with factory() as session:
+            tenant_id = await _resolve_tenant_id(session, settings.default_tenant_id)
+            paths = await _document_paths(session, tenant_id, kb=args.kb)
+            print(f"题库 {len(items)} 题 · 层 {layer} · 知识库 {args.kb}")
+            for index, item in enumerate(items, start=1):
+                spy.calls = 0
+                pipeline = RagPipeline(
+                    session=session,
+                    tenant_id=tenant_id,
+                    chat=spy,  # type: ignore[arg-type]
+                    embedder=embedder,
+                    reranker=reranker,
+                    settings=settings,
+                )
+                result = AnswerResult(
+                    id=item["id"],
+                    question=item["question"],
+                    refused=False,
+                    llm_calls=0,
+                    cited=[],
+                    text="",
+                )
+                try:
+                    final: Answer | None = None
+                    async for event in pipeline.answer(question=item["question"]):
+                        if isinstance(event, Answer):
+                            final = event
+                    if final is None:
+                        result.error = "没有拿到最终 Answer 事件"
+                    else:
+                        result.text = final.text
+                        result.refused = final.refused
+                        result.cited = [paths.path_of(c.document_id) for c in final.citations]
+                except ModelAPIError as exc:
+                    result.error = f"ModelAPIError: {exc}"
+                result.llm_calls = spy.calls
+
+                answer_norm = _norm(_strip_citation_marks(result.text))
+                if layer == "generation":
+                    for point in item.get("required_points", []):
+                        hit, weak = _point_hit(point, answer_norm)
+                        result.points.append((point, hit, weak))
+                    must_cite = item.get("must_cite", [])
+                    if must_cite:
+                        result.cite_ok = bool(set(must_cite) & set(result.cited))
+                    for banned in item.get("must_not_say", []):
+                        if _norm(banned) and _norm(banned) in answer_norm:
+                            result.forbidden_hit.append(banned)
+                else:
+                    expect_refuse = bool(item.get("should_refuse", True))
+                    result.expect_refuse = expect_refuse
+                    must_say = item.get("must_say", [])
+                    if must_say:
+                        result.must_say_ok = any(_norm(s) in answer_norm for s in must_say)
+                    ok = result.refused == expect_refuse and result.must_say_ok is not False
+                    result.ok = ok
+                    mark = "✓" if ok else "✗"
+                    token_note = (
+                        "" if result.llm_calls == 0 else f"  ⚠️ 调了模型 {result.llm_calls} 次"
+                    )
+                    print(
+                        f"  [{index:>2}/{len(items)}] {mark} {result.id}  refused={result.refused}{token_note}"
+                    )
+                results.append(result)
+
+                if args.show_answers and layer == "generation":
+                    print(f"\n--- {result.id} · {result.question}")
+                    print(f"    {result.text[:400]}")
+                    print(f"    引用：{' | '.join(result.cited[:3])}")
+                if result.error:
+                    print(f"  ⚠️ {result.id} {result.error}")
+    finally:
+        await dispose_engine()
+        await aclose_http_client()
+
+    return _report_answer_layer(results, layer=layer, settings=settings, args=args, started=started)
+
+
+def _report_answer_layer(
+    results: Sequence[AnswerResult],
+    *,
+    layer: str,
+    settings: Settings,
+    args: argparse.Namespace,
+    started: datetime,
+) -> int:
+    print()
+    if layer == "generation":
+        ok = sum(1 for r in results if r.passed)
+        strict = [r for r in results if r.weak_points == 0]
+        strict_ok = sum(1 for r in strict if r.passed)
+        print(f"生成层：**{ok}/{len(results)} 题全通过**（要点全中 ＋ 引用对 ＋ 无禁语）")
+        if strict:
+            print(
+                f"  其中「全部要点都是数字型」的 {len(strict)} 题：{strict_ok}/{len(strict)} 通过"
+            )
+        weak_total = sum(r.weak_points for r in results)
+        if weak_total:
+            print(f"  ⚠️ 有 {weak_total} 条要点属于「弱判定」（无数字/拉丁词），别当同等证据")
+        for r in results:
+            if r.passed:
+                continue
+            why: list[str] = []
+            if r.error:
+                why.append(r.error)
+            missing = [p for p, hit, _ in r.points if not hit]
+            if missing:
+                why.append(f"要点缺 {len(missing)}/{r.points_total}：{missing[0][:40]}")
+            if r.cite_ok is False:
+                why.append(f"引用不匹配（实际 {r.cited[:2]}）")
+            if r.forbidden_hit:
+                why.append(f"出现禁语：{r.forbidden_hit}")
+            print(f"  ✗ {r.id}  " + "；".join(why))
+    else:
+        correct = sum(1 for r in results if r.ok)
+        clean = sum(1 for r in results if r.llm_calls == 0)
+        print(f"拒答层：**{correct}/{len(results)} 题行为正确**")
+        print(f"  **没调生成模型的有 {clean}/{len(results)} 题**（这才是「省 token」的证据）")
+        for r in results:
+            # ⚠️ 只有「本该拒答」的题调了模型才算违规；should_refuse=False 的题本来就该答，
+            #    调模型是正常的 —— 这里写死"一律告警"会把正常行为报成错。
+            if r.llm_calls != 0 and r.expect_refuse is not False:
+                print(f"  ⚠️ {r.id} 本该拒答却调了生成模型 {r.llm_calls} 次")
+
+    out = RESULTS_DIR / f"{layer}-{started.strftime('%Y%m%dT%H%M%SZ')}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        json.dumps(
+            {
+                "kind": layer,
+                "generated_at": started.strftime("%Y%m%dT%H%M%SZ"),
+                "kb": args.kb,
+                "llm_model": settings.llm_model,
+                "results": [
+                    {
+                        "id": r.id,
+                        "question": r.question,
+                        "passed": r.passed,
+                        "refused": r.refused,
+                        "llm_calls": r.llm_calls,
+                        "cited": r.cited,
+                        "points": [
+                            {"point": p, "hit": hit, "weak": weak} for p, hit, weak in r.points
+                        ],
+                        "forbidden_hit": r.forbidden_hit,
+                        "cite_ok": r.cite_ok,
+                        "must_say_ok": r.must_say_ok,
+                        "ok": r.ok,
+                        "expect_refuse": r.expect_refuse,
+                        "text": r.text,
+                        **({"error": r.error} if r.error else {}),
+                    }
+                    for r in results
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    print(f"\n结果已存：{out.relative_to(REPO_ROOT)}")
+    return 0
+
+
+def _rescore_generation(args: argparse.Namespace) -> int:
+    """用**已经存下来的回答**重算判分，不再调模型。
+
+    ⚠️ 为什么需要它：改判分规则时若重跑一遍，**回答也跟着变了** ——
+       那就分不清"分变了"是因为尺子还是因为模型。rescore 保证"同一批回答、只换尺子"。
+    """
+    path = Path(args.rescore)
+    if not path.is_absolute():
+        path = (REPO_ROOT / path).resolve()
+    if not path.exists():
+        raise SystemExit(f"找不到结果文件：{path}")
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    items = {item["id"]: item for item in _load_items(QUESTIONS_DIR / "generation.yaml")}
+
+    results: list[AnswerResult] = []
+    for row in payload.get("results", []):
+        item = items.get(row["id"])
+        if item is None:
+            continue
+        result = AnswerResult(
+            id=row["id"],
+            question=row["question"],
+            refused=row.get("refused", False),
+            llm_calls=row.get("llm_calls", 0),
+            cited=row.get("cited", []),
+            text=row.get("text", ""),
+            error=row.get("error"),
+        )
+        answer_norm = _norm(_strip_citation_marks(result.text))
+        for point in item.get("required_points", []):
+            hit, weak = _point_hit(point, answer_norm)
+            result.points.append((point, hit, weak))
+        must_cite = item.get("must_cite", [])
+        if must_cite:
+            result.cite_ok = bool(set(must_cite) & set(result.cited))
+        for banned in item.get("must_not_say", []):
+            if _norm(banned) and _norm(banned) in answer_norm:
+                result.forbidden_hit.append(banned)
+        results.append(result)
+
+    print(f"重判 {path.name}（同一批回答、只换判分器）")
+    return _report_answer_layer(
+        results,
+        layer="generation",
+        settings=get_settings(),
+        args=args,
+        started=datetime.now(tz=UTC),
+    )
+
+
+async def _run_all_answer_layers(args: argparse.Namespace) -> int:
+    rc = await _run_answer_layer(args, layer="generation")
+    rc2 = await _run_answer_layer(args, layer="refusal")
+    return rc or rc2
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="run.py", description="grounded-qa 评测 runner")
-    parser.add_argument("--layer", default="retrieval", choices=["retrieval"])
+    parser.add_argument(
+        "--layer",
+        default="retrieval",
+        choices=["retrieval", "generation", "refusal", "all"],
+        help="哪一层（all 只跑 generation + refusal；retrieval 单独跑）",
+    )
     parser.add_argument("--kb", default="senyu", help="知识库前缀（ingest 时 --kb 的值）")
     parser.add_argument("--top-k", type=int, default=5, help="hit@k 的 k")
     parser.add_argument("--only", default="all", choices=["all", *ABLATIONS], help="只跑某一组消融")
@@ -423,8 +801,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="覆盖 fulltext_min_similarity（做门槛实验用）",
     )
+    parser.add_argument(
+        "--show-answers", action="store_true", help="把每题的回答打出来（核对判分是否公允）"
+    )
+    parser.add_argument(
+        "--rescore", default=None, help="用已存的结果文件重算判分（不调模型，只换尺子）"
+    )
     args = parser.parse_args(argv)
-    return asyncio.run(_run_retrieval(args))
+    if args.rescore:
+        return _rescore_generation(args)
+    if args.layer == "retrieval":
+        return asyncio.run(_run_retrieval(args))
+    if args.layer in ("generation", "refusal"):
+        return asyncio.run(_run_answer_layer(args, layer=args.layer))
+    return asyncio.run(_run_all_answer_layers(args))
 
 
 if __name__ == "__main__":
