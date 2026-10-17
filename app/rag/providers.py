@@ -75,24 +75,46 @@ class ChatClient:
         api_key: str,
         model: str,
         client: httpx.AsyncClient | None = None,
+        include_usage: bool = True,
     ) -> None:
         # 去掉尾部斜杠，避免拼出 `//chat/completions`
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._model = model
         self._client = client
+        #: 流式响应里要不要顺带要一份 `usage`（token 计量用）。
+        #: ⚠️ 做成开关而不是写死：握手字段各家兼容程度不一，
+        #:    万一某个 OpenAI 兼容端点**不认**它、直接 400，关掉这个开关就能回到原样，
+        #:    不用改代码。代价是 token 配额那本账会**算不出来**（见 `app/core/limits.py`）。
+        self._include_usage = include_usage
 
     def _client_or_default(self) -> httpx.AsyncClient:
         return self._client if self._client is not None else get_http_client()
 
-    async def stream(self, messages: Sequence[dict[str, str]]) -> AsyncIterator[str]:
+    async def stream(
+        self,
+        messages: Sequence[dict[str, str]],
+        usage: dict[str, int] | None = None,
+    ) -> AsyncIterator[str]:
         """流式生成，逐段 yield 文本增量。
 
         ⚠️ **OpenAI 兼容的 SSE 格式不是标准 SSE 语义**：它是 `data:` 行里塞 JSON，
             流末尾固定来一个 `data: [DONE]`。所以这里手工解析，
             不套用通用的 SSE 解析器（会解析不出来）。
+
+        ⚠️ `usage` 是**调用方持有的字典**，不是本实例的属性。
+            这个客户端是**进程内单例**（`chat.py` 的 `lru_cache`），
+            把 usage 挂在实例上会被并发请求互相覆盖 —— 账就记到别人头上了。
         """
-        payload = {"model": self._model, "messages": list(messages), "stream": True}
+        payload: dict[str, object] = {
+            "model": self._model,
+            "messages": list(messages),
+            "stream": True,
+        }
+        if self._include_usage:
+            # 让服务端在**最后一帧**把 usage 一起回传（实测 deepseek-flash 支持）
+            payload["stream_options"] = {"include_usage": True}
+
         client = self._client_or_default()
 
         try:
@@ -112,6 +134,13 @@ class ChatClient:
                     data = line[len("data:") :].strip()
                     if not data or data == "[DONE]":
                         continue
+                    if usage is not None:
+                        counted = _parse_stream_usage(data)
+                        if counted:
+                            # ⚠️ **覆盖**而不是累加：带 usage 的那一帧是**最终总计**，
+                            #    出现两次时（个别实现会这样）累加会把账算成两倍。
+                            usage.clear()
+                            usage.update(counted)
                     chunk = _parse_stream_chunk(data)
                     if chunk:
                         yield chunk
@@ -156,6 +185,28 @@ def _parse_stream_chunk(data: str) -> str:
         return str(payload["choices"][0]["delta"].get("content") or "")
     except (KeyError, IndexError, TypeError):
         return ""
+
+
+#: `usage` 里我们关心的几个字段。**只留认得出来的整数** —— 其余键原样丢掉，
+#: 免得以后某家加了新字段，我们把它当成"一个 token 数"写进账里。
+_USAGE_FIELDS = ("prompt_tokens", "completion_tokens", "total_tokens")
+
+
+def _parse_stream_usage(data: str) -> dict[str, int] | None:
+    """从一行 `data: {...}` 里取 `usage`（只有**最后一帧**才带）。
+
+    ⚠️ 带 usage 的那一帧通常 `choices` 是**空数组** —— 别因为取不到 content 就把它跳过，
+        那样这份 usage 就永远读不到了。
+    """
+    try:
+        payload = json.loads(data)
+    except json.JSONDecodeError:
+        return None
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    counted = {key: int(usage[key]) for key in _USAGE_FIELDS if isinstance(usage.get(key), int)}
+    return counted or None
 
 
 # ------------------------------------------------------------

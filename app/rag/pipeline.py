@@ -88,6 +88,10 @@ class Answer:
     #: 非空表示生成过程中模型 API 出错 —— 此时 `text` 是**已经拿到的部分**，不要丢。
     error: str | None = None
     extra: dict[str, object] = field(default_factory=dict)
+    #: 这次回答**实际花了多少 token**（模型 API 回报的 `usage`）。
+    #: ⚠️ 拒答时是空的 —— 拒答**根本没调模型**，所以一分钱没花。
+    #:    这正是"拒答要在调模型之前判"（约定 17）的另一个好处：账面上看得出来。
+    usage: dict[str, int] = field(default_factory=dict)
 
 
 RagEvent = Sources | Delta | Answer
@@ -108,6 +112,8 @@ def build_clients(
         base_url=settings.llm_base_url,
         api_key=settings.llm_api_key,
         model=settings.llm_model,
+        # token 计量靠这个（`app/core/limits.py` 的配额就是拿它的数记账）
+        include_usage=settings.llm_stream_usage,
     )
 
     embedder: EmbeddingClient | None = None
@@ -277,9 +283,12 @@ class RagPipeline:
         messages = prompt_module.build_messages(question=question, hits=hits, history=history)
         collected: list[str] = []
         error: str | None = None
+        # ⚠️ usage 用**每次回答自己的**字典收集（不是客户端上的属性）：
+        #    客户端是进程内单例，并发请求会互相覆盖。
+        usage: dict[str, int] = {}
 
         try:
-            async for piece in self._chat.stream(messages):
+            async for piece in self._chat.stream(messages, usage=usage):
                 collected.append(piece)
                 yield Delta(text=piece)
         except ModelAPIError as exc:
@@ -295,6 +304,7 @@ class RagPipeline:
             latency_ms=_elapsed_ms(started),
             error=error,
             extra={"score_kind": score_kind},
+            usage=usage,
         )
 
     def _should_refuse(

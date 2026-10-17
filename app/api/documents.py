@@ -30,8 +30,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
-from app.api.deps import AdminUser, SessionDep
+from app.api.deps import AdminUser, LimitsRedisDep, SessionDep
 from app.core.config import get_settings
+from app.core.limits import LimitGuard, ensure
 from app.db.models.knowledge import Document, DocumentStatus
 from app.db.repository import TenantScopedRepository
 from app.kb.ingest import is_supported, prepare_document
@@ -78,14 +79,23 @@ async def upload_document(
     session: SessionDep,
     current_admin: AdminUser,
     enqueue: EnqueueDep,
+    redis: LimitsRedisDep,
     file: Annotated[UploadFile, File(description="文本类文件（.md / .markdown / .txt）")],
 ) -> DocumentUploadOut:
     """收下文件、排进队列，**立刻返回**。
 
     ⚠️ 返回 **202**（已接受、还没做完），不是 201（已创建）。
         文档现在只是一行元数据，块还没切、向量还没算 —— 说"创建成功"就是在撒谎。
+
+    ⚠️ **限流这一道放在最前面**，连后缀不对、超大的请求也计数：
+        一次上传要跑一遍切分 ＋ N 次 embedding，而且是**队列串行**的 ——
+        一个人连传 20 个文件能把队列堵住半小时，别人只能干等。
+        挡这种人不该等他"传对了内容"才生效。
     """
     settings = get_settings()
+
+    guard = LimitGuard(redis, settings)
+    ensure(await guard.upload_rate(current_admin.id))
 
     # ⚠️ `Path(...).name`：把客户端可能带上的目录部分**就地丢掉**。
     #    落盘用的是 UUID（见 `app/kb/uploads.py`），但这一列还会显示在引用来源里，

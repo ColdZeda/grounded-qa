@@ -36,12 +36,13 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
-from app.api.deps import get_session
+from app.api.deps import get_limits_redis, get_session
 from app.core.config import get_settings
 from app.core.security import hash_password
 from app.db.models.tenant import Tenant
 from app.db.models.user import User, UserRole
 from app.main import create_app
+from tests.fakeredis import FakeRedis
 
 # ⚠️ 测试里 bcrypt 用**最低轮数**：被测的是"逻辑对不对"，不是"暴力破解要多久"。
 #    用生产默认的 12 轮会让每个用例慢几百毫秒，整个测试套就没人愿意跑了。
@@ -110,11 +111,26 @@ def app() -> FastAPI:
 
 
 @pytest.fixture
-async def client(app: FastAPI, db_engine: AsyncEngine) -> AsyncIterator[AsyncClient]:
+def limits_redis() -> FakeRedis:
+    """限流 / 配额用的**内存** Redis。
+
+    ⚠️ **必须给所有 API 测试都用它**：真 Redis 会让整套测试共享同一个计数器，
+        跑几十个聊天用例就把"30 次/分钟"用光，后面的用例开始 429 ——
+        单跑都过、连跑就挂，是那种最难查的 flaky。
+    """
+    return FakeRedis()
+
+
+@pytest.fixture
+async def client(
+    app: FastAPI, db_engine: AsyncEngine, limits_redis: FakeRedis
+) -> AsyncIterator[AsyncClient]:
     """走 ASGI 的应用客户端。
 
     ⚠️ **用 `dependency_overrides` 把会话依赖换成测试引擎**，而不是让应用用它的全局引擎 ——
         全局引擎是进程级单例，会跨事件循环复用连接，正是上面说的那类 flaky 来源。
+
+    ⚠️ **限流用的 Redis 也换成内存实现**（见 `limits_redis` fixture）。
 
     ⚠️ **不跑 lifespan**（`ASGITransport` 默认不触发）：
         lifespan 启动时会做全文检索自检、退出时会 `dispose_engine()` / 关 HTTP 客户端，
@@ -131,6 +147,8 @@ async def client(app: FastAPI, db_engine: AsyncEngine) -> AsyncIterator[AsyncCli
                 raise
 
     app.dependency_overrides[get_session] = _override_get_session
+    # 限流/配额走内存假 Redis（见 `limits_redis` fixture 的说明）
+    app.dependency_overrides[get_limits_redis] = lambda: limits_redis
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as c:
         yield c

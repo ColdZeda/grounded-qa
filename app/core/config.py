@@ -84,6 +84,12 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.deepseek.com/v1"
     llm_api_key: str = ""
     llm_model: str = "deepseek-flash"
+    # 流式回答里要不要顺带要一份 `usage`（token 计量靠它）。
+    # ⚠️ 实测 `deepseek-flash` **支持**（2026-10-17：最后一帧带
+    #    `usage.prompt_tokens/completion_tokens/total_tokens`），所以默认开。
+    # ⚠️ 关掉的后果不是"少一个指标"，而是**配额那本账算不出来**（等于没有熔断）——
+    #    真遇到不兼容的端点时宁可选它，也别选"全站 400"。
+    llm_stream_usage: bool = True
 
     # ---------- embedding ----------
     # ⚠️ embedding_model / embedding_dim 是**元数据锁**：
@@ -169,9 +175,17 @@ class Settings(BaseSettings):
     #    服务器不跑评测。三者边界见 `AGENTS.md §13`。
     evals_results_dir: str = "evals/results"
 
-    # ---------- 多租户 / 限流 / 配额 ----------
+    # ---------- 多租户 / 限流 / 配额（**成本熔断**，逻辑见 `app/core/limits.py`）----------
     default_tenant_id: str = "default"
+    # 每个用户每分钟能发几**次**问答。⚠️ 比的是次数，不是 token（token 是下面那条）。
+    # ⚠️ 这个数必须**明显小于** nginx 那道按 IP 的限额（120 次/分钟）——
+    #    否则用户会先撞上 nginx 的 HTML 错误页，而不是我们那条说得出"还有几秒"的 JSON。
     rate_limit_per_minute: int = 30
+    # 每个用户每分钟能**上传**几次。比问答严得多：一次上传要跑一遍切分 ＋ N 次 embedding，
+    # 而且它走**队列串行**处理 —— 一个人连传 20 个文件会把队列堵住，别人只能等。
+    upload_rate_limit_per_minute: int = 5
+    # 每个用户每天能烧多少 token（**模型 API 回报的 usage 累加**，不是估算）。
+    # 200k ≈ 一天几百次问答，够个人正常用；按 `deepseek-flash` 的价，跑满也就几块钱。
     token_quota_per_day: int = 200_000
 
     # ---------- 鉴权（JWT）----------

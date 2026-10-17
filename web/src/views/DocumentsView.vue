@@ -31,6 +31,15 @@ const fileInput = ref<HTMLInputElement | null>(null)
 
 let timer: number | null = null
 
+/**
+ * 当前轮询间隔。正常是 1.5 秒；被限流（429）时**指数退避**到最多 15 秒。
+ *
+ * ⚠️ 为什么需要它：不处理 429 的话，页面上会跳一条红色的"请求太频繁"，
+ *    而实际上入库**还在正常进行** —— 用户以为坏了，去重传，反而更糟。
+ *    这类"其实没事"的错误提示，比不提示更伤。
+ */
+const pollDelay = ref(POLL_MS)
+
 const isAdmin = computed(() => currentUser.value?.role === 'admin')
 
 /** 还有文档在路上吗？有就继续轮询，没有就停下来。 */
@@ -51,8 +60,14 @@ async function load(): Promise<void> {
     items.value = page.items
     total.value = page.total
     error.value = ''
+    pollDelay.value = POLL_MS
   } catch (err) {
-    error.value = err instanceof ApiError ? err.message : `加载失败：${(err as Error).message}`
+    if (err instanceof ApiError && err.status === 429) {
+      // 限流不是"加载失败"：保持列表不动、安静退避
+      pollDelay.value = Math.min(pollDelay.value * 2, 15_000)
+    } else {
+      error.value = err instanceof ApiError ? err.message : `加载失败：${(err as Error).message}`
+    }
   } finally {
     loading.value = false
   }
@@ -65,7 +80,7 @@ function schedule(): void {
     timer = window.setTimeout(() => {
       timer = null
       void load()
-    }, POLL_MS)
+    }, pollDelay.value)
   }
 }
 

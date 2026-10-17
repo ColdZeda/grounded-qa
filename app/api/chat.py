@@ -19,8 +19,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select, update
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import CurrentUser, LimitsRedisDep, SessionDep
 from app.core.config import get_settings
+from app.core.limits import LimitGuard, ensure
 from app.db.models.conversation import Conversation, Message, MessageRole
 from app.db.models.user import User, UserRole
 from app.db.repository import TenantScopedRepository
@@ -113,12 +114,21 @@ async def ask(
     session: SessionDep,
     current_user: CurrentUser,
     clients: ClientsDep,
+    redis: LimitsRedisDep,
 ) -> StreamingResponse:
     """提问并流式返回回答。
 
     ⚠️ **落库时机**：用户消息**立刻**落库（否则刷新页面就丢了），
         助手消息在流结束后落库（那时才知道引用了什么、是否拒答、耗时多少）。
+
+    ⚠️ **两道闸都在落库之前**（被拒的请求不该在库里留下痕迹）：
+        ① 速率（次数/分钟）—— 放最前面，**连 404 / 422 的请求也计数**，
+           那正是刷子最先打的地方；
+        ② 配额（token/天）—— 放到校验之后：格式错的请求不花一分钱，不该扣额度。
     """
+    guard = LimitGuard(redis, get_settings())
+    ensure(await guard.chat_rate(current_user.id))
+
     conversation = await _load_conversation(session, current_user, conversation_id)
 
     chat, embedder, reranker = clients
@@ -138,6 +148,9 @@ async def ask(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="问题不能为空"
         )
 
+    # ② 配额：超了就**连模型都不调**（这时候拒是最省的）
+    ensure(await guard.quota(current_user.id))
+
     # ① 用户消息先落库（并提交）—— 即使后面生成失败，提问记录也在
     user_message = Message(
         tenant_id=current_user.tenant_id,
@@ -151,7 +164,7 @@ async def ask(
     history = await _load_history(session, conversation.id)
 
     return StreamingResponse(
-        _stream(session, pipeline, conversation, question, history),
+        _stream(session, pipeline, conversation, question, history, guard, current_user.id),
         media_type="text/event-stream",
         headers={
             # ⚠️ 告诉 nginx **不要缓冲**这个响应。少了它，SSE 会被攒成一坨再发，
@@ -202,6 +215,8 @@ async def _stream(
     conversation: Conversation,
     question: str,
     history: list[dict[str, str]],
+    guard: LimitGuard,
+    user_id: uuid.UUID,
 ) -> AsyncIterator[str]:
     """把 pipeline 的领域事件翻译成 SSE 帧，并负责助手消息落库。
 
@@ -241,6 +256,12 @@ async def _stream(
         yield _sse("error", {"detail": f"{type(exc).__name__}: {exc}", "stage": "pipeline"})
     finally:
         await _persist_answer(session, conversation, final)
+        # ⚠️ **记账也放 finally**：用户中途关掉页面（`GeneratorExit`）时，
+        #    token 其实**已经花了** —— 不记的话，最费钱的那类请求
+        #    （问大问题、看两眼就走）反而完全不进账。
+        # ⚠️ 拒答时 `usage` 是空的（根本没调模型）⟹ 记 0，不占额度。
+        if final is not None:
+            await guard.record_tokens(user_id, int(final.usage.get("total_tokens") or 0))
 
 
 async def _persist_answer(

@@ -46,16 +46,38 @@ ORTHOGONAL_VECTOR = [0.0, 1.0] + [0.0] * (DIM - 2)
 # 假客户端（绝不联网）
 # ------------------------------------------------------------
 class FakeChat:
-    """假的对话客户端。按 `chunks` 依次吐出，并记录被调用了几次。"""
+    """假的对话客户端。按 `chunks` 依次吐出，并记录被调用了几次。
 
-    def __init__(self, chunks: Sequence[str] = ("这是", "一个回答")) -> None:
+    ⚠️ 签名要和真客户端**一致**（`usage=` 关键字）：流水线现在会把一个
+        每次回答自己的字典传进来收 token 数。少这个参数，
+        所有聊天用例会一起 `TypeError` —— 而且报错点在流水线里，看着像业务 bug。
+    """
+
+    def __init__(
+        self, chunks: Sequence[str] = ("这是", "一个回答"), *, total_tokens: int = 42
+    ) -> None:
         self._chunks = list(chunks)
+        self._total_tokens = total_tokens
         self.calls: list[list[dict[str, str]]] = []
 
-    async def stream(self, messages: Sequence[dict[str, str]]) -> AsyncIterator[str]:
+    async def stream(
+        self,
+        messages: Sequence[dict[str, str]],
+        usage: dict[str, int] | None = None,
+    ) -> AsyncIterator[str]:
         self.calls.append(list(messages))
         for piece in self._chunks:
             yield piece
+        if usage is not None:
+            # 真客户端是"流末尾来一帧 usage"，这里等价地最后写一次
+            usage.clear()
+            usage.update(
+                {
+                    "prompt_tokens": 30,
+                    "completion_tokens": self._total_tokens - 30,
+                    "total_tokens": self._total_tokens,
+                }
+            )
 
     @property
     def answer_text(self) -> str:

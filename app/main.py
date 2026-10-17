@@ -16,15 +16,17 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.router import api_router
 from app.core.config import get_settings, warn_if_rerank_calibration_missing
+from app.core.limits import RateLimitedError
 from app.db.checks import warn_if_fulltext_degraded
 from app.db.session import dispose_engine
 from app.rag.providers import aclose_http_client
+from app.workers.queue import aclose_redis
 
 
 @asynccontextmanager
@@ -47,6 +49,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await warn_if_fulltext_degraded()
     yield
     await aclose_http_client()
+    await aclose_redis()
     await dispose_engine()
 
 
@@ -84,6 +87,22 @@ def create_app() -> FastAPI:
 
     # 业务路由统一加版本前缀（前缀来自配置，不写死）
     app.include_router(api_router, prefix=settings.api_prefix)
+
+    @app.exception_handler(RateLimitedError)
+    async def _rate_limited(_request: Request, exc: RateLimitedError) -> JSONResponse:
+        """429：**说清"为什么"和"等多久"**。
+
+        ⚠️ 为什么不用 `HTTPException(429, detail="...")`：
+            那样响应体只有 `{"detail": "..."}`，前端拿不到 `scope` / `retry_after_s`，
+            只能在"立刻重试"和"自己拍一个等待时间"之间二选一 —— 前者会把自己刷死。
+        ⚠️ `Retry-After` 是 HTTP 标准头：让**非我们前端**的调用方（脚本、监控）
+            也能知道该退避多久，不用解析我们的 JSON。
+        """
+        return JSONResponse(
+            status_code=429,
+            content=exc.payload(),
+            headers={"Retry-After": str(exc.decision.retry_after_s)},
+        )
 
     return app
 

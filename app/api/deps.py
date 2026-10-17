@@ -13,6 +13,7 @@ from typing import Annotated
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +21,7 @@ from app.core.security import decode_access_token
 from app.db.models.tenant import Tenant
 from app.db.models.user import User, UserRole
 from app.db.session import get_session
+from app.workers.queue import get_redis
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -104,3 +106,21 @@ async def require_admin(current_user: Annotated[User, Depends(get_current_user)]
 # 路由里直接用这两个别名，写法统一、少一层括号
 CurrentUser = Annotated[User, Depends(get_current_user)]
 AdminUser = Annotated[User, Depends(require_admin)]
+
+
+# ------------------------------------------------------------
+# 限流 / 配额用的 Redis
+# ------------------------------------------------------------
+def get_limits_redis() -> Redis:
+    """限流与 token 配额用的连接。
+
+    ⚠️ 和入库队列**共用同一个客户端单例**：同一个进程没必要开两个连接池。
+        两者键前缀不同（限流是 `gq:rl:` / `gq:quota:`，队列是 `gq:jobs:`），互不干扰。
+
+    ⚠️ 做成依赖是为了**测试能换掉**：测试里塞一个内存假 Redis，
+        就能跑**真逻辑**（窗口对齐、fail-open 全覆盖），而不是塞个假 guard 把逻辑整段跳过。
+    """
+    return get_redis()
+
+
+LimitsRedisDep = Annotated[Redis, Depends(get_limits_redis)]
