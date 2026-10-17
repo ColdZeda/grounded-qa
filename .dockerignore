@@ -37,8 +37,10 @@ web/.vite
 docs
 # ⚠️ **不能整目录排除 `evals`**：知识库 B 的语料要随镜像走，生产才有东西可灌
 #    （`deploy.yml` 里那步「灌知识库（幂等）」读的就是镜像内的 /app/evals/corpus）。
-#    题集与历史结果不需要进镜像 —— 它们只在开发机上跑评测时用。
+#    题集与 runner 不需要进镜像 —— 它们只在开发机上跑评测时用。
+# ⚠️ **`evals/results` 要进镜像**（2026-10-17）：只读报告页读它。
+#    它属于「报告数据」，不是「评分材料」—— 接口只吐聚合数字，逐题明细不出 HTTP。
+#    三者边界见 `AGENTS.md §13`。
 evals/questions
-evals/results
 evals/run.py
 tests

@@ -86,6 +86,63 @@ export interface MessageOut {
 }
 
 // ------------------------------------------------------------
+// 知识库文档（app/schemas/document.py）
+// ------------------------------------------------------------
+
+/** `app/db/models/knowledge.py` 的 `DocumentStatus`。 */
+export type DocumentStatus = 'pending' | 'processing' | 'ready' | 'failed'
+
+export interface DocumentOut {
+  id: string
+  /** 入库时的名字，形如 `upload/退货政策.md` 或 `senyu/10-退换货/10-退换货总则.md`。 */
+  filename: string
+  content_type: string | null
+  size_bytes: number | null
+  status: DocumentStatus
+  /** ⚠️ **只有 `failed` 时才有值** —— 界面靠它解释"为什么没进库"。 */
+  error_message: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface DocumentUploadOut extends DocumentOut {
+  /** 这次请求是不是真的新建了一份。`false` = 判重命中（**不是失败**）。 */
+  created: boolean
+  note: string
+}
+
+export interface DocumentListOut {
+  total: number
+  items: DocumentOut[]
+}
+
+// ------------------------------------------------------------
+// 评测报告（app/schemas/report.py）
+// ------------------------------------------------------------
+
+export interface ReportMetric {
+  name: string
+  /** ⚠️ **已经格式化好的字符串**（如 `0.920（23/25）`）—— 分子分母必须一起显示。 */
+  value: string
+  hint: string
+}
+
+export interface ReportSnapshot {
+  file: string
+  kind: string
+  generated_at: string
+  generated_at_display: string
+  questions: number
+  metrics: ReportMetric[]
+  config: Record<string, string>
+}
+
+export interface ReportListOut {
+  snapshots: ReportSnapshot[]
+  note: string
+}
+
+// ------------------------------------------------------------
 // SSE 事件载荷（app/api/chat.py 的 `_sse` 调用处）
 // ------------------------------------------------------------
 

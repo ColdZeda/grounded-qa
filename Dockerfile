@@ -69,6 +69,18 @@ COPY --chown=appuser:appuser migrations /app/migrations
 #    语料只有 ~100 KB，题集/结果已在 .dockerignore 里排除，不会把评测材料带上线。
 COPY --chown=appuser:appuser scripts /app/scripts
 COPY --chown=appuser:appuser evals/corpus /app/evals/corpus
+# ⚠️ **评测结果也要进镜像**（2026-10-17）：只读报告页读的就是 `/app/evals/results/*.json`。
+#    题集（`evals/questions/`）与 runner（`evals/run.py`）**仍然不进** ——
+#    服务器不跑评测。三者边界见 `AGENTS.md §13`。
+#    接口只吐**聚合数字**，逐题明细（题干 / 标准答案 / must_hit）不出 HTTP，见 `app/api/reports.py`。
+COPY --chown=appuser:appuser evals/results /app/evals/results
+
+# ⚠️ 上传文件的**停放目录**（api 写、worker 读，compose 里挂同一个卷 `gq-uploads`）。
+#    这里必须先建好并 chown：
+#    **命名卷第一次创建时，Docker 会用镜像里这个目录的属主来初始化空卷**。
+#    漏了这步，卷归 root，非 root 的 `appuser` 写不进去 ——
+#    表现是"上传直接 500"，而本地不挂卷时完全正常（这类差异最难查）。
+RUN mkdir -p /app/uploads && chown appuser:appuser /app/uploads
 
 USER appuser
 

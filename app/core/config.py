@@ -145,6 +145,30 @@ class Settings(BaseSettings):
     # 外部模型 API 超时（秒）。2C2G 上不能让一个卡住的请求把连接池占死。
     model_request_timeout_seconds: float = 60.0
 
+    # ---------- 上传入库 ----------
+    # 上传文件的**停放目录**（api 写、worker 读，同一个容器卷 `gq-uploads`）。
+    # ⚠️ 相对路径按进程 cwd 解析：容器里是 `/app` → `/app/uploads`。
+    # ⚠️ 这个目录**只是传送带**，不是存储：worker 处理完就删。
+    #    真正要长期留着的是**切好的块**（在 `chunks` 表里）。
+    upload_dir: str = "uploads"
+    # 单个文件上限。刻意很小：
+    #   · 知识库语料是**散文**，2 MB 已经是一本小册子；
+    #   · 2C2G 的机器上，一次入库要把它切块 + 逐块调 embedding（每块一次网络往返）。
+    upload_max_bytes: int = 2 * 1024 * 1024
+    # 单文档最多切出多少块 —— 超过就**失败**，不做部分入库。
+    # ⚠️ 治的是病态输入：一整段没有任何换行的 1 MB 文本能切出上千块，
+    #    也就是上千次 embedding 请求，会把这个队列堵住半小时。
+    # ⚠️ 为什么"失败"而不是"只取前 400 块"：只取一部分 = 文档后半截**永远检索不到**，
+    #    而且没人知道。宁可整篇失败、让用户看见原因。
+    max_chunks_per_document: int = 400
+
+    # ---------- 评测报告（只读）----------
+    # 评测结果 JSON 所在目录。**相对仓库根**解析（容器里就是 `/app/evals/results`）。
+    # ⚠️ 这些文件是**报告数据**（`evals/results/*.json`），进镜像；
+    #    题集（`evals/questions/`）与 runner（`evals/run.py`）**不进镜像** ——
+    #    服务器不跑评测。三者边界见 `AGENTS.md §13`。
+    evals_results_dir: str = "evals/results"
+
     # ---------- 多租户 / 限流 / 配额 ----------
     default_tenant_id: str = "default"
     rate_limit_per_minute: int = 30

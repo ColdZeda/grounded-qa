@@ -26,6 +26,11 @@ x-api-common: &api-common
   environment:
     POSTGRES_HOST: postgres
     REDIS_HOST: redis
+  # ⚠️ 上传文件的**停放目录**：api 写、worker 读，所以两边挂**同一个**命名卷。
+  #    只挂一边的话，worker 永远读不到 api 刚写的文件 —— 表现是"全部失败：文件不存在"。
+  #    卷名固定 `gq-uploads`（不是 compose 自动前缀），与 `gq-pgdata` 同一套命名规矩。
+  volumes:
+    - uploads:/app/uploads
   depends_on:
     postgres:
       condition: service_healthy
@@ -200,3 +205,7 @@ volumes:
     name: gq-redisdata
   promdata:
     name: gq-promdata
+  # 上传文件的传送带（api ⇄ worker）。**不是存储**：worker 处理完就删。
+  # 删除这个卷是安全的 —— 丢的只是"还没处理完的上传"，已入库的块在 PG 里。
+  uploads:
+    name: gq-uploads

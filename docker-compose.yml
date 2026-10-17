@@ -108,6 +108,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # ⚠️ 上传文件的停放目录：api 写、worker 读（同一个命名卷）。
+    volumes:
+      - uploads:/app/uploads
     mem_limit: 256m
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
@@ -140,6 +143,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      - uploads:/app/uploads
     # 解析任务串行 + mem_limit 兜底，防止大文档把机器打爆
     mem_limit: 160m
     healthcheck:
@@ -153,3 +158,6 @@ services:
 volumes:
   pgdata:
     name: gq-pgdata
+  # 上传文件的传送带（api ⇄ worker）。**不是存储**：worker 处理完就删。
+  uploads:
+    name: gq-uploads

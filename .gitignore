@@ -44,3 +44,5 @@ Thumbs.db
 logs/
 data/
 *.sqlite3
+# 上传文件的停放目录（本地直接跑 uvicorn / worker 时会落在这里；容器里是命名卷）
+uploads/

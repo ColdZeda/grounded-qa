@@ -1,7 +1,7 @@
 /**
  * 路由。
  *
- * 三个页面：登录 → 会话列表 → 聊天。**刻意不做多标签页布局** ——
+ * 五个页面：登录 → 会话列表 → 聊天 ／ 知识库 ／ 评测报告。**刻意不做多标签页布局** ——
  * 面试演示时"点进去、看到答案、看到引用来源"这条动线越短越好。
  *
  * 全部用**动态 import**（懒加载）：登录页不该为了渲染一个表单
@@ -51,6 +51,16 @@ const router = createRouter({
       component: () => import('@/views/ChatView.vue'),
       // `props: true` → 路由参数作为 props 传给组件，组件里就不用碰 `useRoute()`
       props: true,
+    },
+    {
+      path: '/documents',
+      name: 'documents',
+      component: () => import('@/views/DocumentsView.vue'),
+    },
+    {
+      path: '/reports',
+      name: 'reports',
+      component: () => import('@/views/ReportsView.vue'),
     },
     // 兜底：乱七八糟的 URL 回列表页，而不是白屏
     { path: '/:pathMatch(.*)*', redirect: { name: 'conversations' } },

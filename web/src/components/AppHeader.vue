@@ -37,6 +37,12 @@ function logout(): void {
       grounded<span>·</span>qa
     </RouterLink>
 
+    <nav class="nav">
+      <RouterLink :to="{ name: 'conversations' }">会话</RouterLink>
+      <RouterLink :to="{ name: 'documents' }">知识库</RouterLink>
+      <RouterLink :to="{ name: 'reports' }">评测报告</RouterLink>
+    </nav>
+
     <div class="mid">
       <slot />
     </div>
@@ -84,6 +90,30 @@ function logout(): void {
 }
 
 .brand span {
+  color: var(--primary);
+}
+
+/* 主导航。`router-link-active` 由 vue-router 自动加 —— 不用自己算当前页 */
+.nav {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+.nav a {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.nav a:hover {
+  color: var(--text);
+}
+
+.nav a.router-link-active {
+  background: var(--primary-soft);
   color: var(--primary);
 }
 

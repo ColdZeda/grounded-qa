@@ -5,8 +5,10 @@ v1.0 已落地：
             ``/metrics``（Prometheus 抓取）
     业务面  ``/api/v1/auth/*``          登录 + 当前用户
             ``/api/v1/conversations/*`` 会话列表 / 详情 / 新建（租户隔离样板）
-
-后续里程碑按 `app/api/` 分模块继续补（聊天 SSE / 知识库 / 评测报告）。
+            ``/api/v1/chat/*``          问答（SSE 流式，含引用溯源与拒答）
+            ``/api/v1/documents/*``     知识库上传 / 列表（入队异步入库）
+            ``/api/v1/reports``         只读评测报告（聚合数字，不跑评测）
+            ``/api/v1/admin/*``         租户内管理端
 """
 
 from __future__ import annotations
