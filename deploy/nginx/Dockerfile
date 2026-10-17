@@ -9,7 +9,11 @@
 # ============================================================
 
 # ---------- 阶段 1：构建前端 ----------
-FROM node:22.12.0-alpine AS web-builder
+# ⚠️ **Node 版本必须 ≥ 22.13，且和 `.github/workflows/ci.yml` / 本机保持一致。**
+#    `web/package.json` 钉了 `packageManager: pnpm@11.7.0`，而 pnpm 11.7 要求 Node ≥ 22.13 ——
+#    这里原来是 `node:22.12.0-alpine`，会让 `corepack` 拉下 pnpm 后**直接拒绝运行**，
+#    整条 `docker build` 以 exit code 1 结束（2026-10-17 首次部署实测）。
+FROM node:24.9.0-alpine AS web-builder
 
 WORKDIR /web
 

@@ -64,7 +64,12 @@ jobs:
       - name: 安装 Node
         uses: actions/setup-node@v4
         with:
-          node-version: "22.12.0"
+          # ⚠️ **必须 ≥ 22.13，而且最好和本机一致**（本机 v24.9.0）。
+          #    2026-10-17 首次 CI 就红在这里：原来是 `22.12.0`，而
+          #    `web\package.json` 钉的 pnpm 11.7.0 **要求 Node ≥ 22.13** ——
+          #    报错是 "This version of pnpm requires at least Node.js v22.13"。
+          #    📌 两个版本各自钉在一个文件里，**没有任何东西保证它们兼容**。
+          node-version: "24.9.0"
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
