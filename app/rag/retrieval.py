@@ -118,11 +118,24 @@ class HybridRetriever:
             for chunk, score in rows
         ]
 
-    async def _vector(self, embedding: Sequence[float], *, limit: int) -> list[RetrievedChunk]:
+    async def _vector(
+        self,
+        embedding: Sequence[float],
+        *,
+        limit: int,
+        expected_model: str | None = None,
+    ) -> list[RetrievedChunk]:
         """向量路：pgvector 的余弦距离，越近越好。
 
         ⚠️ 一并返回**余弦相似度**（`1 - 距离`），因为拒答阈值要用它 ——
             距离越小越好、相似度越大越好，两者方向相反，混用极易写错。
+
+        ⚠️ **只查"当前模型"生成的向量**（`embedding_model == expected_model`）。
+            换过 embedding 模型之后，旧向量和新向量不在同一个空间里 ——
+            它们的余弦相似度**不是相似度，是噪音**。不过滤的话，排序会被噪音打乱，
+            而且**不报错、不崩溃**，只是答案慢慢变差（见 `embedding_lock` 的模块说明）。
+            `expected_model is None`（表格里那行没记模型 / 调用方不知道）时不过滤 ——
+            那是"没有信息"，不是"不匹配"。
         """
         distance = Chunk.embedding.cosine_distance(list(embedding))
         stmt = (
@@ -132,6 +145,8 @@ class HybridRetriever:
             .order_by(distance.asc())
             .limit(limit)
         )
+        if expected_model is not None:
+            stmt = stmt.where(Chunk.embedding_model == expected_model)
         rows = (await self._session.execute(stmt)).all()
         return [
             RetrievedChunk(
@@ -152,8 +167,14 @@ class HybridRetriever:
         top_k: int,
         rrf_k: int,
         fulltext_min_similarity: float,
+        embedding_model: str | None = None,
     ) -> tuple[list[RetrievedChunk], dict[uuid.UUID, float]]:
         """跑两条路并融合。
+
+        Args:
+            embedding_model: **生成 `query_embedding` 的那个模型名**。
+                传了就只比对同模型的块（元数据锁，见 `embedding_lock`）；
+                不传（`None`）表示"不知道"或"不筛"，不是"不匹配"。
 
         Returns:
             `(按 RRF 排序的候选, {chunk_id: 向量余弦相似度})`。
@@ -172,7 +193,9 @@ class HybridRetriever:
 
         vector_hits: list[RetrievedChunk] = []
         if query_embedding is not None:
-            vector_hits = await self._vector(query_embedding, limit=top_k)
+            vector_hits = await self._vector(
+                query_embedding, limit=top_k, expected_model=embedding_model
+            )
             for hit in vector_hits:
                 # 向量路的 score 是"相似度"语义，比全文路的 trgm 分数更适合对外展示，
                 # 所以两路都命中时以向量那一条为准。

@@ -183,6 +183,8 @@ class RagPipeline:
             top_k=settings.retrieve_top_k,
             rrf_k=settings.rrf_k,
             fulltext_min_similarity=settings.fulltext_min_similarity,
+            # 元数据锁：向量检索只比"同一个模型"生成的块（见 `embedding_lock`）
+            embedding_model=self._embedder.model if self._embedder is not None else None,
         )
         if not hits:
             return [], None, "none"

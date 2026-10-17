@@ -132,8 +132,13 @@ async def _seed_chunk(
     tenant_id: uuid.UUID,
     content: str,
     embedding: Sequence[float] | None = None,
+    model: str = "fake-embedding",
 ) -> Chunk:
-    """往知识库里塞一条 chunk（`documents` → `chunks`）。"""
+    """往知识库里塞一条 chunk（`documents` → `chunks`）。
+
+    ⚠️ `model` 可改是为了测**元数据锁**：造一条"用别的模型嵌入的"块，
+        验证向量检索会不会把它当成可比的对象（应该**不会**）。
+    """
     document = Document(
         tenant_id=tenant_id,
         filename="faq.md",
@@ -150,7 +155,7 @@ async def _seed_chunk(
         ordinal=0,
         content=content,
         embedding=list(embedding) if embedding is not None else None,
-        embedding_model="fake-embedding" if embedding is not None else None,
+        embedding_model=(model if embedding is not None else None),
         embedding_dim=len(embedding) if embedding is not None else None,
     )
     session.add(chunk)
