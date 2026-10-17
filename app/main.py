@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
@@ -69,7 +69,6 @@ def create_app() -> FastAPI:
         刻意**不**检查 PG / Redis：这个端点用于判断"进程是否该被重启"，
         依赖检查交给单独的 /readyz（后续补），否则依赖抖动会引发无谓重启。
         """
-        raise HTTPException(status_code=503, detail="部署演练：故意打坏 /healthz")
         return {
             "status": "ok",
             "env": settings.app_env,
