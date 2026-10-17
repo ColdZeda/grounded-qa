@@ -91,7 +91,12 @@ services:
   # PostgreSQL 16 + pgvector
   # ------------------------------------------------------------
   postgres:
-    image: pgvector/pgvector:0.8.0-pg16
+    # ⚠️ 走 ACR，不用 Docker Hub 原名（2026-10-17 首次部署的根因）。
+    #    服务器所在网络的加速器 `5haml59c.mirror.aliyuncs.com` **没有这个镜像**（404），
+    #    daocloud 对 pgvector 是 502。只 `docker tag` 到本地**不够**：
+    #    CD 里是 `compose pull && up -d`，`pull` 照样按 `image:` 的原名去 Docker Hub 拉 → 还是失败。
+    #    ⟹ 公共基础镜像必须和自建镜像一样：**CI 推进 ACR，服务器只从 ACR 拉**。
+    image: ${ACR_REGISTRY:?ACR_REGISTRY 未设置}/pgvector:0.8.0-pg16
     container_name: gq-postgres
     restart: unless-stopped
     environment:
@@ -118,7 +123,9 @@ services:
   # Redis：语义缓存 + BLPOP 队列
   # ------------------------------------------------------------
   redis:
-    image: redis:7.4.1-alpine
+    # ⚠️ 同上：走 ACR。原名 `redis:7.4.1-alpine` 在加速器上不可靠 ——
+    #    那次是靠 `docker.m.daocloud.io` 手工 retag 才拉到的，**下次换机器就复现不了**。
+    image: ${ACR_REGISTRY:?ACR_REGISTRY 未设置}/redis:7.4.1-alpine
     container_name: gq-redis
     restart: unless-stopped
     command:
@@ -144,6 +151,9 @@ services:
   # ------------------------------------------------------------
   # 可观测（v1.1 才启用）—— 用 profile 控制，v1.0 不占内存
   #     docker compose --profile monitoring up -d
+  # ⚠️ 这两个**暂时还指向 Docker Hub 原名**：profile 没启用时 `compose pull` 不会碰它们，
+  #    v1.0 的 CD 不经过它们。**但开 monitoring 之前必须先把它们也推进 ACR**
+  #    （否则又是"服务器拉不到公共镜像"那一跤）。进度见 plan\PROJECT-PLAN.md §11 待办 #6。
   # ------------------------------------------------------------
   prometheus:
     image: prom/prometheus:v3.1.0

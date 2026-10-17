@@ -94,6 +94,36 @@ jobs:
           docker build -f deploy/nginx/Dockerfile -t "$image" .
           docker push "$image"
 
+      - name: 把公共基础镜像补进 ACR（幂等）
+        # ⚠️ **为什么需要这一步**（2026-10-17 首次部署的血）：
+        #    `docker-compose.prod.yml` 里 postgres / redis **也指向 ACR** 了。
+        #    原因：服务器拉不到 Docker Hub，而加速器 `5haml59c.mirror.aliyuncs.com`
+        #    **没有 `pgvector/pgvector:0.8.0-pg16`（404）**，daocloud 对它 502。
+        #    只 `docker tag` 到服务器本地**不管用** —— CD 是 `compose pull && up -d`，
+        #    `pull` 照样按 `image:` 原名去 Docker Hub 拉 → 还在同一个地方红。
+        #    ⟹ **「服务器只 pull ACR」这条硬约束，只有在"所有镜像都在 ACR 里"时才成立。**
+        #
+        # ⚠️ **幂等**：先试着从 ACR 拉一次，拉到了就跳过 ——
+        #    否则每次部署都往 ACR 传 ~700 MB。升版本时改下面那两行即可（会重新推一次）。
+        run: |
+          set -euo pipefail
+          while read -r src dst <&3; do
+            [ -z "${src:-}" ] && continue
+            if docker pull "$ACR_REGISTRY/$dst" >/dev/null 2>&1; then
+              echo "✅ ACR 已有 $dst，跳过"
+              continue
+            fi
+            echo "⬆️ 上游 $src → ACR $ACR_REGISTRY/$dst"
+            docker pull   "$src"                    </dev/null
+            docker tag    "$src" "$ACR_REGISTRY/$dst"
+            docker push   "$ACR_REGISTRY/$dst"      </dev/null
+          done 3<<'EOF'
+          pgvector/pgvector:0.8.0-pg16   pgvector:0.8.0-pg16
+          redis:7.4.1-alpine             redis:7.4.1-alpine
+          EOF
+          # 📌 `prometheus` / `node-exporter` 暂时不在这里：它们在 `monitoring` profile 里，
+          #    v1.0 的 CD 不经过。**开 v1.1 可观测前必须把它们也加进上面这张表。**
+
   # ------------------------------------------------------------
   # 2. 部署 + 健康检查 + 失败回滚
   # ------------------------------------------------------------
