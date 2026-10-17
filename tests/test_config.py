@@ -61,6 +61,22 @@ def test_production_accepts_properly_configured_secrets() -> None:
     assert settings.jwt_secret == STRONG_SECRET
 
 
+#: ⚠️ 这两条锁的是 2026-10-17 抓到的一个**真实漏洞**：
+#:    `.env` 里写成 `ADMIN_PASSWORD=`（占位没填）时读出来是**空字符串**，
+#:    它**不等于** `DEFAULT_ADMIN_PASSWORD`（`"change-me"`）——
+#:    原来那道闸只比较"是不是默认值"，于是**空值被放行**，
+#:    接着 `seed` 会建一个**空密码的管理员**。
+#:    📌 这和本项目一贯的病同源：**闸只覆盖了"想到的那种错"，没覆盖"什么都没填"**。
+def test_production_rejects_EMPTY_admin_password() -> None:
+    with pytest.raises(ValueError, match="ADMIN_PASSWORD 是空的"):
+        Settings(app_env="prod", jwt_secret=STRONG_SECRET, admin_password="")
+
+
+def test_production_rejects_EMPTY_jwt_secret() -> None:
+    with pytest.raises(ValueError, match="JWT_SECRET 是空的"):
+        Settings(app_env="prod", jwt_secret="", admin_password=STRONG_PASSWORD)
+
+
 def test_default_jwt_secret_meets_hs256_minimum_length() -> None:
     """默认密钥长度必须 ≥ 32 字节，否则 PyJWT 会对**每一次**签发发警告。
 

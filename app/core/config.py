@@ -179,12 +179,22 @@ class Settings(BaseSettings):
         secret_bytes = len(self.jwt_secret.encode("utf-8"))
         if self.jwt_secret == DEV_JWT_SECRET:
             problems.append("JWT_SECRET 仍是开发默认值")
+        elif not self.jwt_secret.strip():
+            problems.append("JWT_SECRET 是空的")
         elif secret_bytes < 32:
             problems.append(
                 f"JWT_SECRET 只有 {secret_bytes} 字节，HS256 要求至少 32 字节（RFC 7518 §3.2）"
             )
 
-        if self.admin_password == DEFAULT_ADMIN_PASSWORD:
+        # ⚠️ **空值必须先判，否则这道闸会漏掉它**（2026-10-17 补）：
+        #    `.env` 里写成 `ADMIN_PASSWORD=`（占位没填）时，读出来是**空字符串**，
+        #    它**不等于** `DEFAULT_ADMIN_PASSWORD`（`"change-me"`）——
+        #    原来那句相等判断就**放行了**，然后 `seed` 会建一个**空密码的管理员**。
+        #    这是"配置看起来填了、其实没填"的典型：**闸只比较了"是不是默认值"，
+        #    没比较"是不是根本为空"**。
+        if not self.admin_password.strip():
+            problems.append("ADMIN_PASSWORD 是空的")
+        elif self.admin_password == DEFAULT_ADMIN_PASSWORD:
             problems.append("ADMIN_PASSWORD 仍是默认值")
 
         if problems:
