@@ -1,0 +1,87 @@
+# 拒答层题集：库里**没有**依据时必须拒答
+# 判定方式：should_refuse = true 时，回答必须是拒答形态（不编造、不给"大概是"），
+#         且**不得**调用生成模型（由 pipeline 的 _should_refuse 在调模型前判定）。
+# 判定"拒答形态"的宽松标准：没有给出具体数字/承诺，并明确说明"现有资料里没有"。
+#
+# ⚠️ 这一层是幻觉治理的核心考点：**宁可说不知道，也不编**。
+
+- id: ref-01
+  question: "加拿大的退货政策是几天？"
+  should_refuse: true
+  why: "加拿大从未开通，没有生效政策。英/加/澳/新只在'预览草案'里出现，草案明确未生效。"
+  trap: "语料里确实有加拿大的数字（草案里拟 21 天）—— 编出来最像'有依据'。"
+
+- id: ref-02
+  question: "英国站能下单吗？我想寄到曼彻斯特"
+  should_refuse: true
+  why: "英国未开通，无站点、无配送、无售后。"
+  trap: "预览稿里写了'仅英格兰与威尔士'，容易被当成已开通。"
+
+- id: ref-03
+  question: "寄到悉尼的运费是多少？"
+  should_refuse: true
+  why: "澳大利亚未开通，没有运费标准。"
+
+- id: ref-04
+  question: "你们支持分期付款吗？三期免息那种。"
+  should_refuse: true
+  why: "语料里只有信用卡、PayPal、本地钱包、银行转账四种渠道，**没有任何分期或免息方案**。"
+  trap: "支付方式确实被提到过，足以诱导模型'顺着支付话题编一个分期方案'。"
+
+- id: ref-05
+  question: "今年黑五打几折？"
+  should_refuse: true
+  why: "库里没有未来的促销计划；只有'限时活动以活动页标注为准'这类原则。"
+  trap: "优惠券页写了活动规则，但**没有具体折扣力度**。"
+
+- id: ref-06
+  question: "你们一套收纳箱的采购成本是多少？"
+  should_refuse: true
+  why: "商业机密，库里没有任何成本数据。"
+
+- id: ref-07
+  question: "你们工厂在哪？是哪个代工厂做的？"
+  should_refuse: true
+  why: "库里没有任何供应商/工厂信息。"
+
+- id: ref-08
+  question: "你们 CEO 是谁？"
+  should_refuse: true
+  why: "公司概览只写了成立年份、总部、业务与地区，**没有管理层信息**。"
+
+- id: ref-09
+  question: "你们公司有多少员工？"
+  should_refuse: true
+  why: "库里没有人员规模数据。"
+
+- id: ref-10
+  question: "你们上市了吗？股票代码多少？"
+  should_refuse: true
+  why: "库里没有任何股权/上市信息。"
+
+- id: ref-11
+  question: "加州的销售税税率具体是多少？"
+  should_refuse: true
+  why: "美国站是 DDP（关税与进口税已含），**但库里没有各州销售税税率**；税率本身也不在服务承诺范围。"
+  trap: "DDP 这个词会诱导模型讲税额，但没有任何税率的依据。"
+
+- id: ref-12
+  question: "退货能不能退到香港的自提点？"
+  should_refuse: true
+  why: "库里没有香港自提点，也没有自提点政策。"
+
+- id: ref-13
+  question: "有学生优惠吗？"
+  should_refuse: true
+  why: "库里只有新客券、会员等级、限时活动，**没有学生优惠**。"
+
+- id: ref-14
+  question: "可以用比特币付款吗？"
+  should_refuse: true
+  why: "语料里没有完整的支付方式清单（只提到信用卡、PayPal、本地钱包、银行转账），不足以确认/否认。"
+
+- id: ref-15
+  question: "能花钱把保修延长到 5 年吗？"
+  should_refuse: true
+  why: "库里只有标准的保修期限，**没有任何延保服务**。"
+  trap: "'保修'这个词一定命中，但'延保'这件事不存在。"
