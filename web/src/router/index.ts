@@ -1,8 +1,8 @@
 /**
  * 路由。
  *
- * 五个页面：登录 → 会话列表 → 聊天 ／ 知识库 ／ 评测报告。**刻意不做多标签页布局** ——
- * 面试演示时"点进去、看到答案、看到引用来源"这条动线越短越好。
+ * 六个页面：登录 → 会话列表 → 聊天 ／ 知识库 ／ 评测报告 ／ 运维看板（仅管理员）。
+ * **刻意不做多标签页布局** —— 面试演示时"点进去、看到答案、看到引用来源"这条动线越短越好。
  *
  * 全部用**动态 import**（懒加载）：登录页不该为了渲染一个表单
  * 先把聊天页的代码也下载下来。
@@ -10,7 +10,7 @@
 
 import { createRouter, createWebHistory } from 'vue-router'
 
-import { ensureUser, isLoggedIn } from '@/stores/auth'
+import { ensureUser, currentUser, isLoggedIn } from '@/stores/auth'
 
 const router = createRouter({
   // ⚠️ `createWebHistory` = HTML5 history 模式（URL 干净，没有 `#`）。
@@ -62,6 +62,15 @@ const router = createRouter({
       name: 'reports',
       component: () => import('@/views/ReportsView.vue'),
     },
+    {
+      // 运维面（流量 / 资源 / 成本 / 数据健康）。**只有管理员能进** ——
+      // 后端也拦（`require_admin`），这里拦的是"看不到入口还硬敲 URL"。
+      // 它读的是 Prometheus，不是业务库；业务随时可用、看板挂了两不相干。
+      path: '/monitoring',
+      name: 'monitoring',
+      component: () => import('@/views/MonitoringView.vue'),
+      meta: { adminOnly: true },
+    },
     // 兜底：乱七八糟的 URL 回列表页，而不是白屏
     { path: '/:pathMatch(.*)*', redirect: { name: 'conversations' } },
   ],
@@ -82,6 +91,13 @@ router.beforeEach(async (to) => {
   }
 
   if (authed) await ensureUser()
+
+  // ⚠️ 只在**已经知道角色**且不是管理员时才弹走：`currentUser` 还没加载出来时
+  //    弹走会把管理员也一并弹走（然后他会以为"这页坏了"）。
+  if (to.meta.adminOnly && currentUser.value !== null && currentUser.value.role !== 'admin') {
+    return { name: 'conversations' }
+  }
+
   return true
 })
 

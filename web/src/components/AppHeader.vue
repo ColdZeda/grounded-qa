@@ -39,6 +39,16 @@ const LEVELS = [
 const email = computed(() => currentUser.value?.email ?? '')
 const roleLabel = computed(() => (currentUser.value?.role === 'admin' ? '管理员' : '成员'))
 
+/**
+ * 运维看板**只给管理员**（它暴露流量、成本、错误分布，属于运维面）。
+ *
+ * ⚠️ 写成函数调用 `isAdmin()` 而不是裸标识符 —— AGENTS §10 那个坑：
+ *    裸标识符当整个条件时会被编译器常量折叠，`v-if` 整段从产物里消失。
+ */
+function isAdmin(): boolean {
+  return currentUser.value?.role === 'admin'
+}
+
 function logout(): void {
   // ⚠️ 不调后端 —— JWT 是无状态的，服务端没有会话可注销。
   //    真要做"立即失效"得维护一张吊销表，那是另一个话题（不在 v1.0 范围）。
@@ -59,6 +69,7 @@ function logout(): void {
       </RouterLink>
       <RouterLink :to="{ name: 'documents' }">知识库</RouterLink>
       <RouterLink :to="{ name: 'reports' }">评测报告</RouterLink>
+      <RouterLink v-if="isAdmin()" :to="{ name: 'monitoring' }">运维</RouterLink>
     </nav>
 
     <div class="mid">

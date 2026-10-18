@@ -143,6 +143,40 @@ export interface ReportListOut {
 }
 
 // ------------------------------------------------------------
+// 运维看板（app/schemas/monitoring.py）
+// ------------------------------------------------------------
+
+export interface MonitorItem {
+  /** 序列标签（如 `outcome=answered`）。单值序列是空串。 */
+  label: string
+  /** ⚠️ `null` = **没有采到数据**，要显示 `—`，**不是 0**（0 和「没有」是两件事）。 */
+  value: number | null
+  /** 样本时间（epoch 秒）。`null` = 没有样本。 */
+  ts: number | null
+}
+
+export interface MonitorPanel {
+  key: string
+  group: string
+  title: string
+  /** `ratio` / `pct` / `s` / `req_s` / `mb` / `gb` / `count` / `bool` / `chunks` */
+  unit: string
+  /** 口径说明 —— 后端强制要求，页面上必须显示（「不许裸数字」）。 */
+  hint: string
+  items: MonitorItem[]
+}
+
+export interface MonitorSnapshot {
+  available: boolean
+  generated_at_display: string
+  prometheus_url: string
+  /** 样本比这个秒数还旧就标黄（后端算的 = 3 个抓取周期）。 */
+  stale_after_s: number
+  panels: MonitorPanel[]
+  error: string | null
+}
+
+// ------------------------------------------------------------
 // SSE 事件载荷（app/api/chat.py 的 `_sse` 调用处）
 // ------------------------------------------------------------
 
