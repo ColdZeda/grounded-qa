@@ -7,9 +7,10 @@
 # 硬性要求（AGENTS.md §5.2）：每个服务都有
 #    mem_limit + healthcheck + restart: unless-stopped
 #
-# 内存预算（计划书 §2.3）：期望占用合计 ≈ 670 MB，
+# 内存预算（计划书 §2.3）：期望占用合计 ≈ 670 MB（**带监控 ≈ 862 MB**），
 # 可用 ≈ 1180 MB（瘦身后实测）。下面的 mem_limit 是**硬上限**，
-# 按"期望值 + 余量"设置，合计 ≈ 768 MB，留足系统余量。
+# 按"期望值 + 余量"设置：**不带监控合计 768 MB**（v1.0），
+# **带 `--profile monitoring` 合计 960 MB**（v1.1 起 CD 默认启用），均留足系统余量。
 # ============================================================
 
 name: grounded-qa
@@ -154,14 +155,17 @@ services:
       start_period: 5s
 
   # ------------------------------------------------------------
-  # 可观测（v1.1 才启用）—— 用 profile 控制，v1.0 不占内存
+  # 可观测（v1.1 启用）—— 用 profile 控制，v1.0 不占内存
   #     docker compose --profile monitoring up -d
-  # ⚠️ 这两个**暂时还指向 Docker Hub 原名**：profile 没启用时 `compose pull` 不会碰它们，
-  #    v1.0 的 CD 不经过它们。**但开 monitoring 之前必须先把它们也推进 ACR**
-  #    （否则又是"服务器拉不到公共镜像"那一跤）。进度见 plan\PROJECT-PLAN.md §11 待办 #6。
+  # ⚠️ **两个 image 已改指 ACR**（2026-10-18，v1.1 第 0 步）：
+  #    服务器拉不到 Docker Hub（AGENTS 硬约束 §2.5），而 `compose pull` 会
+  #    按 `image:` 原名去拉 —— 只在本机 retag 不管用。上游镜像由 CI 的
+  #    「把公共基础镜像补进 ACR（幂等）」那一步推进去，见 deploy.yml。
+  # ⚠️ **CD 必须带 `--profile monitoring`**（deploy.yml 已加）：
+  #    否则每次 `up -d --remove-orphans` 都会把这两个容器当成"孤儿"处理风险。
   # ------------------------------------------------------------
   prometheus:
-    image: prom/prometheus:v3.1.0
+    image: ${ACR_REGISTRY:?ACR_REGISTRY 未设置}/prometheus:v3.1.0
     container_name: gq-prometheus
     restart: unless-stopped
     profiles: ["monitoring"]
@@ -185,7 +189,7 @@ services:
       start_period: 20s
 
   node_exporter:
-    image: prom/node-exporter:v1.8.2
+    image: ${ACR_REGISTRY:?ACR_REGISTRY 未设置}/node-exporter:v1.8.2
     container_name: gq-node-exporter
     restart: unless-stopped
     profiles: ["monitoring"]
