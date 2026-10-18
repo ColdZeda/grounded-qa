@@ -41,10 +41,35 @@
 | **引用溯源** | 回答附带原文出处（落库到 `messages.citations`），可点开核对，而不是"信我" |
 | **低置信拒答** | 检索不到 / 分数低于阈值时**明说不知道**，不编；拒答单独打标（`messages.refused`），**可被统计** |
 | **文档入库** | 上传 → Redis 队列 → 后台 worker 解析/切分/向量化（不阻塞请求） |
-| **可观测** | `/healthz` + `/metrics`，Prometheus 抓取，自研看板 |
+| **可观测** | `/healthz` ＋ `/metrics`（Prometheus 格式）＋ **三道启动自检**（中文全文检索 / 拒答阈值与模型配套 / 向量元数据）；**自研看板与告警属于 v1.1，尚未做** |
 | **评测体系** | 闭卷（关 RAG）/ 开卷（开 RAG）对照，双知识库，badcase 归因 |
 
 **安全红线**：**服务端不执行任何用户提交的代码或命令。** 所有模型调用走外部 API，不在服务器上跑本地模型。
+
+---
+
+## 接口一览
+
+统一前缀 `/api/v1`（前缀来自配置，不写死）。除登录外都要 `Authorization: Bearer <token>`。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/auth/login` | 表单登录 → JWT（**"密码错"与"用户不存在"返回完全相同**的响应与耗时） |
+| `GET` | `/auth/me` | 当前用户（角色 / 租户） |
+| `GET` / `POST` | `/conversations` | 会话列表 / 新建（**懒创建**：会话在第一次提问时才真正建） |
+| `GET` | `/conversations/{id}/messages` | 消息列表（刷新页面后恢复上下文） |
+| `POST` | `/conversations/{id}/messages` | **提问 —— SSE 流式**：`sources` → `delta`* → `done`，出错发 `error` |
+| `POST` | `/documents` | 知识库上传（**仅管理员**，只吃 `.md`/`.markdown`/`.txt`）→ **202** 已接受、异步入库 |
+| `GET` | `/documents` | 文档列表（带 `status` / `error_message`，界面靠它轮询） |
+| `GET` | `/reports` | **只读**评测报告（**只给聚合数字**，不吐逐题明细） |
+| `GET` | `/admin/tenant` · `/admin/users` | 租户内管理端（**不是跨租户超管**） |
+| `GET` | `/healthz` · `/metrics` | 运维端点（前者给 compose/CI 判活，后者给 Prometheus） |
+
+**两个会被客户端撞到的约定**：
+
+- **429** 带 `code` / `scope` / `used` / `limit` / `retry_after_s` ＋ 标准 `Retry-After` 头 ——
+  前端照着退避即可，**不要立刻重试**（那只会把限流刷得更狠）。
+- **越权一律 404**（不是 403）：403 等于承认"这条数据存在"，可被用来枚举有效 id。
 
 ---
 
@@ -109,6 +134,10 @@
 | **不用独立的向量库**（Milvus / Qdrant / Chroma / FAISS） | 多租户过滤和向量检索能写在**同一个 `WHERE`** 里，没有跨库一致性问题；也少一个容器 | §10.1 |
 | **"不做 HTTPS"是决定，不是遗漏** | 飞书走**长连接（出站）**，本就不需要证书和公网回调 | §10.2 |
 | **2C2G 上每个容器都有 `mem_limit`** | 容器预算 **≈ 670 MB ／ 可用 ≈ 1.2 GiB** | 计划书 §2.3 |
+| **上传拆成「建行 → 排队 → 处理」三段** | 请求路径上**不碰 embedding**（秒级、会失败）；字节落共享卷、消息里只有 UUID —— 否则一个 1 MB 文件 base64 后 1.3 MB，Redis 淘汰时会**静默丢消息**（表现：上传成功、永远 pending） | §9.26 |
+| **限流与配额是两把尺子** | 次数/分钟治「刷」，token/天治「烧钱」；后者是**软熔断**（流式没法中途掐断：这次跑完记账、下次才拒） | §9.27 |
+| **Redis 挂了就放行**（fail-open） | 这两把尺子治**成本**、不治安全；缓存抖一下就整站 429，等于把「缓存故障」升级成「服务不可用」。但**放行必须留痕**（`gq_limit_failopen_total`）—— 静默放行才是真问题 | §9.27 |
+| **embedding 元数据锁：读侧只比「同一个模型」的向量** | 换过模型后新旧向量**不在一个空间**，余弦相似度**是噪音不是相似度**；而它不报错、不崩溃、只是答案慢慢变差。读侧硬过滤把「不可比」变成「不存在」 | §9.28 |
 | **已知的将就也一并写出来** | 例：`citations` 字段**混装两种含义**（引用 / 检索候选）—— **字段名会撒谎** | §10.3 |
 
 > 📌 **"故意不做"的完整清单**（K8s / Grafana / Elasticsearch / 微调 / 工单系统 …）
@@ -237,9 +266,9 @@ uv run pytest -q -rs                 # 测试（见下方说明）
 cd web && pnpm build                 # 前端类型检查 + 构建
 ```
 
-> **测试分两类**：
-> - **纯单元**（security / config / 健康检查）—— 不需要任何外部服务；
-> - **集成**（`-m integration`：登录、越权、租户隔离）—— 需要 PostgreSQL。
+> **测试分两类**（当前 **137 条**）：
+> - **纯单元**：切分/清洗、限流与配额的窗口算法、拒答阈值、配置校验 —— 不需要任何外部服务（限流那条用**内存版 Redis** 替身，跑的是真逻辑）；
+> - **集成**（`-m integration`）：登录、越权、租户隔离、问答 SSE、上传与 worker、评测报告聚合 —— 需要 PostgreSQL。
 >
 > 集成测试**连不上库会自动 SKIP**（不是失败），跳过原因用 `-rs` 看得到。
 > 想让它们真跑起来：`docker compose up -d` + `uv run alembic upgrade head` 之后直接 `pytest` 即可。
@@ -279,7 +308,11 @@ docs/            architecture.md · evidence/ · records/ · archive/
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 只在 `python -m app.db.seed` 里用一次；生产必须改 |
 | `RETRIEVE_TOP_K` / `RERANK_TOP_N` / `RRF_K` | 检索与融合参数 |
 | `ANSWER_MIN_SCORE` | 低于该分数**拒答** |
-| `RATE_LIMIT_PER_MINUTE` / `TOKEN_QUOTA_PER_DAY` | 限流与配额 |
+| `ANSWER_MIN_COSINE` | **rerank 不可用时**用来比**向量余弦**的阈值（0.45）。⚠️ 和 `ANSWER_MIN_SCORE` **不是同一个量纲**，不能互相套用 |
+| `RATE_LIMIT_PER_MINUTE` / `TOKEN_QUOTA_PER_DAY` | 限流与配额（**两把尺子**：次数/分钟、token/天） |
+| `UPLOAD_RATE_LIMIT_PER_MINUTE` | 上传另有一道更严的限额（一次上传＝一遍切分 ＋ N 次 embedding） |
+| `UPLOAD_MAX_BYTES` / `MAX_CHUNKS_PER_DOCUMENT` | 上传文件大小与单文档块数上限（超了**整篇失败**，不做部分入库） |
+| `LLM_STREAM_USAGE` | 流式响应要不要带 `usage`（**token 计量靠它**；关掉＝配额算不出来） |
 
 ---
 
