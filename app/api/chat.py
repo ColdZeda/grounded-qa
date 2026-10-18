@@ -22,6 +22,7 @@ from sqlalchemy import func, select, update
 from app.api.deps import CurrentUser, LimitsRedisDep, SessionDep
 from app.core.config import get_settings
 from app.core.limits import LimitGuard, ensure
+from app.core.metrics import record_chat_outcome
 from app.db.models.conversation import Conversation, Message, MessageRole
 from app.db.models.user import User, UserRole
 from app.db.repository import TenantScopedRepository
@@ -199,6 +200,18 @@ async def _load_history(session: SessionDep, conversation_id: uuid.UUID) -> list
     ]
 
 
+def _outcome_of(answer: Answer) -> str:
+    """一次问答的结局。三个桶**互斥**。
+
+    ⚠️ **拒答单独一个桶**，不和"正常回答"混：拒答率突然升高通常意味**检索坏了**
+        （阈值没变、库里却搜不到东西），而不是用户问得怪。混在一起就看不见这件事。
+    ⚠️ `error` 与"拒答"是两回事：拒答是**产品行为**，出错是**故障**。
+    """
+    if answer.error:
+        return "error"
+    return "refused" if answer.refused else "answered"
+
+
 def _sse(event: str, data: dict[str, object]) -> str:
     """拼一个 SSE 帧。
 
@@ -240,6 +253,7 @@ async def _stream(
                 yield _sse("delta", {"text": event.text})
             elif isinstance(event, Answer):
                 final = event
+                record_chat_outcome(_outcome_of(event))
                 if event.error:
                     yield _sse("error", {"detail": event.error, "stage": "generation"})
                 yield _sse(
@@ -253,6 +267,7 @@ async def _stream(
     except Exception as exc:
         # ⚠️ 这里**不能**再抛 HTTP 异常：响应头早就发出去了，改不了状态码。
         #    唯一能做的是在流里告诉前端"出错了"。
+        record_chat_outcome("error")
         yield _sse("error", {"detail": f"{type(exc).__name__}: {exc}", "stage": "pipeline"})
     finally:
         await _persist_answer(session, conversation, final)

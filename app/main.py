@@ -23,6 +23,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from app.api.router import api_router
 from app.core.config import get_settings, warn_if_rerank_calibration_missing
 from app.core.limits import RateLimitedError
+from app.core.metrics import MetricsMiddleware
 from app.db.checks import warn_if_embedding_lock_mismatch, warn_if_fulltext_degraded
 from app.db.session import dispose_engine
 from app.rag.providers import aclose_http_client
@@ -90,6 +91,11 @@ def create_app() -> FastAPI:
 
     # 业务路由统一加版本前缀（前缀来自配置，不写死）
     app.include_router(api_router, prefix=settings.api_prefix)
+
+    # HTTP 层指标（请求数 / 耗时）。⚠️ **必须加在路由之前**（虽然 add_middleware
+    # 是"包在最外层"，顺序上无所谓，但早加早生效，别让第一个请求漏掉）。
+    if settings.metrics_enabled:
+        app.add_middleware(MetricsMiddleware)
 
     @app.exception_handler(RateLimitedError)
     async def _rate_limited(_request: Request, exc: RateLimitedError) -> JSONResponse:

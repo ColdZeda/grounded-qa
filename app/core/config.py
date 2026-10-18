@@ -254,6 +254,13 @@ class Settings(BaseSettings):
 
     # ---------- 可观测 ----------
     metrics_enabled: bool = True
+    #: 看板去问哪台 Prometheus。**容器里用服务名**（compose 网络内解析）；
+    #: 本机直跑 uvicorn 时它不存在 ⟹ 看板返回 `available=false`，这是预期行为。
+    prometheus_url: str = "http://prometheus:9090"
+    #: Prometheus 的抓取周期（秒）。看板用它算"样本多旧算陈旧"（3 个周期）。
+    #: ⚠️ 与 `deploy/prometheus/prometheus.yml` 的 `scrape_interval` 是**两份配置**，
+    #:    改一处就要改另一处；写成配置而不是散在代码里，至少只有一处常量。
+    prometheus_scrape_interval_s: int = 30
 
     @property
     def postgres_effective_port(self) -> int:

@@ -27,6 +27,9 @@ x-api-common: &api-common
   environment:
     POSTGRES_HOST: postgres
     REDIS_HOST: redis
+    # 看板从这里去问 Prometheus。写成 compose 环境变量而不是 .env 里的秘密：
+    # 这是**拓扑**（容器间怎么称呼对方），不是配置项 —— 换网络时只有这一处要改。
+    PROMETHEUS_URL: http://prometheus:9090
   # ⚠️ 上传文件的**停放目录**：api 写、worker 读，所以两边挂**同一个**命名卷。
   #    只挂一边的话，worker 永远读不到 api 刚写的文件 —— 表现是"全部失败：文件不存在"。
   #    卷名固定 `gq-uploads`（不是 compose 自动前缀），与 `gq-pgdata` 同一套命名规矩。
