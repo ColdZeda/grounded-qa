@@ -78,7 +78,7 @@ PANELS: tuple[_Panel, ...] = (
         group="可用性与延迟",
         title="普通请求 P95",
         unit="s",
-        hint="近 5 分钟、**排除问答流**的 P95。分桶估算（桶边界见 app/core/metrics.py），不是精确分位数",
+        hint="近 5 分钟、排除问答流的 P95。分桶估算（桶边界见 app/core/metrics.py），不是精确分位数",
         expr=(
             "histogram_quantile(0.95, sum(rate(gq_http_request_duration_seconds_bucket"
             '{path!~"/api/v1/chat.*"}[5m])) by (le))'
@@ -89,7 +89,7 @@ PANELS: tuple[_Panel, ...] = (
         group="可用性与延迟",
         title="问答流 P95",
         unit="s",
-        hint="近 5 分钟问答接口的 P95 = **用户从提问到回答流结束**的时间，不是首字延迟",
+        hint="近 5 分钟问答接口的 P95 = 用户从提问到回答流结束的时间，不是首字延迟",
         expr=(
             "histogram_quantile(0.95, sum(rate(gq_http_request_duration_seconds_bucket"
             '{path=~"/api/v1/chat.*"}[5m])) by (le))'
@@ -100,7 +100,7 @@ PANELS: tuple[_Panel, ...] = (
         group="可用性与延迟",
         title="24 小时请求数",
         unit="count",
-        hint="近 24 小时累计（`increase` 会自动处理重启导致的计数器归零）",
+        hint="近 24 小时累计（increase 会自动处理重启导致的计数器归零）",
         expr="sum(increase(gq_http_requests_total[24h]))",
     ),
     # ---------- 资源 ----------
@@ -125,15 +125,15 @@ PANELS: tuple[_Panel, ...] = (
         group="资源",
         title="根分区可用",
         unit="gb",
-        hint="`/` 的可用空间。40 GB 盘；低于 3 GB 时 docker pull / 备份会开始失败",
+        hint="根分区的可用空间。40 GB 盘；低于 3 GB 时 docker pull / 备份会开始失败",
         expr='node_filesystem_avail_bytes{mountpoint="/"} / 1024 / 1024 / 1024',
     ),
     _Panel(
         key="load1",
         group="资源",
         title="1 分钟负载",
-        unit="count",
-        hint="主机 load1。2 核上持续 > 2 说明在排队；和 CPU 一起看才知道是算还是等",
+        unit="load",
+        hint="主机 load1。2 核上持续 > 2 说明在排队；和 CPU 一起看才知道是算还是在等",
         expr="node_load1",
     ),
     # ---------- 问答与用量（24h）----------
@@ -142,7 +142,7 @@ PANELS: tuple[_Panel, ...] = (
         group="问答与用量",
         title="24 小时问答结果",
         unit="count",
-        hint="按结果分：answered 正常回答 / refused 拒答 / error 出错。**拒答也要单独看** —— 拒答率突然升高通常意味着检索坏了，而不是用户问得怪",
+        hint="按结果分：answered 正常回答 / refused 拒答 / error 出错。拒答要单独看 —— 拒答率突然升高通常意味检索坏了，而不是用户问得怪",
         expr="sum(increase(gq_chat_outcome_total[24h])) by (outcome)",
     ),
     _Panel(
@@ -161,7 +161,7 @@ PANELS: tuple[_Panel, ...] = (
         group="问答与用量",
         title="24 小时 token",
         unit="count",
-        hint="模型 API 回报的 `usage.total_tokens` 累计（不是估算）。拒答不调模型 ⟹ 不计数",
+        hint="模型 API 回报的 usage.total_tokens 累计（不是估算）。拒答不调模型 ⟹ 不计数",
         expr="sum(increase(gq_tokens_total[24h]))",
     ),
     # ---------- 限额与数据健康 ----------
@@ -178,7 +178,7 @@ PANELS: tuple[_Panel, ...] = (
         group="限额与数据健康",
         title="24 小时计量失效",
         unit="count",
-        hint="Redis 不可用而**放行**的次数。**不为 0 就说明当前的限额数字不可信**（这是静默放行，不报错）",
+        hint="Redis 不可用而放行的次数。不为 0 就说明当前的限额数字不可信（这是静默放行，不报错）",
         expr="sum(increase(gq_limit_failopen_total[24h])) by (call)",
     ),
     _Panel(
@@ -186,7 +186,7 @@ PANELS: tuple[_Panel, ...] = (
         group="限额与数据健康",
         title="向量模型不一致的块",
         unit="chunks",
-        hint="库里 `embedding_model` 与当前配置不同的块数。**恒为 0 才健康**；非 0 说明换过模型但没重嵌入，那些块会被检索静默跳过",
+        hint="库里 embedding_model 与当前配置不同的块数。恒为 0 才健康；非 0 说明换过模型但没重嵌入，那些块会被检索静默跳过",
         expr="gq_embedding_metadata_drift_chunks",
     ),
 )

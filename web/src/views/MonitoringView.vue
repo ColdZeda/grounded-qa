@@ -75,9 +75,12 @@ function fmt(panel: MonitorPanel, item: MonitorItem | undefined): string {
     case 'gb':
       return `${num(value)} GB`
     case 'chunks':
-      return `${num(value, 0)} 块`
+      return `${Math.round(value).toLocaleString('zh-CN')} 块`
+    // 负载没有单位，但**必须给小数**：0.09 显示成 "0" 会让人以为机器完全空闲
+    case 'load':
+      return num(value, 2)
     default:
-      return num(value, 0)
+      return Math.round(value).toLocaleString('zh-CN')
   }
 }
 
@@ -137,7 +140,7 @@ onMounted(load)
       <h2 class="title">运维看板 <span class="count">只读 · 数据来自 Prometheus</span></h2>
 
       <p class="hint">
-        这一屏是**打开页面那一刻**去问 Prometheus 的结果，不会自动刷新（点右上角「刷新」）。
+        这一屏是<b>打开页面那一刻</b>去问 Prometheus 的结果，不会自动刷新（点右上角「刷新」）。
         Prometheus 每 30 秒抓一次指标，所以最细的颗粒就是 30 秒 —— 它不是实时监控。
       </p>
 
@@ -154,7 +157,7 @@ onMounted(load)
         <p v-if="!snapshot.available" class="alert alert--warn">
           {{ snapshot.error }}<br />
           <span class="alert__sub">
-            这通常是「监控还没启起来」或「容器刚重启」。**业务本身不受影响** ——
+            这通常是「监控还没启起来」或「容器刚重启」。<b>业务本身不受影响</b> ——
             看板是旁路，它挂了不影响问答。
           </span>
         </p>
@@ -262,7 +265,9 @@ onMounted(load)
 .cards {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  /* 190px 是「五块卡片排一行」的下限：卡里最长的东西是那行注释，
+     再窄就会把 "0 = 抓不到" 这类句子拆得太碎。 */
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
 }
 
 .card {
