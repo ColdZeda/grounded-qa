@@ -1,0 +1,545 @@
+{
+  "kind": "generation",
+  "mode": "closed",
+  "generated_at": "20261019T164323Z",
+  "kb": "fastapi",
+  "questions": "evals/questions/generation-fastapi.yaml",
+  "llm_model": "deepseek-flash",
+  "results": [
+    {
+      "id": "fa-01",
+      "question": "Which command starts the dev server, and on which port?",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "启动命令是 `fastapi dev`",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "服务跑在 `8000` 端口",
+          "hit": false,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "I don't have your project's specific config in front of me, so I can't confirm the exact values — but here's the most likely answer plus how to verify it in seconds.\n\n**Most likely**\n- Command: `npm run dev` (or `yarn dev` / `pnpm dev` if that's your package manager)\n- Port: `3000` for Next.js / Create React App, `5173` for Vite, `4200` for Angular, `8080` for Vue CLI\n\n**How to confirm**\n1. Open `package.json` → `scripts` → look for `dev`, `start`, or `serve`. That literal command is what you run.\n2. Check the port in any of these, if present:\n   - `vite.config.*` → `server.port`\n   - `next.config.*` → usually defaults to 3000\n   - `.env` / `.env.local` → `PORT=...`\n   - `angular.json` → `serve.options.port`\n3. If nothing is configured, just run the dev command — the terminal prints `Local: http://localhost:<port>` on startup.\n\n**Override the port if needed**\n- `npm run dev -- --port 4000` (Vite/Next)\n- `PORT=4000 npm run dev` (Node/CRA-style)\n\nIf you paste your `package.json` scripts or tell me the framework, I'll give you the exact command and port."
+    },
+    {
+      "id": "fa-02",
+      "question": "Where do I see the raw OpenAPI schema, and which version is it?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "地址是 `/openapi.json`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "版本号是 `3.1.0`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "I don't have the specific product in front of me, so I can't confirm the exact URL for your account — but here's the most likely answer and how to verify it in seconds:\n\n**Where to find the raw schema**\n- Try `https://<your-host>/openapi.json` — the most common path for the machine-readable spec.\n- Fallbacks if that 404s: `/openapi.yaml`, `/swagger.json`, `/api/openapi.json`, `/v1/openapi.json`.\n- In the docs UI (Swagger UI / Redoc / Scalar), the raw spec is usually linked at the top as \"openapi.json\", \"Download spec\", or \"/spec\".\n\n**Which version it is**\n- Open the file and check the first key:\n  - `\"openapi\": \"3.0.x\"` or `\"3.1.0\"` → **OpenAPI 3.x** (3.1.0 aligns with JSON Schema 2020-12).\n  - `\"swagger\": \"2.0\"` → **Swagger 2.0**, the older format.\n- Most current APIs publish **OpenAPI 3.0.3**; newer ones use **3.1.0**.\n\n**Quick check**\n```\ncurl -s https://<your-host>/openapi.json | head -c 200\n```\nThe `openapi`/`swagger` field in that output is the authoritative version.\n\nIf you tell me the product or base URL, I can give you the exact path and version."
+    },
+    {
+      "id": "fa-03",
+      "question": "I annotated item_id as int. What does /items/3 return?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "`item_id` 是 `int` 类型的 `3`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "不是字符串，返回的仍是 `3`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "`/items/3` returns the integer `3` (JSON `3`), not the string `\"3\"`.\n\n- FastAPI (or the framework) parses the path segment `\"3\"` and converts it to `int` before calling your handler, so inside the function `item_id` is `3` (type `int`).\n- Type annotations are enforced: `/items/abc` would fail conversion and return a `422 Unprocessable Entity` validation error instead of calling your function.\n- If you annotated it as `str` instead, `/items/3` would return `\"3\"` (JSON string).\n\nSo: with `item_id: int`, `GET /items/3` → `3` as an integer."
+    },
+    {
+      "id": "fa-04",
+      "question": "How do I accept a path that contains slashes as one parameter?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "用 `{file_path:path}` 声明",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "`:path` 后缀允许参数包含 `/`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Which stack you're using matters, but the short answer is: use the framework's \"catch-all / path\" route parameter instead of a normal one, and be careful about encoded `%2F` handling.\n\n**Common frameworks**\n- **Flask**: `@app.route(\"/files/<path:filepath>\")` — the `path` converter is the one that matches `/`.\n- **Django**: `path(\"files/<path:filepath>/\", view)` — `<path:...>` accepts slashes.\n- **FastAPI / Starlette**: `@app.get(\"/files/{file_path:path}\")`.\n- **Express (v4)**: `app.get(\"/files/*\", ...)` then read `req.params[0]`; **Express 5**: `app.get(\"/files/{*splat}\", ...)`.\n- **ASP.NET Core**: `[Route(\"files/{*path}\")]` (catch-all parameter).\n- **Spring**: `@GetMapping(\"/files/**\")` plus `@PathVariable` extraction, or use `PathPattern` with `{*path}`.\n- **CLI (argparse/click)**: a single positional argument already accepts slashes — just quote it in the shell (`\"a/b/c\"`).\n\n**Pitfalls to check**\n1. **Encoded slashes**: `%2F` is often decoded *before* routing or rejected outright by proxies (nginx blocks it by default). Pass real `/` characters in the path, not encoded ones, or configure the proxy to allow them.\n2. **Trailing behavior**: catch-all params usually won't match an empty tail; add a separate route if you need `/files` with nothing after it.\n3. **Security**: a path parameter containing `..` or absolute paths is a directory-traversal risk — normalize and verify the resolved path stays inside the allowed root before use.\n4. **Order of routes**: register the catch-all last, otherwise it can shadow more specific routes.\n\nIf you tell me the language/framework, I can give the exact snippet."
+    },
+    {
+      "id": "fa-05",
+      "question": "What are the default values of skip and limit?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "`skip` 默认 `0`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "`limit` 默认 `10`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Most paginated APIs follow this pattern:\n\n- **skip** — defaults to `0` (no records skipped; results start from the first item)\n- **limit** — defaults to `10` (some APIs use `20` or `100`), usually with a maximum cap (commonly `100` or `1000`)\n\nIf `skip` is omitted the request returns the first page; if `limit` is omitted the server applies its default page size rather than returning all records.\n\nI'm not certain which endpoint you're referring to — default values can differ between APIs. If you tell me the specific interface (or the docs name), I can confirm the exact defaults and maximum allowed limit."
+    },
+    {
+      "id": "fa-06",
+      "question": "How do I cap a query parameter at 50 characters?",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "用 `Query(max_length=50)`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "放在 `Annotated` 里声明",
+          "hit": false,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "**Short answer:** enforce it server-side — either reject with a 400/422 or truncate — and don't rely on the client.\n\n**1. Decide the behavior first**\n- **Reject** (recommended for identifiers, filters): return a validation error if `length > 50`.\n- **Truncate** (fine for free-text search terms): silently `slice` to 50 chars.\n\n**2. Examples by stack**\n\n- **Express / Node**\n  ```js\n  const raw = String(req.query.q ?? '');\n  if (raw.length > 50) return res.status(400).json({ error: 'q must be ≤ 50 chars' });\n  // or truncate:\n  const q = [...raw].slice(0, 50).join('');\n  ```\n\n- **FastAPI (Python)**\n  ```python\n  q: str | None = Query(None, max_length=50)   # auto 422\n  ```\n\n- **Django / DRF**\n  ```python\n  q = serializers.CharField(max_length=50, required=False, allow_blank=True)\n  ```\n\n- **OpenAPI / API Gateway / schema**\n  ```yaml\n  q:\n    type: string\n    maxLength: 50\n  ```\n\n- **SQL-side guard** (belt and braces): `LEFT(:q, 50)` / `SUBSTRING(:q, 1, 50)`.\n\n**3. Gotchas**\n- **Repeated params** (`?q=a&q=b`) can arrive as an array — cap each element or the joined value.\n- **Unicode**: JS `.length`/`.slice` count UTF-16 units, so emoji can be split. Use `[...str].slice(0, 50)` if that matters; backend validators usually count code points.\n- **Trim first** if leading/trailing whitespace shouldn't count.\n- The same limit in the schema/API docs so clients get a clear error instead of a surprise.\n\nIf you tell me which platform you're on (Express, FastAPI, Spring, API Gateway, etc.), I can give the exact snippet."
+    },
+    {
+      "id": "fa-07",
+      "question": "Which FastAPI version added Annotated, and what should I upgrade to?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "`Annotated` 从 `0.95.0` 开始支持",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "旧版本至少升到 `0.95.1`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "- **Annotated support was added in FastAPI `0.95.0`** — this included using `Annotated` with `Depends`, `Security`, and related dependency-injection patterns.\n- **Minimum upgrade:** `fastapi>=0.95.0`.\n- **Recommended upgrade:** the latest stable FastAPI release in your environment. As of my knowledge, that is the **`0.115.x`** line.\n- **If you use Pydantic v2:** upgrade to **FastAPI `>=0.100.0`**; otherwise stay on a Pydantic-v1-compatible FastAPI version.\n- **Practical recommendation:** pin to a recent stable version, e.g. `fastapi>=0.115,<0.116` if you want the 0.115 line, and run your test suite after upgrading."
+    },
+    {
+      "id": "fa-08",
+      "question": "How minimal can a dependency be in the simplest example?",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "最简依赖只要 `2` 行",
+          "hit": false,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Assuming you mean a software dependency in dependency injection: it can be as minimal as **one value or one callable passed in as a parameter**—no framework, interface, or container needed.\n\n```python\ndef greet(say=print):\n    say(\"Hello\")\n\ngreet()          # dependency = print\ngreet(lambda m: None)  # dependency = a no-op function\n```\n\nOr as a constructor dependency:\n\n```python\nclass Greeter:\n    def __init__(self, say):\n        self.say = say\n\nGreeter(print).say(\"Hello\")\n```\n\nSo the simplest dependency is: **anything the code needs but does not create itself, supplied from outside.** It can be a plain string, a function, or a small object."
+    },
+    {
+      "id": "fa-09",
+      "question": "How do I declare a request body with validation?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "用 Pydantic 的 `BaseModel` 子类",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "模型从 `pydantic` 导入",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Assuming **FastAPI + Pydantic** (this wording matches FastAPI):\n\n```python\nfrom fastapi import FastAPI\nfrom pydantic import BaseModel, Field, field_validator, model_validator\n\napp = FastAPI()\n\nclass Item(BaseModel):\n    name: str = Field(min_length=1, max_length=50)\n    price: float = Field(gt=0)\n    tags: list[str] = []\n\n    @field_validator(\"name\")\n    @classmethod\n    def name_must_not_be_blank(cls, v: str) -> str:\n        v = v.strip()\n        if not v:\n            raise ValueError(\"name must not be blank\")\n        return v\n\n    @model_validator(mode=\"after\")\n    def check_price_and_tags(self):\n        if self.price > 1000 and not self.tags:\n            raise ValueError(\"expensive items must have at least one tag\")\n        return self\n\n@app.post(\"/items\")\ndef create_item(item: Item):\n    return item\n```\n\nKey points:\n- Declare a `BaseModel` subclass and type-annotate the endpoint parameter as that model.\n- FastAPI parses the JSON request body into the model and validates it automatically.\n- Validation errors return `422 Unprocessable Entity` with details.\n- Use `Field(...)` for simple constraints and validators for custom rules.\n- If you need multiple body parameters, use `Body(embed=True)` or separate `Body(...)` parameters.\n\nIf you're using a different framework, tell me which one and I’ll give the equivalent pattern."
+    },
+    {
+      "id": "fa-10",
+      "question": "How do I wrap a single body model under an item key?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "用 `Body(embed=True)`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "多一层 `item` 键",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Use an embedded body parameter, or define a wrapper model.\n\n**FastAPI:**\n```python\nfrom fastapi import FastAPI, Body\nfrom pydantic import BaseModel\n\nclass Item(BaseModel):\n    name: str\n    price: float\n\napp = FastAPI()\n\n@app.post(\"/items\")\nasync def create_item(item: Item = Body(embed=True)):\n    return item\n```\n\nRequest body becomes:\n```json\n{\n  \"item\": {\n    \"name\": \"Foo\",\n    \"price\": 42.0\n  }\n}\n```\n\n`embed=True` puts the single model under the parameter name, here `\"item\"`. To use a different key, add an alias:\n\n```python\nitem: Item = Body(embed=True, alias=\"item\")\n```\n\n**Alternative: explicit wrapper model**\n```python\nclass ItemEnvelope(BaseModel):\n    item: Item\n\n@app.post(\"/items\")\nasync def create_item(payload: ItemEnvelope):\n    return payload.item\n```\n\nUse `Body(embed=True)` for the simplest case; use a wrapper model if you want the envelope to be part of your schema and reusable."
+    },
+    {
+      "id": "fa-11",
+      "question": "Can a Python class be used as a dependency?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "可以，依赖只要是 callable",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "FastAPI 会解析 `__init__` 的参数",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "**Short answer: yes.** A class is just an object in Python, so it can be used as a dependency anywhere an object can be passed, registered, or declared.\n\n**Common contexts**\n\n- **Dependency injection (manual):** pass the class where a callable is expected and instantiate it where needed.\n  ```python\n  class Database:\n      def __init__(self, url): self.url = url\n\n  class Service:\n      def __init__(self, db_factory=Database):   # class as a dependency\n          self.db = db_factory(\"postgres://...\")\n  ```\n- **Frameworks (FastAPI, etc.):** `Depends(MyClass)` works — the framework calls the class, so you get a *new instance per request/resolution*.\n- **DI containers / registries:** you can bind an interface to a concrete class (`container.bind(Repo, to=PostgresRepo)`); the container resolves and instantiates it for you.\n- **Type-hint–driven injection:** annotating a constructor or handler parameter with a class name is enough for many frameworks to treat it as a dependency.\n\n**Caveats to check**\n\n- **Class vs. instance semantics:** some frameworks inject the class itself (as a factory/callable); others instantiate it for you. Confirm which, since it changes whether state is shared.\n- **Lifetime/scope:** class-as-dependency usually means \"new instance each time.\" If you need a singleton, register a pre-built instance or cache it.\n- **Constructor signature:** the class's `__init__` parameters become dependencies too — they must be resolvable, or you must supply defaults/providers.\n- **Abstract classes / Protocols:** inject the concrete class but type-hint the abstraction, so it stays swappable and testable.\n- **Not the same as a package dependency:** if you meant \"can a class be an installable dependency,\" no — you distribute the module/package that contains it, and the package is the dependency.\n\n**Bottom line:** use a class as a dependency when you want deferred construction or per-call instances; use an instance when you want shared state."
+    },
+    {
+      "id": "fa-12",
+      "question": "Is a shared sub-dependency called once per request?",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "`Depends` 默认缓存，同一请求只解析一次",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "要每次都调用就设 `use_cache=False`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Yes—by default, a shared sub-dependency is called **once per request** and its result is reused wherever it’s needed in that request.\n\nCaveats:\n- A **new request** gets a new call/result.\n- If caching is disabled for that dependency (e.g., FastAPI’s `use_cache=False`), it can be called multiple times.\n- If it’s a generator/yield dependency, cleanup still runs per request as configured, but the dependency setup is normally cached per request."
+    },
+    {
+      "id": "fa-13",
+      "question": "How do I run a dependency without using its return value?",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "用装饰器的 `dependencies` 参数传一个 `list`",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "列表元素是 `Depends()`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Most likely you mean FastAPI-style dependency injection. Two clean options:\n\n**1. Register it on the decorator (result discarded entirely)**\n```python\n@app.get(\"/items\", dependencies=[Depends(verify_token)])\ndef read_items():\n    ...\n```\nWorks on `APIRouter(...)` too, so it applies to every route in the router. The return value is never seen by your code — use this for auth checks, rate limits, audit logging, etc.\n\n**2. Declare it as a parameter and simply don't reference it**\n```python\n@app.get(\"/items\")\ndef read_items(db: Session = Depends(get_db)):\n    # db used only for its side effect of opening a session\n    ...\n```\nIf a linter flags the unused argument, rename it `_db` or add `# noqa: ARG001`.\n\n**If you meant pytest fixtures instead:**\n```python\n@pytest.mark.usefixtures(\"setup_db\")   # runs the fixture, value ignored\ndef test_thing():\n    ...\n```\n\nGeneral rule: request the dependency where it is enforced (decorator/router level) rather than in the function signature, whenever you don't need the value — it keeps the signature clean and makes the side-effect intent explicit."
+    },
+    {
+      "id": "fa-14",
+      "question": "What happens if a yield dependency swallows an exception?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "客户端仍收到 `500` 错误",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "服务端没有日志，必须重新 `raise`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Short answer: it suppresses the error for that request — but not gracefully. The original exception is lost and you usually end up with a generic 500 instead of the response/error you intended.\n\n**How it works mechanically**\n- When the path operation (or an inner dependency) raises, FastAPI throws that exception back into your generator at the `yield` point.\n- If your `try/except` around the `yield` catches it and does **not** re-raise, the exception is treated as handled.\n- FastAPI's exception handlers (`HTTPException` handlers, custom handlers, `ServerErrorMiddleware`) never see it.\n\n**What the client actually gets**\n- The endpoint never returned a response, so FastAPI has nothing to send. In practice you get a generic 500 / internal error (often surfacing as `TypeError: 'NoneType' object is not callable`), **not** the intended 4xx/5xx or error body.\n- The real cause is hidden from the client and from your exception handlers, which makes debugging painful.\n\n**Gotchas that also swallow**\n- `except Exception: pass` or `except Exception: log(...)` without `raise`.\n- A `return` inside a `finally:` block — that also discards the in-flight exception.\n- Cleanup placed *after* the `except` won't run if you `return` from inside it.\n\n**What to do instead**\n- Log, then re-raise with a bare `raise` so FastAPI handles it normally.\n- Put mandatory cleanup in `finally:` and never `return` from it.\n- Only swallow if you deliberately want to replace the outcome — and then you must still return a valid `Response` from the endpoint, because the endpoint itself failed.\n\nNote: exact behavior varies by FastAPI version — since 0.106 the exit code runs before the response is sent (so raised exceptions can be handled), whereas older versions ran it after the response was already sent, meaning a swallowed exception had no visible effect on the response at all."
+    },
+    {
+      "id": "fa-15",
+      "question": "How do I close a dependency before the response is sent?",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "用 `Depends(scope=\"function\")`",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "默认 `\"request\"` 是在响应发出后才退出",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "In FastAPI, a `yield` dependency’s cleanup is managed by the framework—you can’t reliably force it to run “before the response is sent” from inside the dependency. If the close must happen before the response goes out, own the resource lifetime explicitly.\n\nUse one of these patterns:\n\n1. **Scope the resource inside the endpoint**\n```python\n@app.get(\"/items\")\nasync def read_items():\n    async with get_session() as session:   # closed before return\n        items = await load_items(session)\n        return items\n```\n\n2. **Return the dependency and close it explicitly before returning**\n```python\nasync def get_session():\n    return Session()\n\n@app.get(\"/items\")\nasync def read_items(session=Depends(get_session)):\n    try:\n        items = await load_items(session)\n        return items\n    finally:\n        await session.close()\n```\nMake sure the returned data is already serializable—don’t rely on lazy ORM access after closing.\n\n3. **Use middleware if the close must be centralized after the handler but before the response is returned**\n```python\n@app.middleware(\"http\")\nasync def close_resource_middleware(request, call_next):\n    resource = acquire_resource()\n    request.state.resource = resource\n    try:\n        response = await call_next(request)\n    finally:\n        await resource.close()\n    return response\n```\nThis is not suitable if the response streams data that still needs the resource.\n\nDo **not** use `BackgroundTasks` for this—it runs after the response is sent. For `StreamingResponse`, close in the stream generator’s `finally` when the stream finishes, or eagerly load everything before closing."
+    },
+    {
+      "id": "fa-16",
+      "question": "Which two extra responses does the custom items path document?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "一个 `404`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "一个 `403`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "The custom `/items/{item_id}` path documents two extra responses:\n\n- **404 Not Found** — item not found\n- **403 Forbidden** — not enough privileges"
+    },
+    {
+      "id": "fa-17",
+      "question": "How do I add a 418 response when including a router?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "用 `include_router` 的 `responses` 参数",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "响应码写 `418`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Assuming FastAPI’s `include_router`, you do two separate things:\n\n1. **Document a 418 response when including the router**  \n   Pass `responses` to `include_router`:\n\n```python\nfrom fastapi import APIRouter, FastAPI, status\nfrom fastapi.responses import JSONResponse\n\nrouter = APIRouter()\n\napp = FastAPI()\n\napp.include_router(\n    router,\n    prefix=\"/api\",\n    responses={418: {\"description\": \"I'm a teapot\"}},\n)\n```\n\nThis adds the 418 response to the OpenAPI docs for routes in that router. It does **not** make every route return 418.\n\n2. **Actually return HTTP 418 from an endpoint**\n\n```python\n@router.get(\"/teapot\", status_code=status.HTTP_418_IM_A_TEAPOT)\ndef teapot():\n    return {\"detail\": \"I'm a teapot\"}\n```\n\nOr with full control over body/headers:\n\n```python\n@router.get(\"/teapot-custom\")\ndef teapot_custom():\n    return JSONResponse(\n        status_code=418,\n        content={\"detail\": \"I'm a teapot\"},\n    )\n```\n\nIf you only want the 418 documented for one route, put `responses={418: {\"description\": \"I'm a teapot\"}}` on that route decorator instead of on `include_router`. Also make sure the router is included before any catch-all route that could shadow it."
+    },
+    {
+      "id": "fa-18",
+      "question": "What header format does a bearer token use?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "请求头是 `Authorization`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "值是 `Bearer ` 加 token",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Use the `Authorization` request header with the `Bearer` scheme:\n\n```\nAuthorization: Bearer <token>\n```\n\n- Header name: `Authorization`\n- Scheme: `Bearer`\n- One space between `Bearer` and the token\n- Do not wrap the token in quotes unless the API specifically requires it"
+    },
+    {
+      "id": "fa-19",
+      "question": "What happens if the Authorization header is missing?",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "直接返回 `401`（`UNAUTHORIZED`）",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "由 `OAuth2PasswordBearer` 负责检查",
+          "hit": false,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Typically the request is rejected before reaching your handler:\n\n1. **HTTP 401 Unauthorized** — the standard response when the `Authorization` header is absent on a protected endpoint. Some APIs use **403 Forbidden** instead, and OAuth 2.0 token endpoints return **400** with `invalid_request`.\n2. **`WWW-Authenticate` response header** — usually included (e.g. `Bearer realm=\"api\"`) to tell the client which scheme is expected.\n3. **Error body** — something like `{\"error\": \"unauthorized\", \"message\": \"Missing Authorization header\"}` with an error code (e.g. `401`, `MISSING_TOKEN`, `unauthorized`).\n4. **No processing occurs** — the request is short-circuited at the gateway/middleware layer; your business logic and any side effects don't run.\n5. **Exception:** if the endpoint is explicitly public (or the header is optional), the request proceeds normally as an anonymous/unauthenticated caller.\n\nIf you tell me which API or framework you're working with, I can confirm the exact status code and error shape it returns."
+    },
+    {
+      "id": "fa-20",
+      "question": "What does OAuth2PasswordBearer need to know about the login endpoint?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [],
+      "points": [
+        {
+          "point": "创建实例时传入 `tokenUrl` 参数",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "示例里是一个相对地址 `token`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "`OAuth2PasswordBearer` only needs the **URL of your login/token endpoint** (the `tokenUrl` argument). Everything else about that endpoint it does not know or care about.\n\n**What it needs**\n\n- `tokenUrl` — the path your app exposes to exchange username/password for a token, e.g. `OAuth2PasswordBearer(tokenUrl=\"/token\")` or `tokenUrl=\"token\"`. This is used *only* to populate the OpenAPI schema so Swagger UI's \"Authorize\" dialog knows where to POST the credentials. It does not make the call itself.\n\n**Optional settings**\n\n- `auto_error=True` (default) — raises a 401 with `WWW-Authenticate: Bearer` when the `Authorization: Bearer <token>` header is missing or malformed; set `False` to get `None` instead and handle it yourself.\n- `scheme_name`, `description` — cosmetic labels for the docs.\n- `scopes` — only relevant if you're using OAuth2 scopes.\n\n**What it does *not* need to know**\n\n- The request body format, credentials, or validation logic of the login endpoint.\n- How to verify the token — that's your own dependency's job.\n- The response shape — but by convention the endpoint must be declared with the OAuth2 password flow, accept `OAuth2PasswordRequestForm` (form-encoded `username`/`password`), and return `{\"access_token\": \"...\", \"token_type\": \"bearer\"}`.\n\n**Practical consequence**\n\nIf `tokenUrl` points to a route that isn't form-encoded or doesn't return `access_token`/`token_type`, Swagger's \"Authorize\" button will fail even though your code works via curl — the mismatch is a docs-time issue, not a runtime one for `OAuth2PasswordBearer` itself."
+    }
+  ]
+}

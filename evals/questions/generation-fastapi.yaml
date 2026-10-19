@@ -1,0 +1,150 @@
+# 生成层题集（知识库 A · FastAPI 官方 tutorial 15 篇）
+# 用途：评测 RAG 对英文官方文档的单跳事实问答与引用定位能力。
+# 判分方式：required_points 全部命中（要点里的英文标识符/数字须出现在回答中）
+#          ＋ must_cite 至少一个命中引用来源 ＋ must_not_say 一条都不许出现。
+# 说明：回答是英文，required_points 用中文写、只嵌必须出现的英文标识符与数字，
+#       避免 to / is / the 这类常见词也被当成必含原子。所有事实均取自 must_cite 文档原文。
+
+- id: fa-01
+  question: "Which command starts the dev server, and on which port?"
+  required_points:
+    - "启动命令是 `fastapi dev`"
+    - "服务跑在 `8000` 端口"
+  must_cite: ["tutorial__first-steps.md"]
+  must_not_say: ["runs on port 8080"]
+
+- id: fa-02
+  question: "Where do I see the raw OpenAPI schema, and which version is it?"
+  required_points:
+    - "地址是 `/openapi.json`"
+    - "版本号是 `3.1.0`"
+  must_cite: ["tutorial__first-steps.md"]
+  must_not_say: ["OpenAPI 3.0.0"]
+
+- id: fa-03
+  question: "I annotated item_id as int. What does /items/3 return?"
+  required_points:
+    - "`item_id` 是 `int` 类型的 `3`"
+    - "不是字符串，返回的仍是 `3`"
+  must_cite: ["tutorial__path-params.md"]
+
+- id: fa-04
+  question: "How do I accept a path that contains slashes as one parameter?"
+  required_points:
+    - "用 `{file_path:path}` 声明"
+    - "`:path` 后缀允许参数包含 `/`"
+  must_cite: ["tutorial__path-params.md"]
+
+- id: fa-05
+  question: "What are the default values of skip and limit?"
+  required_points:
+    - "`skip` 默认 `0`"
+    - "`limit` 默认 `10`"
+  must_cite: ["tutorial__query-params.md"]
+  must_not_say: ["limit defaults to 100"]
+
+- id: fa-06
+  question: "How do I cap a query parameter at 50 characters?"
+  required_points:
+    - "用 `Query(max_length=50)`"
+    - "放在 `Annotated` 里声明"
+  must_cite: ["tutorial__query-params-str-validations.md"]
+
+- id: fa-07
+  question: "Which FastAPI version added Annotated, and what should I upgrade to?"
+  required_points:
+    - "`Annotated` 从 `0.95.0` 开始支持"
+    - "旧版本至少升到 `0.95.1`"
+  must_cite: ["tutorial__query-params-str-validations.md"]
+
+- id: fa-08
+  question: "How minimal can a dependency be in the simplest example?"
+  required_points:
+    - "最简依赖只要 `2` 行"
+  must_cite: ["tutorial__dependencies__index.md"]
+
+- id: fa-09
+  question: "How do I declare a request body with validation?"
+  required_points:
+    - "用 Pydantic 的 `BaseModel` 子类"
+    - "模型从 `pydantic` 导入"
+  must_cite: ["tutorial__body.md"]
+
+- id: fa-10
+  question: "How do I wrap a single body model under an item key?"
+  required_points:
+    - "用 `Body(embed=True)`"
+    - "多一层 `item` 键"
+  must_cite: ["tutorial__body-multiple-params.md"]
+
+- id: fa-11
+  question: "Can a Python class be used as a dependency?"
+  required_points:
+    - "可以，依赖只要是 callable"
+    - "FastAPI 会解析 `__init__` 的参数"
+  must_cite: ["tutorial__dependencies__classes-as-dependencies.md"]
+
+- id: fa-12
+  question: "Is a shared sub-dependency called once per request?"
+  required_points:
+    - "`Depends` 默认缓存，同一请求只解析一次"
+    - "要每次都调用就设 `use_cache=False`"
+  must_cite: ["tutorial__dependencies__sub-dependencies.md"]
+  must_not_say: ["called multiple times per request"]
+
+- id: fa-13
+  question: "How do I run a dependency without using its return value?"
+  required_points:
+    - "用装饰器的 `dependencies` 参数传一个 `list`"
+    - "列表元素是 `Depends()`"
+  must_cite: ["tutorial__dependencies__dependencies-in-path-operation-decorators.md"]
+
+- id: fa-14
+  question: "What happens if a yield dependency swallows an exception?"
+  required_points:
+    - "客户端仍收到 `500` 错误"
+    - "服务端没有日志，必须重新 `raise`"
+  must_cite: ["tutorial__dependencies__dependencies-with-yield.md"]
+
+- id: fa-15
+  question: "How do I close a dependency before the response is sent?"
+  required_points:
+    - "用 `Depends(scope=\"function\")`"
+    - "默认 `\"request\"` 是在响应发出后才退出"
+  must_cite: ["tutorial__dependencies__dependencies-with-yield.md"]
+
+- id: fa-16
+  question: "Which two extra responses does the custom items path document?"
+  required_points:
+    - "一个 `404`"
+    - "一个 `403`"
+  must_cite: ["tutorial__bigger-applications.md"]
+
+- id: fa-17
+  question: "How do I add a 418 response when including a router?"
+  required_points:
+    - "用 `include_router` 的 `responses` 参数"
+    - "响应码写 `418`"
+  must_cite: ["tutorial__bigger-applications.md"]
+
+- id: fa-18
+  question: "What header format does a bearer token use?"
+  required_points:
+    - "请求头是 `Authorization`"
+    - "值是 `Bearer ` 加 token"
+  must_cite: ["tutorial__security__index.md"]
+
+- id: fa-19
+  question: "What happens if the Authorization header is missing?"
+  required_points:
+    - "直接返回 `401`（`UNAUTHORIZED`）"
+    - "由 `OAuth2PasswordBearer` 负责检查"
+  must_cite: ["tutorial__security__first-steps.md"]
+  must_not_say: ["returns a 403"]
+
+- id: fa-20
+  question: "What does OAuth2PasswordBearer need to know about the login endpoint?"
+  required_points:
+    - "创建实例时传入 `tokenUrl` 参数"
+    - "示例里是一个相对地址 `token`"
+  must_cite: ["tutorial__security__first-steps.md"]

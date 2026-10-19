@@ -525,9 +525,19 @@ class SpyChat:
         self._inner = inner
         self.calls = 0
 
-    async def stream(self, messages: Sequence[dict[str, str]]) -> Any:
+    # ⚠️ 必须**透传**而不是吞掉：生成层要的是真实回答，只有拒答层才断言"0 次"。
+    # ⚠️ **`usage` 也要透传**（2026-10-20 修）：`ChatClient.stream()` 在加 token 计量时
+    #    多了一个 `usage` 关键字参数，而这个包装器的签名没跟着改 —— 于是
+    #    `--layer generation` 会直接 `TypeError: stream() got an unexpected keyword
+    #    argument 'usage'`，而且它不在 `ModelAPIError` 的捕获范围内，整批会崩在那一行。
+    #    教训：**包装器的签名要盯住被包装对象**，否则对方"加个新参数"就静默炸在别的模块。
+    async def stream(
+        self,
+        messages: Sequence[dict[str, str]],
+        usage: dict[str, int] | None = None,
+    ) -> Any:
         self.calls += 1
-        async for piece in self._inner.stream(messages):
+        async for piece in self._inner.stream(messages, usage=usage):
             yield piece
 
 
@@ -580,9 +590,18 @@ def _load_items(path: Path) -> list[dict[str, Any]]:
     return raw
 
 
-async def _run_answer_layer(args: argparse.Namespace, *, layer: str) -> int:
+async def _run_answer_layer(
+    args: argparse.Namespace, *, layer: str, mode: str = "open"
+) -> list[AnswerResult]:
     settings = get_settings()
-    if layer == "generation":
+    if args.questions:
+        # 换一个题集（知识库 A 的题集与 B 库结构相同，只是文件不同）。
+        # ⚠️ 相对路径按**仓库根**解析，不按当前目录 —— 否则从 `evals\` 里跑就找不到。
+        qpath = Path(args.questions)
+        if not qpath.is_absolute():
+            qpath = (REPO_ROOT / qpath).resolve()
+        items = _load_items(qpath)
+    elif layer == "generation":
         items = _load_items(QUESTIONS_DIR / "generation.yaml")
     else:
         items = _load_items(QUESTIONS_DIR / "refusal.yaml")
@@ -593,7 +612,6 @@ async def _run_answer_layer(args: argparse.Namespace, *, layer: str) -> int:
     spy = SpyChat(chat)
     factory = get_session_factory()
     results: list[AnswerResult] = []
-    started = datetime.now(tz=UTC)
 
     try:
         async with factory() as session:
@@ -609,6 +627,8 @@ async def _run_answer_layer(args: argparse.Namespace, *, layer: str) -> int:
                     embedder=embedder,
                     reranker=reranker,
                     settings=settings,
+                    # 闭卷：同一段代码，只是不检索（见 `RagPipeline` 的 `closed_book`）
+                    closed_book=mode == "closed",
                 )
                 result = AnswerResult(
                     id=item["id"],
@@ -640,7 +660,9 @@ async def _run_answer_layer(args: argparse.Namespace, *, layer: str) -> int:
                         hit, weak = _point_hit(point, answer_norm)
                         result.points.append((point, hit, weak))
                     must_cite = item.get("must_cite", [])
-                    if must_cite:
+                    # ⚠️ 闭卷模式下**不判引用**：它压根没有检索，判"引用对"等于判它作弊。
+                    #    `cite_ok` 保持 None，`passed` 的判据就只看要点与禁语 —— 两组口径一致。
+                    if must_cite and mode == "open":
                         result.cite_ok = bool(set(must_cite) & set(result.cited))
                     for banned in item.get("must_not_say", []):
                         if _norm(banned) and _norm(banned) in answer_norm:
@@ -673,23 +695,27 @@ async def _run_answer_layer(args: argparse.Namespace, *, layer: str) -> int:
         await dispose_engine()
         await aclose_http_client()
 
-    return _report_answer_layer(results, layer=layer, settings=settings, args=args, started=started)
+    return results
 
 
 def _report_answer_layer(
     results: Sequence[AnswerResult],
     *,
     layer: str,
+    mode: str = "open",
     settings: Settings,
     args: argparse.Namespace,
     started: datetime,
-) -> int:
+) -> dict[str, Any]:
     print()
+    tag = "开卷（有检索证据）" if mode == "open" else "闭卷（无检索，凭模型自身知识）"
+    print(f"===== {args.kb} · {layer} · {tag} =====")
     if layer == "generation":
         ok = sum(1 for r in results if r.passed)
         strict = [r for r in results if r.weak_points == 0]
         strict_ok = sum(1 for r in strict if r.passed)
-        print(f"生成层：**{ok}/{len(results)} 题全通过**（要点全中 ＋ 引用对 ＋ 无禁语）")
+        rules = "要点全中 ＋ 无禁语" if mode == "closed" else "要点全中 ＋ 引用对 ＋ 无禁语"
+        print(f"生成层：**{ok}/{len(results)} 题全通过**（{rules}）")
         if strict:
             print(
                 f"  其中「全部要点都是数字型」的 {len(strict)} 题：{strict_ok}/{len(strict)} 通过"
@@ -722,14 +748,16 @@ def _report_answer_layer(
             if r.llm_calls != 0 and r.expect_refuse is not False:
                 print(f"  ⚠️ {r.id} 本该拒答却调了生成模型 {r.llm_calls} 次")
 
-    out = RESULTS_DIR / f"{layer}-{started.strftime('%Y%m%dT%H%M%SZ')}.json"
+    out = RESULTS_DIR / f"{layer}-{mode}-{started.strftime('%Y%m%dT%H%M%SZ')}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
         json.dumps(
             {
                 "kind": layer,
+                "mode": mode,
                 "generated_at": started.strftime("%Y%m%dT%H%M%SZ"),
                 "kb": args.kb,
+                "questions": args.questions or f"{layer}.yaml",
                 "llm_model": settings.llm_model,
                 "results": [
                     {
@@ -762,7 +790,60 @@ def _report_answer_layer(
         newline="\n",
     )
     print(f"\n结果已存：{out.relative_to(REPO_ROOT)}")
-    return 0
+    return _summarize(results, layer=layer, mode=mode, kb=args.kb, out=out)
+
+
+def _summarize(
+    results: Sequence[AnswerResult],
+    *,
+    layer: str,
+    mode: str,
+    kb: str,
+    out: Path,
+) -> dict[str, Any]:
+    """把一批结果压成对照表要用的几个数。**只统计，不重判。**
+
+    ⚠️ 指标口径（两组必须完全一致，否则"差值"没有意义）：
+
+        · **要点全中**：这题的每条要点都命中（不看引用）
+        · **出现禁语**：`must_not_say` 命中了任意一条 —— **这是幻觉的直证**
+        · **引用对**：只有开卷有意义；闭卷 `cite_ok` 恒为 `None`，这里如实报 `—`
+
+    为什么把"要点全中"和 `passed` 分开：`passed` 还包含"引用对"这一条，
+    闭卷拿不到引用、开卷要看引用 —— 用 `passed` 做跨组比较就是拿两把尺子量。
+    """
+    total = len(results)
+    errors = sum(1 for r in results if r.error is not None)
+    points_total = sum(r.points_total for r in results)
+    points_hit = sum(r.points_hit for r in results)
+    all_points = sum(1 for r in results if r.points_total and r.points_hit == r.points_total)
+    forbidden_q = sum(1 for r in results if r.forbidden_hit)
+    cite_checked = sum(1 for r in results if r.cite_ok is not None)
+    cite_ok = sum(1 for r in results if r.cite_ok)
+    #: 回答里出现了数字的题数。
+    #: ⚠️ 这是"幻觉"的**弱证据**，但它挡住了最容易被误读的一种解读：
+    #:    "闭卷答不上来" ≠ "闭卷在回避"。恰恰相反 —— 它照样给出具体数字（满 99 元包邮、
+    #:    同城 1~2 个工作日），只是**那些数字是编的**。而 `must_not_say` 那种整句子串
+    #:    匹配抓不住改写后的编造（见 `architecture.md` §9.34 的判分局限）。
+    answers_with_digits = sum(1 for r in results if re.search(r"\d", r.text))
+    return {
+        "layer": layer,
+        "mode": mode,
+        "kb": kb,
+        "total": total,
+        "errors": errors,
+        "all_points": all_points,
+        "all_points_rate": round(all_points / total, 4) if total else 0.0,
+        "points_hit": points_hit,
+        "points_total": points_total,
+        "points_rate": round(points_hit / points_total, 4) if points_total else 0.0,
+        "forbidden_questions": forbidden_q,
+        "forbidden_rate": round(forbidden_q / total, 4) if total else 0.0,
+        "answers_with_digits": answers_with_digits,
+        "cite_checked": cite_checked,
+        "cite_ok": cite_ok,
+        "result_file": str(out.relative_to(REPO_ROOT)),
+    }
 
 
 def _rescore_generation(args: argparse.Namespace) -> int:
@@ -807,19 +888,121 @@ def _rescore_generation(args: argparse.Namespace) -> int:
         results.append(result)
 
     print(f"重判 {path.name}（同一批回答、只换判分器）")
-    return _report_answer_layer(
+    _report_answer_layer(
         results,
         layer="generation",
         settings=get_settings(),
         args=args,
         started=datetime.now(tz=UTC),
     )
+    return 0
 
 
-async def _run_all_answer_layers(args: argparse.Namespace) -> int:
-    rc = await _run_answer_layer(args, layer="generation")
-    rc2 = await _run_answer_layer(args, layer="refusal")
-    return rc or rc2
+def _modes(arg: str, *, layer: str) -> tuple[str, ...]:
+    """这一层要跑哪几种模式。
+
+    ⚠️ **拒答层只有开卷**：它的定义就是"检索到的证据够不够 → 要不要拒答"。
+       闭卷没有候选、也没有分数，硬跑只会得到"全部拒答"，是假满分。
+    """
+    if layer == "refusal":
+        if arg == "closed":
+            raise SystemExit("拒答层只有开卷：闭卷没有检索分数，无从判拒答")
+        return ("open",)
+    if arg == "both":
+        return ("open", "closed")
+    return ("open",) if arg == "open" else ("closed",)
+
+
+def _print_contrast(summaries: Sequence[dict[str, Any]], *, kb: str, layer: str) -> None:
+    """打印闭卷 / 开卷对照表 —— 这就是「对照实验」的结论页。"""
+    print()
+    print(f"===== 对照：{kb} · {layer} =====")
+    print(
+        f"{'模式':<8}{'要点全中':>10}{'要点命中率':>12}"
+        f"{'含数字回答':>12}{'出现禁语':>10}{'引用对':>12}"
+    )
+    print("-" * 66)
+    for row in summaries:
+        cite = (
+            f"{row['cite_ok']}/{row['cite_checked']}" if row["cite_checked"] else "—（闭卷无引用）"
+        )
+        print(
+            f"{row['mode']:<8}{row['all_points']:>6}/{row['total']:<3}"
+            f"{row['points_rate']:>11.1%}"
+            f"{row['answers_with_digits']:>8}/{row['total']:<3}"
+            f"{row['forbidden_questions']:>7}/{row['total']:<2}"
+            f"{cite:>12}"
+        )
+    by_mode = {row["mode"]: row for row in summaries}
+    if {"open", "closed"} <= set(by_mode):
+        opened, closed = by_mode["open"], by_mode["closed"]
+        delta = opened["all_points_rate"] - closed["all_points_rate"]
+        print(
+            f"\n要点全中率：开卷 {opened['all_points_rate']:.1%} − "
+            f"闭卷 {closed['all_points_rate']:.1%} = **＋{delta:.1%}**"
+        )
+        # ⚠️ 这一行才是"幻觉"的证据：闭卷**没有回避**（照样给出具体数字），
+        #    但那些数字是编的 —— 所以它同时"很自信"且"要点命中率很低"。
+        print(
+            f"含数字的回答：闭卷 {closed['answers_with_digits']}/{closed['total']} · "
+            f"开卷 {opened['answers_with_digits']}/{opened['total']}"
+            "　⟹ 闭卷不是「说不出」，是**自信地编**"
+        )
+        print(
+            f"出现禁语的题数：闭卷 {closed['forbidden_questions']} → "
+            f"开卷 {opened['forbidden_questions']}"
+        )
+    print()
+
+
+def _dump_contrast(
+    summaries: Sequence[dict[str, Any]], *, kb: str, layer: str, started: datetime
+) -> Path:
+    """把两组的汇总数写成一个文件（逐题回答仍在各自的 `{layer}-{mode}-*.json` 里）。"""
+    out = RESULTS_DIR / f"contrast-{kb}-{layer}-{started.strftime('%Y%m%dT%H%M%SZ')}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "kind": f"{layer}-contrast",
+        "kb": kb,
+        "generated_at": started.strftime("%Y%m%dT%H%M%SZ"),
+        "note": (
+            "闭卷 = 关掉检索、只让模型凭自身知识回答（app/rag/pipeline.py 的 closed_book）；"
+            "开卷 = 线上的完整链路。两组用同一批题、同一个模型、同一个判分器。"
+        ),
+        "rows": list(summaries),
+    }
+    out.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
+    return out
+
+
+async def _run_answer_layers(args: argparse.Namespace) -> int:
+    """按 `--layer` / `--mode` 跑，每次跑完立刻落盘。
+
+    `--mode both` 时依次跑开卷、闭卷，再打一张对照表。
+    ⚠️ 顺序固定为**先开卷后闭卷**：开卷是线上真实链路，先拿到的是"真实表现"，
+       闭卷是对照；顺序反过来容易在出异常时把对照当成主结果。
+    """
+    layers = ("generation", "refusal") if args.layer == "all" else (args.layer,)
+    for layer in layers:
+        stamp = datetime.now(tz=UTC)
+        summaries = [
+            _report_answer_layer(
+                await _run_answer_layer(args, layer=layer, mode=mode),
+                layer=layer,
+                mode=mode,
+                settings=get_settings(),
+                args=args,
+                started=stamp,
+            )
+            for mode in _modes(args.mode, layer=layer)
+        ]
+        if len(summaries) > 1:
+            _print_contrast(summaries, kb=args.kb, layer=layer)
+            out = _dump_contrast(summaries, kb=args.kb, layer=layer, started=stamp)
+            print(f"对照汇总已存：{out.relative_to(REPO_ROOT)}")
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -831,6 +1014,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="哪一层（all 只跑 generation + refusal；retrieval 单独跑）",
     )
     parser.add_argument("--kb", default="senyu", help="知识库前缀（ingest 时 --kb 的值）")
+    parser.add_argument(
+        "--mode",
+        default="open",
+        choices=["open", "closed", "both"],
+        help=(
+            "open=线上链路（检索＋精排＋拒答）；"
+            "closed=闭卷对照（关掉检索，模型凭自身知识答）；"
+            "both=两组都跑并打一张对照表"
+        ),
+    )
     parser.add_argument("--top-k", type=int, default=5, help="hit@k 的 k")
     parser.add_argument("--only", default="all", choices=["all", *ABLATIONS], help="只跑某一组消融")
     parser.add_argument("--limit", type=int, default=0, help="只跑前 N 题（试水用）")
@@ -852,9 +1045,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _rescore_generation(args)
     if args.layer == "retrieval":
         return asyncio.run(_run_retrieval(args))
-    if args.layer in ("generation", "refusal"):
-        return asyncio.run(_run_answer_layer(args, layer=args.layer))
-    return asyncio.run(_run_all_answer_layers(args))
+    return asyncio.run(_run_answer_layers(args))
 
 
 if __name__ == "__main__":

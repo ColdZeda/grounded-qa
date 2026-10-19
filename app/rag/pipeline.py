@@ -148,6 +148,7 @@ class RagPipeline:
         embedder: EmbeddingClient | None = None,
         reranker: RerankClient | None = None,
         settings: Settings | None = None,
+        closed_book: bool = False,
     ) -> None:
         self._session = session
         self._tenant_id = tenant_id
@@ -155,6 +156,13 @@ class RagPipeline:
         self._embedder = embedder
         self._reranker = reranker
         self._settings = settings or get_settings()
+        #: **闭卷**：完全跳过检索，直接让模型凭自身知识回答。
+        #: ⚠️ 只给评测的对照组用（`evals\run.py --mode closed`），**线上永远是 `False`** ——
+        #:    这个开关存在的意义是让"有证据"与"没证据"跑**同一段代码**，
+        #:    否则对照组和被试组的差异里会混进"两套实现"的噪音。
+        #:    为什么闭卷不能同时保留拒答：拒答阈值挂在检索分数上，没有检索就没有分数，
+        #:    "一律拒答"会让对照组恒为 0 分 —— 那不是基线，那是不及格。
+        self._closed_book = closed_book
 
     # ---------- 检索 ----------
 
@@ -242,23 +250,31 @@ class RagPipeline:
         started = time.perf_counter()
         settings = self._settings
 
-        hits, confidence, score_kind = await self._retrieve(question)
-        hits = hits[: settings.rerank_top_n]
+        if self._closed_book:
+            # ---- 闭卷：不检索、不判拒答、没有引用 ----
+            hits: list[RetrievedChunk] = []
+            confidence: float | None = None
+            score_kind = "closed_book"
+            citations: list[Citation] = []
+            refused = False
+        else:
+            hits, confidence, score_kind = await self._retrieve(question)
+            hits = hits[: settings.rerank_top_n]
 
-        refused = self._should_refuse(hits, confidence, score_kind)
-        # 引用卡片上的分数口径：`none` 只可能是"纯全文命中"，那就是 trgm 分数
-        citation_kind = "fulltext_trgm" if score_kind == "none" else score_kind
-        citations = [
-            Citation(
-                index=index,
-                chunk_id=hit.chunk_id,
-                document_id=hit.document_id,
-                score=hit.score,
-                snippet=prompt_module.make_snippet(hit.content),
-                score_kind=citation_kind,
-            )
-            for index, hit in enumerate(hits, start=1)
-        ]
+            refused = self._should_refuse(hits, confidence, score_kind)
+            # 引用卡片上的分数口径：`none` 只可能是"纯全文命中"，那就是 trgm 分数
+            citation_kind = "fulltext_trgm" if score_kind == "none" else score_kind
+            citations = [
+                Citation(
+                    index=index,
+                    chunk_id=hit.chunk_id,
+                    document_id=hit.document_id,
+                    score=hit.score,
+                    snippet=prompt_module.make_snippet(hit.content),
+                    score_kind=citation_kind,
+                )
+                for index, hit in enumerate(hits, start=1)
+            ]
 
         yield Sources(citations=citations, confidence=confidence, refused=refused)
 
@@ -282,7 +298,11 @@ class RagPipeline:
             )
             return
 
-        messages = prompt_module.build_messages(question=question, hits=hits, history=history)
+        messages = (
+            prompt_module.build_closed_book_messages(question=question, history=history)
+            if self._closed_book
+            else prompt_module.build_messages(question=question, hits=hits, history=history)
+        )
         collected: list[str] = []
         error: str | None = None
         # ⚠️ usage 用**每次回答自己的**字典收集（不是客户端上的属性）：

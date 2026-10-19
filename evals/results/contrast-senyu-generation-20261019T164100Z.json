@@ -1,0 +1,44 @@
+{
+  "kind": "generation-contrast",
+  "kb": "senyu",
+  "generated_at": "20261019T164100Z",
+  "note": "闭卷 = 关掉检索、只让模型凭自身知识回答（app/rag/pipeline.py 的 closed_book）；开卷 = 线上的完整链路。两组用同一批题、同一个模型、同一个判分器。",
+  "rows": [
+    {
+      "layer": "generation",
+      "mode": "open",
+      "kb": "senyu",
+      "total": 20,
+      "errors": 0,
+      "all_points": 14,
+      "all_points_rate": 0.7,
+      "points_hit": 69,
+      "points_total": 76,
+      "points_rate": 0.9079,
+      "forbidden_questions": 0,
+      "forbidden_rate": 0.0,
+      "answers_with_digits": 20,
+      "cite_checked": 20,
+      "cite_ok": 20,
+      "result_file": "evals\\results\\generation-open-20261019T164100Z.json"
+    },
+    {
+      "layer": "generation",
+      "mode": "closed",
+      "kb": "senyu",
+      "total": 20,
+      "errors": 0,
+      "all_points": 1,
+      "all_points_rate": 0.05,
+      "points_hit": 20,
+      "points_total": 76,
+      "points_rate": 0.2632,
+      "forbidden_questions": 0,
+      "forbidden_rate": 0.0,
+      "answers_with_digits": 18,
+      "cite_checked": 0,
+      "cite_ok": 0,
+      "result_file": "evals\\results\\generation-closed-20261019T164100Z.json"
+    }
+  ]
+}

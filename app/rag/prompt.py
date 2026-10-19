@@ -41,6 +41,30 @@ SYSTEM_PROMPT = """你是一个严谨的企业知识库问答助手。
 """
 
 
+#: **闭卷**（关掉检索）时用的提示词。只用于评测的对照组，线上不走这里。
+#:
+#: ⚠️ **为什么不能复用 `SYSTEM_PROMPT`、把【参考资料】填成"（无）"**：
+#:    那份提示词的第 1、3 条写着"只依据参考资料""资料不足就说资料不足" ——
+#:    于是模型会**照着提示词把每道题都拒掉**，测出来的是"提示词服从性"，
+#:    而不是"模型自己记住了多少"。闭卷要测的是**参数化记忆**（model prior），
+#:    所以必须给它一份允许动用先验知识的提示词。
+#:
+#: ⚠️ **偏差方向要写清楚（诚实优先）**：第 2 条允许它在不确定时给出最佳猜测 ——
+#:    这确实把闭卷推向"更容易编"。但这不是抹黑对手：一个不用 RAG 的模型，
+#:    在真实客服场景里就是这么表现的（它不会因为不知道就闭嘴）。
+#:    想量"不许猜"的极限，那是另一组实验（结果恒为"全部拒答"，没有信息量）。
+#:
+#: 📌 与开卷提示词**只在"有没有证据"这一件事上不同**：语言、简洁分点、不提内部词汇
+#:    这三条要求两边一模一样，否则差值里会混进"提示词风格"的成分。
+CLOSED_BOOK_SYSTEM_PROMPT = """你是一个企业客服问答助手。
+
+回答规则：
+1. 直接回答用户的问题；不要提及"参考资料""上下文""检索"这类内部词汇。
+2. 如果你不确定，可以说明不确定，但请给出你认为最可能的回答。
+3. 回答使用与提问相同的语言，简洁、分点、可直接执行。
+"""
+
+
 def build_context(hits: Sequence[RetrievedChunk], *, max_chars_per_chunk: int = 1200) -> str:
     """把命中的 chunk 拼成带编号的参考资料。
 
@@ -82,6 +106,25 @@ def build_messages(
             "content": SYSTEM_PROMPT.format(context=build_context(hits)),
         }
     ]
+    messages.extend({"role": item["role"], "content": item["content"]} for item in history)
+    messages.append({"role": "user", "content": question})
+    return messages
+
+
+def build_closed_book_messages(
+    *,
+    question: str,
+    history: Sequence[dict[str, str]] = (),
+) -> list[dict[str, str]]:
+    """组装**闭卷**请求的 messages（没有检索、没有引用）。
+
+    与 `build_messages` 的唯一差别是 system 里没有【参考资料】那一段 ——
+    历史与用户消息的拼法保持一致，这样两组对照的差异只剩"有没有证据"。
+
+    ⚠️ 闭卷不存在引用，所以提示词里也**没有**"标注 `[n]`"这条要求：
+        给了编号规则却没有编号可用，模型会开始**编编号**，判分时又得额外过滤。
+    """
+    messages: list[dict[str, str]] = [{"role": "system", "content": CLOSED_BOOK_SYSTEM_PROMPT}]
     messages.extend({"role": item["role"], "content": item["content"]} for item in history)
     messages.append({"role": "user", "content": question})
     return messages

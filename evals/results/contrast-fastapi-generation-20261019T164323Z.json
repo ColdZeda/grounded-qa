@@ -1,0 +1,44 @@
+{
+  "kind": "generation-contrast",
+  "kb": "fastapi",
+  "generated_at": "20261019T164323Z",
+  "note": "闭卷 = 关掉检索、只让模型凭自身知识回答（app/rag/pipeline.py 的 closed_book）；开卷 = 线上的完整链路。两组用同一批题、同一个模型、同一个判分器。",
+  "rows": [
+    {
+      "layer": "generation",
+      "mode": "open",
+      "kb": "fastapi",
+      "total": 20,
+      "errors": 0,
+      "all_points": 18,
+      "all_points_rate": 0.9,
+      "points_hit": 37,
+      "points_total": 39,
+      "points_rate": 0.9487,
+      "forbidden_questions": 0,
+      "forbidden_rate": 0.0,
+      "answers_with_digits": 20,
+      "cite_checked": 20,
+      "cite_ok": 20,
+      "result_file": "evals\\results\\generation-open-20261019T164323Z.json"
+    },
+    {
+      "layer": "generation",
+      "mode": "closed",
+      "kb": "fastapi",
+      "total": 20,
+      "errors": 0,
+      "all_points": 13,
+      "all_points_rate": 0.65,
+      "points_hit": 31,
+      "points_total": 39,
+      "points_rate": 0.7949,
+      "forbidden_questions": 0,
+      "forbidden_rate": 0.0,
+      "answers_with_digits": 16,
+      "cite_checked": 0,
+      "cite_ok": 0,
+      "result_file": "evals\\results\\generation-closed-20261019T164323Z.json"
+    }
+  ]
+}
