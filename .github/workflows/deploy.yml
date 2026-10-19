@@ -161,6 +161,9 @@ jobs:
           scp docker-compose.prod.yml        target:$REMOTE_DIR/docker-compose.prod.yml
           scp deploy/nginx/grounded-qa.conf  target:$REMOTE_DIR/deploy/nginx/grounded-qa.conf
           scp deploy/prometheus/prometheus.yml target:$REMOTE_DIR/deploy/prometheus/prometheus.yml
+          # ⚠️ 告警规则必须**和 prometheus.yml 同一次**过去：`rule_files:` 指向它，
+          #    只传 prometheus.yml 的话 Prometheus 会因为找不到规则文件而**起不来**。
+          scp deploy/prometheus/alerts.yml   target:$REMOTE_DIR/deploy/prometheus/alerts.yml
           echo "ℹ️ 服务器上的 .env 由人工维护，CI 绝不覆盖（每个环境一份独立 .env）"
 
       - name: 记录回滚点（当前版本标签）
@@ -282,6 +285,18 @@ jobs:
           done
           echo "❌ 健康检查超时"
           exit 1
+
+      - name: 重载 Prometheus 规则（幂等）
+        # ⚠️ **为什么必须有这一步**：`prometheus.yml` / `alerts.yml` 是**挂载进容器**的，
+        #    改文件**不会**让 compose 认为服务定义变了（bind mount 的源路径没变）⟹
+        #    `up -d` 不会重建 prometheus，进程里还是**旧配置**。
+        #    这里显式打一下 `/-/reload`（compose 已开 `--web.enable-lifecycle`）。
+        # ⚠️ 9090 **没有发布到宿主机**，所以只能在容器里打 —— 从宿主机 curl 是连不上的。
+        # ⚠️ 失败不算部署失败：容器可能还没起稳，或这次没动监控（回滚到 v1.0 时就没有它）。
+        run: |
+          ssh target "docker exec gq-prometheus wget -qO- --post-data='' http://127.0.0.1:9090/-/reload" \
+            && echo "✅ Prometheus 已重载规则" \
+            || echo "ℹ️ 跳过（prometheus 不存在或还没起稳）"
 
       - name: 部署成功 → 记录当前版本
         if: success()

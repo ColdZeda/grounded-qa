@@ -1,0 +1,42 @@
+# ============================================================
+# Prometheus 告警规则（v1.1）
+# ------------------------------------------------------------
+# ⚠️ **只有两条**，而且都是「静默降级」那一类 —— 就是"服务还活着、接口还 200，
+#    但某件事已经不对了"。这类病**只能靠盯指标发现**，这也是我们做可观测的理由。
+#
+# ⚠️ **每条都要打 `metric` 标签**：告警搬运工（`app/core/alerts.py`）只从 labels
+#    里取白名单字段写进消息；没有这个标签，消息里就只剩"某条规则响了"，
+#    运维得自己回 Prometheus 查是哪条 expr。
+#
+# ⚠️ **不用 annotations 写自由文案**：那是最容易把业务内容（用户提问、知识库片段）
+#    顺手带进群聊的地方。消息只由 `metric` + `job` + 当前值 + 时间拼出来。
+# ============================================================
+
+groups:
+  - name: grounded-qa
+    rules:
+      # ---------- ① API 抓不到了 ----------
+      # 判据：Prometheus 连续 1 分钟抓不到 api:8000/metrics。
+      # 这一条**不代表**站点挂了（nginx 可能还在服务静态页），但意味着
+      # 「我们看不见它了」—— 看板会开始空白，所以要先知道。
+      - alert: ApiScrapeDown
+        expr: up{job="grounded-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          metric: up
+        annotations:
+          summary: Prometheus 抓不到 API 的 /metrics
+
+      # ---------- ② 限额计量静默失效 ----------
+      # 判据：Redis 不可用导致限流/配额**放行**的次数在涨。
+      # ⚠️ 这条比"限流生效了几次"重要得多：放行是**不报错的**，
+      #    账单会照付、配额会形同虚设，而接口一切正常。
+      - alert: LimitMeteringBroken
+        expr: increase(gq_limit_failopen_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+          metric: gq_limit_failopen_total
+        annotations:
+          summary: 限流 / 配额因 Redis 不可用而放行（计量不再可信）

@@ -9,6 +9,16 @@ global:
   scrape_timeout: 10s
   evaluation_interval: 30s
 
+# ⚠️ **告警规则**（v1.1）：Prometheus 在这里只负责**算出** firing 状态；
+#    真正"推给人"的是 `app/core/alerts.py` 里的搬运工（每 60 秒读 `/api/v1/alerts`）。
+#    所以我们**不引 Alertmanager** —— 代价是没有分组 / 静默 / 抑制（见 architecture §9.30）。
+# ⚠️ 改了规则要让它重新加载：`curl -X POST http://prometheus:9090/-/reload`
+#    （compose 已开 `--web.enable-lifecycle`；容器重启也会读）。
+# ⚠️ 这个文件必须**和 alerts.yml 一起挂进容器**，否则 Prometheus 会以
+#    "no such file" 起不来 —— 部署链里两个文件是**同一次 scp** 过去的。
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   # 自研 API 的业务指标（/metrics 由 prometheus_client 暴露）
   - job_name: grounded-api

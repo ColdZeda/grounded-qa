@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from redis.exceptions import RedisError
 
@@ -24,7 +25,8 @@ class FakeRedis:
     """内存字典，带过期时间。**键的语义与真 Redis 一致**（过期后 `get` 返回 `None`）。"""
 
     def __init__(self, *, broken: bool = False) -> None:
-        self.data: dict[str, int] = {}
+        #: 计数存 int、集合（告警去重）存 set[str] —— 所以是 `Any` 而不是 `int`。
+        self.data: dict[str, Any] = {}
         self.expires_at: dict[str, float] = {}
         #: 置 True 后所有命令都抛 `RedisError` —— 验证 fail-open 用。
         self.broken = broken
@@ -72,6 +74,32 @@ class FakeRedis:
         if not self._live(key):
             return None
         return self.data.get(key)
+
+    # ---------- 集合（告警去重用）----------
+    # ⚠️ 真 Redis 的 `smembers` 返回 `set[str]`（我们的连接是 `decode_responses=True`），
+    #    这里保持一致 —— 否则代码里多一个 `.decode()` 只在测试里不炸。
+    async def sadd(self, key: str, *members: str) -> int:
+        self._guard("sadd", key)
+        bucket = self.data.setdefault(key, set())
+        before = len(bucket)
+        bucket.update(members)
+        return len(bucket) - before
+
+    async def smembers(self, key: str) -> set[str]:
+        self._guard("smembers", key)
+        if not self._live(key):
+            return set()
+        return set(self.data.get(key) or set())
+
+    async def srem(self, key: str, *members: str) -> int:
+        self._guard("srem", key)
+        bucket = self.data.get(key) or set()
+        removed = 0
+        for member in members:
+            if member in bucket:
+                bucket.discard(member)
+                removed += 1
+        return removed
 
     # ---------- 测试便利 ----------
     def seed(self, key: str, value: int) -> None:

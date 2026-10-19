@@ -181,6 +181,9 @@ services:
       - --web.enable-lifecycle
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # 告警规则。⚠️ 和 prometheus.yml 是**两个文件、同一次 scp** 过去的 ——
+      # 只挂 prometheus.yml 时 `rule_files:` 指向不存在的文件，Prometheus **起不来**。
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - promdata:/prometheus
     expose:
       - "9090"

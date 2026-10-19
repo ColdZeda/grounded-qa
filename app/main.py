@@ -13,21 +13,23 @@ v1.0 已落地：
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.router import api_router
+from app.core.alerts import start_shipper
 from app.core.config import get_settings, warn_if_rerank_calibration_missing
 from app.core.limits import RateLimitedError
 from app.core.metrics import MetricsMiddleware
 from app.db.checks import warn_if_embedding_lock_mismatch, warn_if_fulltext_degraded
 from app.db.session import dispose_engine
 from app.rag.providers import aclose_http_client
-from app.workers.queue import aclose_redis
+from app.workers.queue import aclose_redis, get_redis
 
 
 @asynccontextmanager
@@ -47,11 +49,21 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         PostgreSQL 那边要等 TCP 超时才知道对端没了，期间连接数一直占着。
         容器滚动更新频繁时会把数据库的连接数堆满。
         HTTP 客户端（打模型 API 的那个）同理 —— 留着不关，优雅退出会被拖住。
+
+    ⚠️ **告警搬运工**（`app/core/alerts.py`）也是在这里起停的：
+        没配 `ALERT_WEBHOOK_URL` 时 `start_shipper` 返回 `None`（**不轮询、不报错**）；
+        退出时必须 `cancel()` 并 await，否则 SIGTERM 之后它会继续持有 Redis 连接，
+        进程要等一个轮询周期才退 —— 滚动更新时表现为"部署变慢 60 秒"。
     """
     warn_if_rerank_calibration_missing()
     await warn_if_fulltext_degraded()
     await warn_if_embedding_lock_mismatch()
+    shipper = start_shipper(get_settings(), get_redis())
     yield
+    if shipper is not None:
+        shipper.cancel()
+        with suppress(asyncio.CancelledError):
+            await shipper
     await aclose_http_client()
     await aclose_redis()
     await dispose_engine()

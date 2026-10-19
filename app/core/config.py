@@ -261,6 +261,12 @@ class Settings(BaseSettings):
     #: ⚠️ 与 `deploy/prometheus/prometheus.yml` 的 `scrape_interval` 是**两份配置**，
     #:    改一处就要改另一处；写成配置而不是散在代码里，至少只有一处常量。
     prometheus_scrape_interval_s: int = 30
+    #: 告警推送的群机器人地址（飞书 / 企微，按 URL 域名自动判格式）。
+    #: ⚠️ **空值 = 关闭**（只打一行日志、不轮询）—— 没配就报错会把"能用"变成"起不来"。
+    #: ⚠️ 它是**凭据**：只从 `.env` 读，**不打印、不进日志、不进仓库**。
+    alert_webhook_url: str = ""
+    #: 搬运工的轮询周期（秒）。比抓取周期长：告警状态本来以分钟计。
+    alert_poll_interval_s: int = 60
 
     @property
     def postgres_effective_port(self) -> int:
