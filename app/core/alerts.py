@@ -257,7 +257,11 @@ class AlertShipper:
 def start_shipper(settings: Settings, redis: Redis) -> asyncio.Task[None] | None:
     """按配置决定要不要起搬运工。**没配 webhook 就返回 None**（不轮询、不报错）。"""
     if not settings.alert_webhook_url.strip():
-        logger.info("告警未配置（ALERT_WEBHOOK_URL 为空）—— 跳过告警轮询，其余功能照旧")
+        # ⚠️ 用 **warning** 而不是 info：本项目没有配 logging handler（`uvicorn` 只配它自己的
+        #    logger，我们的 logger 只有 `lastResort` 兜底 = WARNING 以上才可见）。
+        #    这条恰好是"值得知道"的状态 —— 没配就等于**告警永远不会推到人手上**，
+        #    静默跳过才是真问题。2026-10-19 上线时因为用了 info，容器日志里一个字都看不到。
+        logger.warning("告警未配置（ALERT_WEBHOOK_URL 为空）—— 跳过告警轮询，其余功能照旧")
         return None
 
     shipper = AlertShipper(settings, redis)
