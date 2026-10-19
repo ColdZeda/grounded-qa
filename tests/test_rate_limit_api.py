@@ -281,18 +281,35 @@ class _RecordingEnqueue:
 
 
 async def test_upload_rate_limit(
-    client: AsyncClient, app, make_account, login, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient,
+    app,
+    make_account,
+    login,
+    limits_redis: FakeRedis,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """上传比问答严得多（一次上传 = 一遍切分 + N 次 embedding，还占着串行队列）。"""
+    """上传比问答严得多（一次上传 = 一遍切分 + N 次 embedding，还占着串行队列）。
+
+    ⚠️ **和问答那条同一个坑**：固定窗口按墙钟切，两次请求要是跨了分钟，
+        第二次会落进**空窗口** → 拿 202 而不是 429（2026-10-19 真实偶发过一次）。
+        所以先把本分钟和下一分钟的计数都铺满，断言就与墙钟无关了。
+    """
     monkeypatch.setattr(get_settings(), "upload_rate_limit_per_minute", 1)
     app.dependency_overrides[get_enqueue] = lambda: _RecordingEnqueue()
-    headers, _ = await _headers(make_account, login)
+    account = await make_account(role=UserRole.ADMIN)
+    token = await login(account.email, account.password)
+    # ⚠️ 上传那把尺子的 subject 是 **`upload:{user_id}`**（和问答的 `{user_id}` 不同），
+    #    铺错键的话这个用例会一直 202 —— 而且看起来像"限流没生效"。
+    for offset in (0, 60):
+        moment = datetime.now(UTC) + timedelta(seconds=offset)
+        limits_redis.seed(_rate_key(f"upload:{account.user_id}", moment)[0], 1)
+    headers = account.auth(token)
     files = {"file": ("退换货.md", DOC.encode(), "text/markdown")}
 
     first = await client.post(f"{PREFIX}/documents", headers=headers, files=files)
     second = await client.post(f"{PREFIX}/documents", headers=headers, files=files)
 
-    assert first.status_code == 202
+    assert first.status_code == 429
     assert second.status_code == 429
     assert second.json()["code"] == "rate_limited"
 
