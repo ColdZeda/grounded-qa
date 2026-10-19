@@ -111,6 +111,33 @@ def build_payload(url: str, text: str) -> dict[str, Any]:
     return {"msgtype": "text", "text": {"content": text}}
 
 
+def _check_delivery(kind: str, response: httpx.Response) -> None:
+    """⚠️ **校验业务码** —— 这两个接口在"拒绝发送"时**依然回 HTTP 200**。
+
+    2026-10-19 的坑：飞书 webhook 被 IP 白名单拦下、或 keyword / 签名不对时，
+    返回的是 `200 {"code":19021,"msg":"sign match fail ..."}`；企微同理
+    （`{"errcode":93000,...}`）。只看状态码会把它当成"已投递"，
+    于是**记账成功、消息没到、而且永远不会重推** —— 正是这个模块最怕的那类静默。
+
+    ⚠️ 解析不出 JSON 时**按成功处理**（只记一条 warning）：那更可能是我们自己的解析问题
+        （比如中间有代理改写了响应），无限重试同样会把告警淹掉。
+    """
+    expected = "code" if kind == "feishu" else "errcode"
+    try:
+        body = response.json()
+    except ValueError:
+        logger.warning("告警投递结果不是 JSON，按成功处理（HTTP %s）", response.status_code)
+        return
+    if not isinstance(body, dict):
+        return
+    code = body.get(expected, body.get("code", body.get("errcode", 0)))
+    if code not in (0, "0", None):
+        # ⚠️ 只带错误码与 msg —— **绝不打印 URL**（它就是凭据）
+        raise RuntimeError(
+            f"群机器人拒绝投递：{expected}={code} msg={body.get('msg') or body.get('errmsg')}"
+        )
+
+
 def format_message(alert: Alert, *, resolved: bool) -> str:
     """一句话告警。**只有服务名 / 指标名 / 当前值 / 时间**，没有别的。"""
     now = datetime.now(SHANGHAI).strftime("%Y-%m-%d %H:%M:%S")
@@ -195,8 +222,11 @@ class AlertShipper:
     async def _push(self, text: str) -> None:
         assert self._client is not None
         url = self.settings.alert_webhook_url.strip()
+        kind = webhook_kind(url)
         response = await self._client.post(url, json=build_payload(url, text))
         response.raise_for_status()
+        # ⚠️ **HTTP 200 不等于投递成功**（2026-10-19 发现的坑，见 `_check_delivery`）
+        _check_delivery(kind, response)
 
     # ---------- 主流程 ----------
     async def poll_once(self) -> tuple[int, int]:

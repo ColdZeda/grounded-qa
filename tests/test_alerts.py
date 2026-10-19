@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+import pytest
 
 from app.core.alerts import (
     ACTIVE_KEY,
@@ -200,6 +201,54 @@ async def test_poll_does_not_mark_when_push_fails() -> None:
             raise AssertionError("推送失败必须抛出去，让调用方（run 循环）下一轮重试")
 
     assert await redis.smembers(ACTIVE_KEY) == set()
+
+
+async def test_poll_does_not_mark_when_webhook_rejects_with_200() -> None:
+    """⚠️ **HTTP 200 也可能是拒绝**：飞书 / 企微把错误放在 body 的 code 里。
+
+    2026-10-19 推演到的形状：IP 白名单没放行 / 关键词不匹配 →
+    `200 {"code":19021,...}`。只看状态码就会记成"已投递"，
+    于是**消息没到、而且永远不会重推**（静默丢失）。
+    """
+    redis = FakeRedis()
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json={"code": 19021, "msg": "sign match fail"})
+        )
+    )
+
+    async with AlertShipper(_settings(), redis, client=client) as shipper:
+
+        async def _fetch() -> list[Alert]:
+            return parse_alerts(_prom_payload(_firing()))
+
+        shipper._fetch_firing = _fetch  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError, match="19021"):
+            await shipper.poll_once()
+
+    # 关键断言：**没有记账** ⟹ 下一轮还会重试
+    assert await redis.smembers(ACTIVE_KEY) == set()
+
+
+async def test_poll_marks_when_wecom_returns_errcode_zero() -> None:
+    """企微的成功形状是 `{"errcode":0}` —— 也要认，别把成功当失败。"""
+    redis = FakeRedis()
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={"errcode": 0}))
+    )
+
+    async with AlertShipper(
+        _settings(alert_webhook_url=WECOM_URL), redis, client=client
+    ) as shipper:
+
+        async def _fetch() -> list[Alert]:
+            return parse_alerts(_prom_payload(_firing()))
+
+        shipper._fetch_firing = _fetch  # type: ignore[method-assign]
+        assert await shipper.poll_once() == (1, 0)
+
+    assert await redis.smembers(ACTIVE_KEY) == {"ApiScrapeDown|grounded-api|up"}
 
 
 # ------------------------------------------------------------
