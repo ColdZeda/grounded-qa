@@ -154,16 +154,20 @@ jobs:
             StrictHostKeyChecking yes
           EOF
 
-      - name: 同步 compose / nginx / prometheus 配置到服务器
+      - name: 同步 compose / nginx / prometheus / 运维脚本到服务器
         run: |
           set -euo pipefail
-          ssh target "mkdir -p $REMOTE_DIR/deploy/nginx $REMOTE_DIR/deploy/prometheus"
+          ssh target "mkdir -p $REMOTE_DIR/deploy/nginx $REMOTE_DIR/deploy/prometheus $REMOTE_DIR/deploy/ops"
           scp docker-compose.prod.yml        target:$REMOTE_DIR/docker-compose.prod.yml
           scp deploy/nginx/grounded-qa.conf  target:$REMOTE_DIR/deploy/nginx/grounded-qa.conf
           scp deploy/prometheus/prometheus.yml target:$REMOTE_DIR/deploy/prometheus/prometheus.yml
           # ⚠️ 告警规则必须**和 prometheus.yml 同一次**过去：`rule_files:` 指向它，
           #    只传 prometheus.yml 的话 Prometheus 会因为找不到规则文件而**起不来**。
           scp deploy/prometheus/alerts.yml   target:$REMOTE_DIR/deploy/prometheus/alerts.yml
+          # 运维脚本（备份 / 恢复演练）。它们由**服务器的 systemd timer** 调用，
+          # 所以必须落在宿主机上，不能只待在镜像里；scp 不保留可执行位 ⟹ 补一次 chmod。
+          scp deploy/ops/backup.sh deploy/ops/restore-drill.sh target:$REMOTE_DIR/deploy/ops/
+          ssh target "chmod +x $REMOTE_DIR/deploy/ops/*.sh"
           echo "ℹ️ 服务器上的 .env 由人工维护，CI 绝不覆盖（每个环境一份独立 .env）"
 
       - name: 记录回滚点（当前版本标签）
