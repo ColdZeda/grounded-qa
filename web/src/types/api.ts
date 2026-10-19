@@ -177,6 +177,43 @@ export interface MonitorSnapshot {
 }
 
 // ------------------------------------------------------------
+// 配额与成本（app/schemas/usage.py）
+// ------------------------------------------------------------
+
+export interface UsageOut {
+  date: string
+  /** ⚠️ `null` = **取不到**（Redis 不可用），要显示 `—`，不是 0。 */
+  tokens_used: number | null
+  quota_limit: number
+  tokens_remaining: number
+  requests_this_minute: number | null
+  rate_limit_per_minute: number
+  reset_at_display: string
+  /** 没配单价时为 `null`（**不要假装 0 元**）。 */
+  cost_estimate_cny: number | null
+  price_per_million_tokens: number | null
+  generated_at_display: string
+  note: string
+}
+
+export interface MemberUsage {
+  email: string
+  role: string
+  tokens_used: number | null
+  quota_limit: number
+}
+
+export interface TenantUsageOut {
+  date: string
+  members: number
+  /** 一个都取不到时是 `null` —— 合计不能装作准。 */
+  tokens_used_total: number | null
+  items: MemberUsage[]
+  generated_at_display: string
+  note: string
+}
+
+// ------------------------------------------------------------
 // SSE 事件载荷（app/api/chat.py 的 `_sse` 调用处）
 // ------------------------------------------------------------
 

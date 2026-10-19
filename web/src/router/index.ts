@@ -63,6 +63,11 @@ const router = createRouter({
       component: () => import('@/views/ReportsView.vue'),
     },
     {
+      path: '/usage',
+      name: 'usage',
+      component: () => import('@/views/UsageView.vue'),
+    },
+    {
       // 运维面（流量 / 资源 / 成本 / 数据健康）。**只有管理员能进** ——
       // 后端也拦（`require_admin`），这里拦的是"看不到入口还硬敲 URL"。
       // 它读的是 Prometheus，不是业务库；业务随时可用、看板挂了两不相干。

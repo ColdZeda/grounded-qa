@@ -62,6 +62,9 @@
 | `POST` | `/documents` | 知识库上传（**仅管理员**，只吃 `.md`/`.markdown`/`.txt`）→ **202** 已接受、异步入库 |
 | `GET` | `/documents` | 文档列表（带 `status` / `error_message`，界面靠它轮询） |
 | `GET` | `/reports` | **只读**评测报告（**只给聚合数字**，不吐逐题明细） |
+| `GET` | `/usage/me` | 我今天的 token 用量 / 配额 / 限流（读 Redis 记账；**取不到返回 `null`，不是 0**） |
+| `GET` | `/usage/tenant` | **租户内**成员的今日用量（仅管理员，看不到别的租户） |
+| `GET` | `/monitoring/snapshot` | 运维看板（仅管理员；**服务端代查** Prometheus，客户端传不了 PromQL） |
 | `GET` | `/admin/tenant` · `/admin/users` | 租户内管理端（**不是跨租户超管**） |
 | `GET` | `/healthz` · `/metrics` | 运维端点（前者给 compose/CI 判活，后者给 Prometheus） |
 

@@ -187,6 +187,10 @@ class Settings(BaseSettings):
     # 每个用户每天能烧多少 token（**模型 API 回报的 usage 累加**，不是估算）。
     # 200k ≈ 一天几百次问答，够个人正常用；按 `deepseek-flash` 的价，跑满也就几块钱。
     token_quota_per_day: int = 200_000
+    # 展示用的**估算单价**（元 / 百万 token）。⚠️ **默认 0 = 不估算**：
+    # 各家价格会变，写死一个数字比不给更糟 —— 页面会明确说"未配单价"。
+    # 配了之后配额页会多显示一个"估算成本"，并**同时把单价印出来**（成本数字必须可解释）。
+    llm_price_per_million_tokens: float = 0.0
 
     # ---------- 鉴权（JWT）----------
     # ⚠️ 默认值**仅供本地开发**；生产必须由环境变量覆盖（下面的 `_guard_production_secrets` 会拦）。

@@ -252,6 +252,42 @@ async def read_quota(
     )
 
 
+async def peek_quota(
+    redis: Redis,
+    *,
+    subject: str,
+    now: datetime | None = None,
+) -> int | None:
+    """**只看账，什么都不改**：今天用了多少 token。
+
+    ⚠️ 和 `read_quota` 的区别不是"读多少"，而是**有没有副作用**：
+        `read_quota` 用于**准入判断**，超额时会给 `gq_limit_denied_total` 加一；
+        配额页只是**看**，看一次就等于"被拒一次"是错的统计。
+    ⚠️ 返回 `None` 表示**取不到**（Redis 挂了）—— 页面要显示 `—`，不能显示 0。
+    """
+    key, _ = _quota_key(subject, now or _now())
+    try:
+        raw = await redis.get(key)
+    except RedisError:
+        return None
+    return int(raw or 0)
+
+
+async def peek_rate(
+    redis: Redis,
+    *,
+    subject: str,
+    now: datetime | None = None,
+) -> int | None:
+    """**只看账**：本分钟已经用了几次（限流窗口内的计数）。同上，`None` = 取不到。"""
+    key, _ = _rate_key(subject, now or _now())
+    try:
+        raw = await redis.get(key)
+    except RedisError:
+        return None
+    return int(raw or 0)
+
+
 async def add_tokens(
     redis: Redis,
     *,

@@ -69,6 +69,7 @@ function logout(): void {
       </RouterLink>
       <RouterLink :to="{ name: 'documents' }">知识库</RouterLink>
       <RouterLink :to="{ name: 'reports' }">评测报告</RouterLink>
+      <RouterLink :to="{ name: 'usage' }">配额</RouterLink>
       <RouterLink v-if="isAdmin()" :to="{ name: 'monitoring' }">运维</RouterLink>
     </nav>
 

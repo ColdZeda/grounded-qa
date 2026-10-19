@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api import admin, auth, chat, conversations, documents, monitoring, reports
+from app.api import admin, auth, chat, conversations, documents, monitoring, reports, usage
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
@@ -17,6 +17,8 @@ api_router.include_router(chat.router)
 api_router.include_router(documents.router)
 api_router.include_router(reports.router)
 api_router.include_router(admin.router)
+# 配额页（读 Redis 里的记账）。**业务面**：每个登录用户都能看自己的。
+api_router.include_router(usage.router)
 # 运维看板（读 Prometheus）。放最后：它是**运维面**，不是业务 API。
 api_router.include_router(monitoring.router)
 
