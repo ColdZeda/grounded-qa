@@ -1829,14 +1829,22 @@ webhook 机制：让 Prometheus 把规则算出来，再由 `app/core/alerts.py`
 没有它，消息只能说"有条规则响了"）。测试里专门有一条：往 `annotations` 塞手机号，
 断言它不出现在消息里。
 
-### ⑦ ⚠️ 改了规则文件**必须显式 reload**
+### ⑦ ⚠️ 改了规则文件**必须显式重启** Prometheus（`/-/reload` 靠不住）
 
 `prometheus.yml` / `alerts.yml` 是 **bind mount 进容器**的。改文件**不会**让 compose
 认为服务定义变了（挂载源路径没变）⟹ `up -d` 不重建 prometheus，进程里还是**旧配置**。
-所以部署链里多一步 `docker exec gq-prometheus wget -qO- --post-data='' .../-/reload`
-（compose 已开 `--web.enable-lifecycle`）。
 
-⚠️ 9090 **没有发布到宿主机**，只能在容器里打这个 reload —— 从宿主机 `curl` 连不上（同 §9.29 ①）。
+第一版做法是打 `/-/reload`（compose 已开 `--web.enable-lifecycle`）——
+**2026-10-19 端到端验收时发现它在 CI 里静默没生效**：Prometheus 日志里一条 load 记录都没有，
+而这一步末尾还挂着 `|| echo 跳过`，于是"规则没更新"**完全没有痕迹**：
+正式规则迟迟不生效，告警继续按临时阈值在跑，直到人工 reload 才恢复。
+
+📌 **结论：`|| 兜底成功` + 看不见的通道 = 静默失效。** 这和本项目其它坑是同一个病。
+⟹ 改成**确定性动作**：`docker restart gq-prometheus`（容器不存在会直接非零），
+再轮询 `/-/healthy` 确认它回来了 —— 规则文件写错的话它根本起不来，这一关会红。
+代价：**每次部署 Prometheus 重启约 5 秒**（监控短暂中断，`promdata` 卷不受影响）。
+
+⚠️ 9090 **没有发布到宿主机**，所以"看它有没有起来"也只能在容器里探测（同 §9.29 ①）。
 ⚠️ **`alerts.yml` 必须和 `prometheus.yml` 同一次 scp**：`rule_files:` 指向它，
 只传后者的话 Prometheus 会因为找不到规则文件而**起不来**。
 

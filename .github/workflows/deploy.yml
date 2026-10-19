@@ -286,17 +286,33 @@ jobs:
           echo "❌ 健康检查超时"
           exit 1
 
-      - name: 重载 Prometheus 规则（幂等）
-        # ⚠️ **为什么必须有这一步**：`prometheus.yml` / `alerts.yml` 是**挂载进容器**的，
+      - name: 重启 Prometheus，让它真的读到新规则
+        # ⚠️ **为什么必须有这一步**：`prometheus.yml` / `alerts.yml` 是**挂载进容器**的。
         #    改文件**不会**让 compose 认为服务定义变了（bind mount 的源路径没变）⟹
-        #    `up -d` 不会重建 prometheus，进程里还是**旧配置**。
-        #    这里显式打一下 `/-/reload`（compose 已开 `--web.enable-lifecycle`）。
-        # ⚠️ 9090 **没有发布到宿主机**，所以只能在容器里打 —— 从宿主机 curl 是连不上的。
-        # ⚠️ 失败不算部署失败：容器可能还没起稳，或这次没动监控（回滚到 v1.0 时就没有它）。
+        #    `up -d` 不重建 prometheus，进程里还是**旧配置**。
+        #
+        # ⚠️ **2026-10-19 的教训**：这里原来写的是
+        #        docker exec gq-prometheus wget -qO- --post-data='' .../-/reload
+        #    在 CI 里**静默没生效**（Prometheus 日志里一条 load 记录都没有），
+        #    而它末尾又挂着 `|| echo 跳过` —— 于是"规则没更新"这件事**完全没有痕迹**：
+        #    正式规则迟迟不生效，告警继续按临时阈值在跑（人工 reload 才恢复）。
+        #    📌 结论：**"失败就算成功"的兜底 + 看不见的通道 = 静默失效**。
+        #    ⟹ 改成**确定性动作**：`docker restart`（容器不存在会直接非零），
+        #      再轮询 `/-/healthy` 确认它真回来了 —— 读不懂规则就起不来，这一关会红。
         run: |
-          ssh target "docker exec gq-prometheus wget -qO- --post-data='' http://127.0.0.1:9090/-/reload" \
-            && echo "✅ Prometheus 已重载规则" \
-            || echo "ℹ️ 跳过（prometheus 不存在或还没起稳）"
+          set -euo pipefail
+          ssh target "docker restart gq-prometheus"
+          for i in $(seq 1 12); do
+            if ssh target "docker exec gq-prometheus wget -qO- http://127.0.0.1:9090/-/healthy" >/dev/null 2>&1; then
+              echo "✅ Prometheus 已重启并在线（第 ${i} 次探测）"
+              exit 0
+            fi
+            echo "…第 ${i} 次探测未就绪，5s 后重试"
+            sleep 5
+          done
+          echo "❌ Prometheus 重启后没起来 —— 大概率是 alerts.yml 写错了"
+          ssh target "docker logs --tail 40 gq-prometheus" || true
+          exit 1
 
       - name: 部署成功 → 记录当前版本
         if: success()
