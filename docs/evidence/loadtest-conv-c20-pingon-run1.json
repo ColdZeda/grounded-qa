@@ -1,0 +1,18 @@
+{
+  "base": "http://127.0.0.1:8000",
+  "path": "/api/v1/conversations",
+  "concurrency": 20,
+  "duration_s": 13.85,
+  "requests": 4964,
+  "errors": 0,
+  "status_counts": {
+    "200": 4964
+  },
+  "rps": 358.5,
+  "p50_ms": 31.1,
+  "p95_ms": 90.6,
+  "p99_ms": 137.6,
+  "max_ms": 2246.8,
+  "error_rate": 0.0,
+  "at": "2026-10-19T21:00:56+0800"
+}

@@ -1,0 +1,18 @@
+{
+  "base": "http://120.24.67.82:8080",
+  "path": "/healthz",
+  "concurrency": 5,
+  "duration_s": 10.01,
+  "requests": 2902,
+  "errors": 0,
+  "status_counts": {
+    "200": 2902
+  },
+  "rps": 289.9,
+  "p50_ms": 16.5,
+  "p95_ms": 21.8,
+  "p99_ms": 25.3,
+  "max_ms": 50.2,
+  "error_rate": 0.0,
+  "at": "2026-10-19T21:08:00+0800"
+}

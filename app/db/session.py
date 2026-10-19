@@ -36,13 +36,18 @@ def get_engine() -> AsyncEngine:
             settings.database_url,
             echo=False,
             # 连接被中间设备悄悄掐断时，池里的死连接会导致"第一次请求必失败"。
-            # pre_ping 会在取用前先探一下，代价极小。
-            pool_pre_ping=True,
-            # 空闲连接最多留 30 分钟。PG 的 wait_timeout / 云上负载均衡都可能更早断，
-            # 到点主动换新连接比等着报错好。
-            pool_recycle=1800,
-            pool_size=5,
-            max_overflow=5,
+            # pre_ping 会在取用前先探一下。⚠️ 代价是**每次取连接多一个来回** ——
+            # 压测量过这个来回值多少：`architecture.md` §9.33。
+            pool_pre_ping=settings.postgres_pre_ping,
+            # 空闲连接最多留 `postgres_pool_recycle` 秒（默认 300）。
+            # ⚠️ 关掉 pre_ping 之后，这个值就是"池里躺着一条死连接"的**上界** ——
+            #    PG 的 wait_timeout / 云上负载均衡都可能更早断，到点主动换新连接比等着报错好。
+            pool_recycle=settings.postgres_pool_recycle,
+            # ⚠️ 池子是**上限**，不是"越大越快"：它限制的是"同时能在途几个查询"。
+            #    v1.1 压测（本机 20 并发打 `/api/v1/conversations`）测出 5/5 时
+            #    有一半请求在**排队等连接**；为什么最后选这个值 → `architecture.md` §9.33。
+            pool_size=settings.postgres_pool_size,
+            max_overflow=settings.postgres_max_overflow,
         )
     return _engine
 
