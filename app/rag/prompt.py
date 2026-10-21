@@ -128,19 +128,41 @@ def build_messages(
     question: str,
     hits: Sequence[RetrievedChunk],
     history: Sequence[dict[str, str]] = (),
+    order_facts: str = "",
+    image_scene: str = "",
+    image_text: str = "",
 ) -> list[dict[str, str]]:
     """组装发给对话模型的 messages。
 
     ⚠️ **历史只带最近几轮**（由调用方裁剪）。不带历史 → 多轮追问（"那它的价格呢？"）
         完全无法回答；带太多 → 每次请求的 token 成本线性上涨，且**离题的旧上下文
         会把模型带偏**。
+
+    ⚠️ **【订单信息】与【参考资料】必须分两块**（`order_facts` / `hits`）：
+        订单是**事实**、条款是**规则**。混在一块，模型会把事实直接当结论
+        （"已签收 45 天" → "不能退"），而正确回答是"按质量问题 30 天条款 → 超期 → 转保修"。
+        所以订单块的标题里明确写了"这是事实，不是政策"。
+
+    ⚠️ **图里读到的文字标成"可能有误"**：那是模型的转写，不是原文。
+        不标的话，模型会把一个读错的数字当权威事实复述出去。
     """
-    messages: list[dict[str, str]] = [
-        {
-            "role": "system",
-            "content": SYSTEM_PROMPT.format(context=build_context(hits)),
-        }
-    ]
+    system = SYSTEM_PROMPT.format(context=build_context(hits))
+
+    if order_facts:
+        system += (
+            "\n【订单信息】（来自订单系统的**事实**，不是政策条款；"
+            "请用上面的条款去解释这些事实，不要把事实本身当成结论）\n"
+            f"{order_facts}\n"
+        )
+
+    if image_scene or image_text:
+        system += "\n【用户上传的图片】\n"
+        if image_scene:
+            system += f"画面内容：{image_scene}\n"
+        if image_text:
+            system += f"图中文字（模型转写，可能有误，仅供定位）：{image_text[:400]}\n"
+
+    messages: list[dict[str, str]] = [{"role": "system", "content": system}]
     messages.extend({"role": item["role"], "content": item["content"]} for item in history)
     messages.append({"role": "user", "content": question})
     return messages

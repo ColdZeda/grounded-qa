@@ -19,6 +19,11 @@ class AskRequest(BaseModel):
     """
 
     question: str = Field(min_length=1, max_length=2000)
+    #: 可选：先 `POST /api/v1/images` 拿到 `image_id`，再在这里带上它提问。
+    #: ⚠️ **图不塞进这个 JSON**（base64 会撑爆请求体、还会进访问日志）；
+    #:    走"先上传拿 id、再引用"两步。
+    #: ⚠️ 图只对**这一条消息**生效：后续追问靠历史里的文字记忆，不重调读图模型。
+    image_id: uuid.UUID | None = None
 
 
 class MessageOut(BaseModel):
@@ -42,4 +47,7 @@ class MessageOut(BaseModel):
     #:    （那时没有可信的置信度，见 `architecture.md` §5.2）。
     confidence: float | None
     latency_ms: int | None
+    #: 机器附加的记忆（这张图读到了什么、查到哪一单）。用户消息才可能有。
+    #: ⚠️ 和 `content` 分开：`content` 永远是**用户原话**，这里是我们补的。
+    meta: dict[str, object] | None = None
     created_at: datetime

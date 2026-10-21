@@ -60,6 +60,21 @@ def record_chat_outcome(outcome: str) -> None:
     chat_outcome.labels(outcome=outcome).inc()
 
 
+#: 读图结果。⚠️ **`fallback` 单独一个桶**：它既不是成功也不是失败 ——
+#: 模型回话了我们却没拿到 JSON，只能把整段当描述用。混进 `ok` 会让"降级率"看不见，
+#: 混进 `error` 又会让"读图挂了"的比例虚高。这两个数的运维动作完全不同。
+image_analysis = Counter(
+    "gq_image_analysis_total",
+    "读图结果（result=ok 正常 / fallback 解析降级 / error 调用失败）",
+    ["result"],
+)
+
+
+def record_image_analysis(result: str) -> None:
+    """记一次读图（ok / fallback / error）。"""
+    image_analysis.labels(result=result).inc()
+
+
 class MetricsMiddleware:
     """把每个 HTTP 请求记成「计数 + 耗时」。
 

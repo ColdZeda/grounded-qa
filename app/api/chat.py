@@ -10,8 +10,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Annotated
 
@@ -19,16 +22,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select, update
 
+from app import images as image_store
 from app.api.deps import CurrentUser, LimitsRedisDep, SessionDep
 from app.core.config import get_settings
 from app.core.limits import LimitGuard, ensure
-from app.core.metrics import record_chat_outcome
+from app.core.metrics import record_chat_outcome, record_image_analysis
 from app.db.models.conversation import Conversation, Message, MessageRole
+from app.db.models.image import Image
 from app.db.models.user import User, UserRole
 from app.db.repository import TenantScopedRepository
+from app.orders import order_snapshot, render_order_facts, resolve_orders
 from app.rag.pipeline import Answer, Delta, RagPipeline, Sources, build_clients
-from app.rag.providers import ChatClient, EmbeddingClient, RerankClient
+from app.rag.providers import ChatClient, EmbeddingClient, ModelAPIError, RerankClient
+from app.rag.vision import ImageAnalysisClient, build_image_client
 from app.schemas.chat import AskRequest, MessageOut
+
+logger = logging.getLogger("grounded.chat")
 
 router = APIRouter(prefix="/conversations", tags=["chat"])
 
@@ -56,6 +65,121 @@ def get_clients() -> ClientBundle:
 
 
 ClientsDep = Annotated[ClientBundle, Depends(get_clients)]
+
+
+def get_image_client() -> ImageAnalysisClient | None:
+    """FastAPI 依赖：读图客户端（**没配好就是 `None`**）。
+
+    ⚠️ 做成依赖的理由同 `get_clients`：测试要能塞假客户端，否则跑一次测试就真花钱
+        （`AGENTS §7.1` 约定 9）。`None` 不是错误 —— 线上关掉读图时就是它。
+    """
+    return build_image_client()
+
+
+ImageClientDep = Annotated[ImageAnalysisClient | None, Depends(get_image_client)]
+
+
+@dataclass
+class ImageContext:
+    """这条提问带的那张图，**读完之后**的结果（读失败也在里面）。
+
+    ⚠️ **失败不抛**：图读不出来不该让整条问答 500 —— 用户还能靠文字问。
+        但失败必须**留下痕迹**（`error` 进 SSE、`analysis_error` 进库），
+        否则"我们其实没看图"就变成静默的了（`PLAN §8.3` D10）。
+    """
+
+    image_id: uuid.UUID | None = None
+    #: 进历史的那一句文字记忆（追问靠它，模型看不到图）。
+    note: str = ""
+    #: 进**检索**的那一句（`scene`）。
+    scene: str = ""
+    #: 只进生成上下文，且标了"可能有误"。
+    text: str = ""
+    error: str = ""
+    #: 真的读成功了（用于 SSE 里区分"没带图"和"带了但没读成"）。
+    analyzed: bool = False
+
+
+async def _prepare_image(
+    session: SessionDep,
+    user: User,
+    image_id: uuid.UUID | None,
+    client: ImageAnalysisClient | None,
+    *,
+    guard: LimitGuard,
+) -> ImageContext:
+    """取图 → 读图 → 落库读数。**查不到/不是本人的 → 404**。
+
+    ⚠️ **读图花的 token 也要记账**（`PLAN §8.3` D9）：它是一次实打实的模型调用，
+        不算进配额就等于"图片这条路免费"，用图片绕开配额是真实存在的。
+    """
+    if image_id is None:
+        return ImageContext()
+
+    repo = TenantScopedRepository(session, tenant_id=user.tenant_id, model=Image)
+    row = await repo.get(image_id)
+    if row is None or row.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="图片不存在")
+
+    if client is None:
+        return ImageContext(image_id=image_id, error="图片分析没有启用，我只按你的文字回答")
+
+    try:
+        raw = await image_store.read(row.path)
+        analysis = await client.analyze(raw, content_type=row.content_type)
+    except ModelAPIError as exc:
+        logger.warning("读图失败 image=%s: %s", image_id, exc)
+        record_image_analysis("error")
+        row.analysis_error = str(exc)[:500]
+        await session.commit()
+        return ImageContext(image_id=image_id, error="图片没读成功，我只按你的文字回答")
+    except (FileNotFoundError, ValueError) as exc:
+        logger.warning("读图的文件不可用 image=%s: %s", image_id, exc)
+        record_image_analysis("error")
+        row.analysis_error = f"文件不可用：{exc}"[:500]
+        await session.commit()
+        return ImageContext(image_id=image_id, error="图片没读成功，我只按你的文字回答")
+
+    # ⚠️ 读数落库：既是缓存（同一张图只读一次），也是 badcase 复盘的唯一证据
+    #    （"当时模型到底读到了什么"）。失败时留 `analysis_error`，不假装成功。
+    row.analysis = analysis.as_dict()
+    row.analysis_error = None
+    row.analyzed_at = datetime.now(UTC)
+    await session.commit()
+
+    # ⚠️ 读图的 token 也是花出去的钱：记账 + 指标。
+    #    拿不到 usage 时记 0（**如实**：不是"没花"，是"没量到"）。
+    await guard.record_tokens(user.id, int(analysis.usage.get("total_tokens") or 0))
+    record_image_analysis("fallback" if analysis.fallback else "ok")
+
+    logger.info(
+        "读图完成 image=%s type=%s fallback=%s tokens=%s",
+        image_id,
+        analysis.image_type,
+        analysis.fallback,
+        analysis.usage.get("total_tokens"),
+    )
+    return ImageContext(
+        image_id=image_id,
+        note=analysis.memory_line,
+        scene=analysis.scene,
+        text=analysis.transcription,
+        analyzed=True,
+    )
+
+
+async def _order_context(
+    session: SessionDep, user: User, *, text: str
+) -> tuple[list[dict[str, object]], str]:
+    """从这段文字里捞单号 → 查库 → 事实卡片 ＋ 提示词块。
+
+    ⚠️ 查库**很便宜**（一次 SQL），所以每轮都可以做 —— 贵的是模型调用。
+        用户追问"我的单到哪了"时，重新从这句话里抽单号再查一次就行，不需要缓存。
+    """
+    orders = await resolve_orders(session, tenant_id=user.tenant_id, user_id=user.id, text=text)
+    now = datetime.now(UTC)
+    snapshots = [order_snapshot(order, now=now) for order in orders]
+    return snapshots, render_order_facts(snapshots)
 
 
 # ------------------------------------------------------------
@@ -116,6 +240,7 @@ async def ask(
     current_user: CurrentUser,
     clients: ClientsDep,
     redis: LimitsRedisDep,
+    image_client: ImageClientDep,
 ) -> StreamingResponse:
     """提问并流式返回回答。
 
@@ -132,15 +257,6 @@ async def ask(
 
     conversation = await _load_conversation(session, current_user, conversation_id)
 
-    chat, embedder, reranker = clients
-    pipeline = RagPipeline(
-        session=session,
-        tenant_id=current_user.tenant_id,
-        chat=chat,
-        embedder=embedder,
-        reranker=reranker,
-    )
-
     question = payload.question.strip()
     if not question:
         # ⚠️ 用 `HTTP_422_UNPROCESSABLE_CONTENT`（新名）。
@@ -150,14 +266,50 @@ async def ask(
         )
 
     # ② 配额：超了就**连模型都不调**（这时候拒是最省的）
+    # ⚠️ 必须在**读图之前**：读图也是一次模型调用，也要花钱。
     ensure(await guard.quota(current_user.id))
 
+    # ③ 读图（如果这条消息带了图）。失败**不抛**，只降级 —— 见 `ImageContext`。
+    image_context = await _prepare_image(
+        session, current_user, payload.image_id, image_client, guard=guard
+    )
+
+    # ④ 订单：从"图里读到的文字 + 用户原话"里捞单号，精确查库。
+    #    ⚠️ 图里的转写排前面：用户从图里抄单号时，那句话往往就是"SF10001 这单…"。
+    order_snapshots, order_facts = await _order_context(
+        session, current_user, text=f"{image_context.text} {question}".strip()
+    )
+
+    chat, embedder, reranker = clients
+    pipeline = RagPipeline(
+        session=session,
+        tenant_id=current_user.tenant_id,
+        chat=chat,
+        embedder=embedder,
+        reranker=reranker,
+        # 检索只用 scene（精确串不进 query），转写只进生成上下文
+        image_scene=image_context.scene,
+        image_text=image_context.text,
+        order_facts=order_facts,
+    )
+
     # ① 用户消息先落库（并提交）—— 即使后面生成失败，提问记录也在
+    # ⚠️ 图与订单的读数存在 `meta`，**不写进 `content`**：
+    #    `content` 永远是用户原话，混进机器生成的文字会让排障和评测都失真。
+    meta: dict[str, object] | None = None
+    if image_context.image_id is not None or order_snapshots:
+        meta = {
+            "image_id": str(image_context.image_id) if image_context.image_id else None,
+            "image_note": image_context.note or None,
+            "image_error": image_context.error or None,
+            "orders": order_snapshots,
+        }
     user_message = Message(
         tenant_id=current_user.tenant_id,
         conversation_id=conversation.id,
         role=MessageRole.USER,
         content=question,
+        meta=meta,
     )
     session.add(user_message)
     await session.commit()
@@ -165,7 +317,16 @@ async def ask(
     history = await _load_history(session, conversation.id)
 
     return StreamingResponse(
-        _stream(session, pipeline, conversation, question, history, guard, current_user.id),
+        _stream(
+            session,
+            pipeline,
+            conversation,
+            question,
+            history,
+            guard,
+            current_user.id,
+            image_context=image_context,
+        ),
         media_type="text/event-stream",
         headers={
             # ⚠️ 告诉 nginx **不要缓冲**这个响应。少了它，SSE 会被攒成一坨再发，
@@ -230,6 +391,8 @@ async def _stream(
     history: list[dict[str, str]],
     guard: LimitGuard,
     user_id: uuid.UUID,
+    *,
+    image_context: ImageContext | None = None,
 ) -> AsyncIterator[str]:
     """把 pipeline 的领域事件翻译成 SSE 帧，并负责助手消息落库。
 
@@ -241,14 +404,22 @@ async def _stream(
     try:
         async for event in pipeline.answer(question=question, history=history):
             if isinstance(event, Sources):
-                yield _sse(
-                    "sources",
-                    {
-                        "citations": [c.as_dict() for c in event.citations],
-                        "confidence": event.confidence,
-                        "refused": event.refused,
-                    },
-                )
+                payload: dict[str, object] = {
+                    "citations": [c.as_dict() for c in event.citations],
+                    "confidence": event.confidence,
+                    "refused": event.refused,
+                }
+                # ⚠️ 图的状态**必须发出来**：读图失败时前端要能明说"图片没读成功"，
+                #    而不是让用户以为我们看过图了（`PLAN §8.3` D10）。
+                if image_context is not None and (
+                    image_context.image_id is not None or image_context.error
+                ):
+                    payload["image"] = {
+                        "analyzed": image_context.analyzed,
+                        "note": image_context.note or None,
+                        "error": image_context.error or None,
+                    }
+                yield _sse("sources", payload)
             elif isinstance(event, Delta):
                 yield _sse("delta", {"text": event.text})
             elif isinstance(event, Answer):

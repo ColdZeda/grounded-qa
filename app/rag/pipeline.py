@@ -149,6 +149,9 @@ class RagPipeline:
         reranker: RerankClient | None = None,
         settings: Settings | None = None,
         closed_book: bool = False,
+        image_scene: str = "",
+        image_text: str = "",
+        order_facts: str = "",
     ) -> None:
         self._session = session
         self._tenant_id = tenant_id
@@ -156,6 +159,17 @@ class RagPipeline:
         self._embedder = embedder
         self._reranker = reranker
         self._settings = settings or get_settings()
+        #: 这条提问带的那张图读到了什么（**已经由调用方读好**）。
+        #: ⚠️ 检索只用 `image_scene`，**不用 `image_text`**：
+        #:    转写里通常有单号/金额这类精确串，它们对 trgm 和向量都没有语义，
+        #:    塞进 query 只会把召回搅乱（`PLAN §8.3` D5 的"三不"）。
+        #:    `image_text` 只进生成上下文，而且明确标了"可能有误"。
+        self._image_scene = image_scene
+        self._image_text = image_text
+        #: 【订单信息】那段文字（`app/orders.py::render_order_facts` 渲染好）。
+        #: ⚠️ 空串 = 没查到订单。**故意不给"没查到"这种句子** ——
+        #:    给了模型会顺着猜，不给它就没有材料可编。
+        self._order_facts = order_facts
         #: **闭卷**：完全跳过检索，直接让模型凭自身知识回答。
         #: ⚠️ 只给评测的对照组用（`evals\run.py --mode closed`），**线上永远是 `False`** ——
         #:    这个开关存在的意义是让"有证据"与"没证据"跑**同一段代码**，
@@ -258,7 +272,15 @@ class RagPipeline:
             citations: list[Citation] = []
             refused = False
         else:
-            hits, confidence, score_kind = await self._retrieve(question)
+            #: ⚠️ 带图时检索 query = `scene` + 用户原话（`PLAN §8.3` D6）。
+            #:    为什么不加 `image_text`：转写里是单号/金额这类**精确串**，
+            #:    对全文(trgm)和向量都没有语义，加进去只会稀释原话的召回。
+            #:    `scene` 是"图里有什么"的自然语言描述，正好补原话里缺失的语境
+            #:    （用户只发一句"这能退吗"，光看这句话检索不到"破损"）。
+            search_query = (
+                f"{self._image_scene} {question}".strip() if self._image_scene else question
+            )
+            hits, confidence, score_kind = await self._retrieve(search_query)
             hits = hits[: settings.rerank_top_n]
 
             refused = self._should_refuse(hits, confidence, score_kind)
@@ -301,7 +323,14 @@ class RagPipeline:
         messages = (
             prompt_module.build_closed_book_messages(question=question, history=history)
             if self._closed_book
-            else prompt_module.build_messages(question=question, hits=hits, history=history)
+            else prompt_module.build_messages(
+                question=question,
+                hits=hits,
+                history=history,
+                order_facts=self._order_facts,
+                image_scene=self._image_scene,
+                image_text=self._image_text,
+            )
         )
         collected: list[str] = []
         error: str | None = None
