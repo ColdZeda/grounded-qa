@@ -168,6 +168,31 @@ class Settings(BaseSettings):
     #    而且没人知道。宁可整篇失败、让用户看见原因。
     max_chunks_per_document: int = 400
 
+    # ---------- 提问带图（query 侧多模态）----------
+    # 单张图上限 **3 MB**。
+    # ⚠️ 必须小于 nginx 的 `client_max_body_size`（`deploy/nginx/grounded-qa.conf` 是 4m）——
+    #    超了会被 nginx 挡下并返回一个 **HTML 错误页**，前端解析不了，
+    #    症状是"本地传得上去、部署后传不上"。这是我们刻意留的余量。
+    image_max_bytes: int = 3 * 1024 * 1024
+    #: 送给读图模型的那份副本：长边上限 / JPEG 质量 / 体积上限。
+    #: ⚠️ 为什么要缩：3 MB 的图 base64 之后约 4 MB 请求体 —— 慢，且视觉 token 按像素涨。
+    #: ⚠️ 为什么**不无脑转 JPEG**：截图 / 单据上的**细笔画文字**在 JPEG 里会出现振铃，
+    #:    "1/7""8/B" 容易糊。所以 PNG 一律保留 PNG（无损），只有照片类才转 JPEG。
+    image_model_max_edge: int = 1600
+    image_model_jpeg_quality: int = 88
+    image_model_max_bytes: int = 1024 * 1024
+
+    # ---------- 读图（图 → 结构化文字）----------
+    # ⚠️ **复用对话那一套**：`deepseek-flash` 本身就是多模态模型、同一把 key、同一个端点。
+    #    留独立旋钮是为了以后能换别的多模态模型 —— **换模型不需要重嵌入任何东西**
+    #    （图从不进向量空间，见 `architecture.md` §9.35）。
+    #: 空字符串 = 回退到 `llm_*` 的值（见 `app/rag/vision.py`）。
+    image_analysis_model: str = ""
+    image_analysis_base_url: str = ""
+    image_analysis_api_key: str = ""
+    #: 关掉它 = 有图也不读，直接按 D10 的降级路回话（"图片没读成功，我只按文字回答"）。
+    image_analysis_enabled: bool = True
+
     # ---------- 评测报告（只读）----------
     # 评测结果 JSON 所在目录。**相对仓库根**解析（容器里就是 `/app/evals/results`）。
     # ⚠️ 这些文件是**报告数据**（`evals/results/*.json`），进镜像；

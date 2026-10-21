@@ -44,6 +44,11 @@ dependencies = [
     "langchain-text-splitters>=0.3.4,<0.4",
     # --- 可观测 ---
     "prometheus-client>=0.21,<1.0",
+    # --- 图片（提问带图：读尺寸 / 嗅探格式 / EXIF 转正 / 送模型前降采样）---
+    # ⚠️ 这是本项目**第一个图像依赖**。选 Pillow 而不是自己写：它同时给了
+    #    "按内容认格式"（不信后缀）和 "EXIF 转正"（手机照片常带旋转标记，
+    #    不转正模型看到的是躺倒的图 —— 字全废）。
+    "pillow>=11.0,<13.0",
 ]
 
 [project.optional-dependencies]

@@ -15,14 +15,86 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import DEFAULT_ADMIN_PASSWORD, get_settings
 from app.core.security import hash_password
+from app.db.models.order import Order, OrderStatus
 from app.db.models.tenant import Tenant
 from app.db.models.user import User, UserRole
 from app.db.session import dispose_engine, get_session_factory
+
+#: 20 条演示订单。**刻意覆盖客服真正会遇到的分支**：
+#:
+#:   · 签收 1~7 天   → 质量问题 30 天内，可退换
+#:   · 签收 35 / 45 天 → **超过 30 天 → 该转保修，不是退款**（这是最容易被答错的一类）
+#:   · 已取消 / 未发货 / 在途 / 退款中 —— 每种状态都该有样本，否则模型只见过"已签收"
+#:
+#: ⚠️ 日期按「相对今天」算，**不写死绝对值**：写死的话几个月后"签收 45 天"会漂成 200 天，
+#:    而评测问的是"有没有超过 30 天"这种相对判断。
+#: ⚠️ 单号要与 `evals/fixtures/images.meta.yaml` 里的图对齐（P1=SF10001 / P2=SF10002）。
+_ORDER_SPECS: tuple[tuple[str, OrderStatus, int, int | None, int, list[dict[str, object]]], ...] = (
+    ("SF10001", OrderStatus.DELIVERED, 6, 4, 128_000, [{"name": "实木床架", "qty": 1}]),
+    ("SF10002", OrderStatus.DELIVERED, 8, 6, 45_900, [{"name": "床头柜", "qty": 1}]),
+    ("SF10003", OrderStatus.PAID, 2, None, 89_900, [{"name": "书桌", "qty": 1}]),
+    ("SF10004", OrderStatus.SHIPPED, 7, None, 328_000, [{"name": "三人沙发", "qty": 1}]),
+    ("SF10005", OrderStatus.REFUNDING, 20, 18, 159_900, [{"name": "餐边柜", "qty": 1}]),
+    ("SF10006", OrderStatus.CANCELLED, 30, None, 25_900, [{"name": "落地灯", "qty": 1}]),
+    # ⚠️ 签收 45 天：超过质量问题 30 天窗口 → 正确回答是"转保修"，不是"能退"
+    ("SF10007", OrderStatus.DELIVERED, 60, 45, 128_000, [{"name": "实木床架", "qty": 1}]),
+    ("SF10008", OrderStatus.DELIVERED, 3, 1, 56_800, [{"name": "餐椅", "qty": 2}]),
+    ("SF10009", OrderStatus.DELIVERED, 90, 80, 9_900, [{"name": "小边几", "qty": 1}]),
+    ("SF10010", OrderStatus.SHIPPED, 1, None, 259_900, [{"name": "衣柜", "qty": 1}]),
+    ("SF10011", OrderStatus.PAID, 10, None, 15_900, [{"name": "收纳箱", "qty": 3}]),
+    ("SF10012", OrderStatus.DELIVERED, 15, 12, 88_000, [{"name": "书架", "qty": 1}]),
+    ("SF10013", OrderStatus.CANCELLED, 45, None, 45_900, [{"name": "床头柜", "qty": 1}]),
+    ("SF10014", OrderStatus.REFUNDING, 5, 3, 39_900, [{"name": "玄关柜", "qty": 1}]),
+    # ⚠️ 签收 35 天：又一个"过窗口"的样本，金额大，适合演示"先维修后换新"
+    ("SF10015", OrderStatus.DELIVERED, 40, 35, 1_280_000, [{"name": "全屋家具套系", "qty": 1}]),
+    ("SF10016", OrderStatus.SHIPPED, 4, None, 76_800, [{"name": "阳台桌椅", "qty": 1}]),
+    ("SF10017", OrderStatus.PAID, 1, None, 4_500, [{"name": "靠垫", "qty": 4}]),
+    ("SF10018", OrderStatus.DELIVERED, 120, 110, 19_900, [{"name": "地毯", "qty": 1}]),
+    ("SF10019", OrderStatus.REFUNDING, 8, 7, 66_000, [{"name": "电视柜", "qty": 1}]),
+    ("SF10020", OrderStatus.DELIVERED, 2, 1, 39_900, [{"name": "茶几", "qty": 1}]),
+)
+
+
+async def _seed_orders(session: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID) -> None:
+    """造演示订单（**幂等**：单号已存在就跳过，**不改已有行**）。
+
+    ⚠️ 为什么是"跳过"而不是"按今天重算一遍"：`delivered_at` 是**签收这个事实**，
+        每次部署都把它往前推一次的话，"签收多少天"就不再是稳定量 ——
+        评测和演示会跟着部署时间漂。
+    """
+    existing = set(
+        (await session.scalars(select(Order.order_no).where(Order.tenant_id == tenant_id))).all()
+    )
+    now = datetime.now(UTC)
+    created = 0
+    for order_no, status, placed_days, delivered_days, amount, items in _ORDER_SPECS:
+        if order_no in existing:
+            continue
+        session.add(
+            Order(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                order_no=order_no,
+                status=status,
+                placed_at=now - timedelta(days=placed_days),
+                delivered_at=(
+                    None if delivered_days is None else now - timedelta(days=delivered_days)
+                ),
+                items=items,
+                amount_cents=amount,
+                currency="CNY",
+            )
+        )
+        created += 1
+    print(f"[seed] 订单：新建 {created} 条，已存在跳过 {len(_ORDER_SPECS) - created} 条")
 
 
 async def seed() -> None:
@@ -77,6 +149,9 @@ async def seed() -> None:
                 f"[seed] 管理员已存在 {email}"
                 f"{'（已修正租户/角色）' if changed else '（未改动，密码保持原样）'}"
             )
+
+        # ---------- 演示订单（20 条，只读业务表）----------
+        await _seed_orders(session, tenant.id, user.id)
 
         await session.commit()
 

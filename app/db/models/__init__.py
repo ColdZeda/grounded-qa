@@ -7,7 +7,9 @@
 """
 
 from app.db.models.conversation import Conversation, Message, MessageRole
+from app.db.models.image import Image
 from app.db.models.knowledge import EMBEDDING_DIM, Chunk, Document, DocumentStatus
+from app.db.models.order import Order, OrderStatus
 from app.db.models.tenant import Tenant
 from app.db.models.user import User, UserRole
 
@@ -17,8 +19,11 @@ __all__ = [
     "Conversation",
     "Document",
     "DocumentStatus",
+    "Image",
     "Message",
     "MessageRole",
+    "Order",
+    "OrderStatus",
     "Tenant",
     "User",
     "UserRole",

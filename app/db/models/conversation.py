@@ -104,6 +104,15 @@ class Message(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
     # 端到端耗时（毫秒）。可观测性要求：没有这个数就没法谈"答辩体验"。
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    #: 机器附加的"记忆"：这条消息当时有没有带图、图读到了什么、查到哪一单。
+    #: 形如 `{"image_id": "...", "image_note": "...", "order_no": "...", "order_snapshot": {...}}`
+    #: ⚠️ **绝不塞进 `content`** —— 用户原话和机器补的信息必须能分开：
+    #:    混在一起则 ① 排障时分不清哪些是用户说的 ② 前端会把内部字样渲染出来
+    #:    ③ 评测拿 `content` 当"用户输入"的口径就失真了。
+    #: ⚠️ 追问时靠**它**恢复上下文（模型看不到图），而不是重新调一次读图模型 ——
+    #:    这条设计叫"图只对它的那条消息生效，但读数会变成会话记忆"（architecture.md §9.35）。
+    meta: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
     conversation: Mapped[Conversation] = relationship(back_populates="messages", lazy="raise")
 
     __table_args__ = (enum_check("role", MessageRole, "message_role"),)
