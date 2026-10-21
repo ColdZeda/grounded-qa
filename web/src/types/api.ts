@@ -65,6 +65,41 @@ export interface Citation {
   snippet: string
 }
 
+/**
+ * 一条订单的**事实卡片**（`app/orders.py::order_snapshot`）。
+ *
+ * ⚠️ 全是可核对的**事实**，没有"所以能退"这类推论 —— 该不该退是知识库条款的事。
+ * ⚠️ 界面暂时**不渲染**它们：这些是给模型看的上下文，摆到用户面前容易让人以为
+ *     我们在后台改订单状态。类型写出来是为了 `meta` 不变成 `any`。
+ */
+export interface OrderSnapshot {
+  order_no: string
+  status: string
+  placed_at: string
+  delivered_at: string | null
+  days_since_delivery: number | null
+  items: { name?: string; qty?: number }[]
+  amount: string
+  currency: string
+}
+
+/**
+ * `messages.meta` —— **我们补的读数**，不是用户原话（`app/api/chat.py` 写入）。
+ *
+ * ⚠️ 它和 `content` **刻意分开**：`content` 永远是用户打的字。混进机器生成的文字，
+ *     排障和评测都会失真（"这句话到底是用户说的还是模型读出来的？"）。
+ * ⚠️ 只有**用户消息**可能带 `meta`。
+ */
+export interface MessageMeta {
+  /** 这条消息带的那张图。刷新页面后靠它把缩略图找回来。 */
+  image_id?: string | null
+  /** 进历史的**文字记忆**（模型看不到图，追问全靠这一句）。 */
+  image_note?: string | null
+  /** 读图失败时的一句话。**非空 = 我们其实没看图**，界面必须说出来。 */
+  image_error?: string | null
+  orders?: OrderSnapshot[]
+}
+
 export interface MessageOut {
   id: string
   role: MessageRole
@@ -82,6 +117,8 @@ export interface MessageOut {
    */
   confidence: number | null
   latency_ms: number | null
+  /** 机器附加的读数（读图、订单）。**只有用户消息**可能有。 */
+  meta: MessageMeta | null
   created_at: string
 }
 
@@ -214,14 +251,41 @@ export interface TenantUsageOut {
 }
 
 // ------------------------------------------------------------
+// 图片（app/schemas/image.py）
+// ------------------------------------------------------------
+
+/** 上传结果。
+ *  ⚠️ 后端**刻意不回传 `path` / `sha256`**（前者是实现细节，后者是内部判重口径）。 */
+export interface ImageOut {
+  id: string
+  content_type: string
+  bytes: number
+  width: number
+  height: number
+  created_at: string
+}
+
+// ------------------------------------------------------------
 // SSE 事件载荷（app/api/chat.py 的 `_sse` 调用处）
 // ------------------------------------------------------------
+
+/** `sources` 里附带的那张图的读数（只在**这条消息带图**时出现）。 */
+export interface ImageInfo {
+  /** 真的读成功了。⚠️ `false` **不一定**是错 —— 见 `error`。 */
+  analyzed: boolean
+  /** 进历史的那句文字记忆（"用户发来一张图：……"）。 */
+  note: string | null
+  /** 读图失败的一句话。**非空 = 这次我们没看图**，界面必须明说，不许静默。 */
+  error: string | null
+}
 
 /** `event: sources` —— 检索完成、开始生成**之前**发的第一个事件。 */
 export interface SourcesEvent {
   citations: Citation[]
   confidence: number | null
   refused: boolean
+  /** ⚠️ **只在带了图时出现**。没带图的请求没有这个字段（不是 `null`）。 */
+  image?: ImageInfo
 }
 
 export interface DeltaEvent {

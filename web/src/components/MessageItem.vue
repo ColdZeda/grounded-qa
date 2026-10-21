@@ -14,6 +14,7 @@
 import { computed, ref } from 'vue'
 
 import CitationList from './CitationList.vue'
+import ImageThumb from './ImageThumb.vue'
 import { isDetailed } from '@/stores/prefs'
 import type { UiMessage } from '@/types/ui'
 
@@ -96,9 +97,24 @@ const segments = computed<Segment[]>(() => {
       </span>
     </div>
 
+    <!--
+      用户发的那张图。
+      ⚠️ 放在气泡**上面**（像聊天软件的惯例）：先看图，再看用户配的那句话。
+    -->
+    <ImageThumb v-if="message.imageId" :image-id="message.imageId" />
+
     <!-- 拒答横幅：**放在正文上面**，先看到结论再看到文案 -->
     <p v-if="message.refused" class="alert alert--warn banner">
       已拒答 —— 检索到的依据不足以支撑回答。这是刻意的：宁可说不知道，也不编。
+    </p>
+
+    <!--
+      ⚠️ 读图失败**必须说出来**，而且**任何档位都显示**（`PLAN §8.3` D10）：
+         不说的话，用户会以为我们看过这张图了 —— 那就是"静默降级"，
+         而这条问答的质量无从解释（"我明明发了图，它怎么没看见"）。
+    -->
+    <p v-if="message.imageError" class="alert alert--warn banner">
+      {{ message.imageError }}
     </p>
 
     <div v-if="message.content" class="bubble">
@@ -126,6 +142,17 @@ const segments = computed<Segment[]>(() => {
       <template v-else>生成出错：{{ message.error }}</template>
       <template v-if="message.content"> 上面的内容是已经生成的部分，不是完整回答。</template>
     </p>
+
+    <!--
+      读图读到了什么 —— **只在详细档显示**（和置信度同一类东西：实现细节）。
+      ⚠️ 用 `<details>` 折叠：这句最长 300 多字（`memory_line` 里的转写截到 240 字），
+         直接铺开会把回答挤到屏幕外面去。
+      ⚠️ `isDetailed()` 必须是**函数调用** —— 裸标识符会被编译器当常量折叠（见 prefs.ts）。
+    -->
+    <details v-if="message.imageNote && isDetailed()" class="image-note">
+      <summary>📷 读图结果</summary>
+      <p class="image-note__body">{{ message.imageNote }}</p>
+    </details>
 
     <section v-if="message.citations.length > 0" class="sources">
       <h4 class="sources__title">参考来源 · {{ message.citations.length }} 条</h4>
@@ -184,6 +211,26 @@ const segments = computed<Segment[]>(() => {
 
 .banner {
   margin: 0;
+}
+
+.image-note {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.image-note summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.image-note__body {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--border-strong);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .sources {

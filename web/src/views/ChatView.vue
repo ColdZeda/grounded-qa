@@ -15,6 +15,7 @@ import MessageItem from '@/components/MessageItem.vue'
 import { ApiError } from '@/api/client'
 import { streamAnswer } from '@/api/chat'
 import { createConversation, getConversation, listMessages } from '@/api/conversations'
+import { IMAGE_ACCEPT, describeImageProblem, primeImageUrl, uploadImage } from '@/api/images'
 import type { MessageOut } from '@/types/api'
 import type { UiMessage } from '@/types/ui'
 
@@ -35,11 +36,120 @@ const scroller = ref<HTMLElement | null>(null)
 /** 用户是不是"贴着底部"。不贴就说明他在往上翻历史 —— 这时**不能**把他拽回来。 */
 const stick = ref(true)
 
+// ------------------------------------------------------------
+// 附件（一张图）
+// ------------------------------------------------------------
+/**
+ * 待发送的那张图。
+ *
+ * ⚠️ **选好就先本地预览**（`URL.createObjectURL(file)`），不等上传 ——
+ *    上传 3 MB 在弱网要几秒，用户需要立刻看到"我选的就是这张"。
+ * ⚠️ 上传是**先落库**再提问的（两步）：图要能长期留着（刷新还得看得见），
+ *    所以它天然属于"先存好、再引用"，不能等发消息时才一并塞过去。
+ */
+interface Attachment {
+  file: File
+  /** 本地预览 URL。上传成功后也用它当缩略图，省一次"下载自己刚传的图"。 */
+  previewUrl: string
+  /** 上传成功后的 id。`null` = 还不能发。 */
+  imageId: string | null
+  status: 'uploading' | 'ready' | 'error'
+  error: string
+}
+
+const attach = ref<Attachment | null>(null)
+/** 选图阶段就被挡下来的提示（格式 / 大小）。和"上传失败"分开：那个有图可看，这个没有。 */
+const attachNotice = ref('')
+const fileInput = ref<HTMLInputElement | null>(null)
+
+const uploading = computed(() => attach.value?.status === 'uploading')
+const canSend = computed(() => draft.value.trim().length > 0 && !uploading.value)
+
 const phaseLabel = computed(() => {
+  // ⚠️ 上传中也得给个说法：不然按钮明明亮着却点不动（或者点下去什么都没发生）。
+  if (uploading.value) return '图片上传中…'
   if (phase.value === 'retrieving') return '正在检索知识库…'
   if (phase.value === 'generating') return '正在生成回答…'
   return ''
 })
+
+function pickImage(): void {
+  attachNotice.value = ''
+  fileInput.value?.click()
+}
+
+function onFileChange(event: Event): void {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  // ⚠️ **立刻清空**：不清的话，同一个文件选第二次不会触发 `change`
+  //    （用户改完图又选回原来那张时，表现就是"点了没反应"）。
+  input.value = ''
+  if (file) void attachFile(file)
+}
+
+/** 本地预检 + 上传。任意一步失败都留在界面上，不静默吞掉。 */
+async function attachFile(file: File): Promise<void> {
+  attachNotice.value = ''
+
+  const problem = describeImageProblem(file)
+  if (problem) {
+    attachNotice.value = problem
+    return
+  }
+
+  const previewUrl = URL.createObjectURL(file)
+  attach.value = { file, previewUrl, imageId: null, status: 'uploading', error: '' }
+
+  try {
+    const image = await uploadImage(file)
+    // ⚠️ 等上传的这段时间里用户可能已经移除了这张图、或换了一张 ——
+    //    那就别把结果挂到别的东西上（否则缩略图会对不上）。
+    if (attach.value?.previewUrl !== previewUrl) return
+    attach.value.imageId = image.id
+    attach.value.status = 'ready'
+    // 让消息里的缩略图直接用这张本地预览：图就在眼前，没必要再下一遍。
+    primeImageUrl(image.id, previewUrl)
+  } catch (err) {
+    if (attach.value?.previewUrl !== previewUrl) return
+    attach.value.status = 'error'
+    attach.value.error =
+      err instanceof ApiError ? err.message : `上传失败：${(err as Error).message}`
+  }
+}
+
+function removeAttach(): void {
+  attach.value = null
+  attachNotice.value = ''
+}
+
+/** 上传失败（限流 / 网络抖一下）后重试，不用让用户重新选一遍图。 */
+function retryAttach(): void {
+  const current = attach.value
+  if (current) void attachFile(current.file)
+}
+
+/**
+ * 粘贴一张图（Ctrl+V）。
+ *
+ * ⚠️ 这是**截图提问**最主要的入口：用户截完图顺手就是粘贴，
+ *    比"点选图 → 在文件对话框里找到刚才那张截图"快得多。
+ * ⚠️ 只在剪贴板里真的有**文件**时才拦：不然会把用户粘贴的文字也吃掉。
+ */
+function onPaste(event: ClipboardEvent): void {
+  const items = event.clipboardData?.items
+  if (!items) return
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i]
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      const file = item.getAsFile()
+      if (file) {
+        event.preventDefault()
+        void attachFile(file)
+        return
+      }
+    }
+  }
+}
 
 /**
  * ⚠️ 懒创建会话后我们会自己 `router.replace` 到真实 id，
@@ -60,8 +170,33 @@ function toUi(message: MessageOut): UiMessage {
     // 2026-10-15 起置信度**落库了**（`architecture.md` §9.19）→ 刷新后徽标不再消失。
     // （这里以前写死 `null`，注释还写着"这是已知的不完美" —— 现在修掉了。）
     confidence: message.confidence,
+    // 图也一样：`meta.image_id` 落库了，刷新后缩略图还在（不需要额外请求列表）。
+    imageId: message.meta?.image_id ?? null,
     createdAt: message.created_at,
   }
+}
+
+/**
+ * 历史消息 → 界面消息。**多一步搬运**，原因是读图读数存在哪：
+ *
+ * ⚠️ 后端把 `image_note` / `image_error` 写在**用户消息**的 `meta` 里（图属于那条消息），
+ *    但界面上要挂在**它对应的那条回答**上 —— 否则"📷 读图结果"出现在我的问题底下，
+ *    看着像我自己说的话。
+ * ⚠️ 所以要搬一次：助手消息紧跟在它回答的那条用户消息之后（后端就是按这个顺序存的）。
+ *    这样"刷新后看到的"和"刚生成时看到的"是同一个样子，不用两套渲染逻辑。
+ */
+function toUiList(history: MessageOut[]): UiMessage[] {
+  const out = history.map(toUi)
+  for (let i = 0; i < history.length; i += 1) {
+    const source = history[i]
+    if (source.role !== 'user' || !source.meta) continue
+    const reply = out[i + 1]
+    if (reply && reply.role === 'assistant') {
+      reply.imageNote = source.meta.image_note ?? null
+      reply.imageError = source.meta.image_error ?? null
+    }
+  }
+  return out
 }
 
 let localSeq = 0
@@ -86,7 +221,7 @@ async function load(): Promise<void> {
   try {
     const [conversation, history] = await Promise.all([getConversation(id), listMessages(id)])
     conversationTitle.value = conversation.title
-    messages.value = history.map(toUi)
+    messages.value = toUiList(history)
     await scrollToBottom(true)
   } catch (err) {
     loadError.value =
@@ -136,9 +271,18 @@ function titleFrom(question: string): string {
 
 async function send(): Promise<void> {
   const question = draft.value.trim()
-  if (!question || phase.value !== 'idle') return
+  // ⚠️ 只有**上传成功**的图才跟着走。`uploading` 时直接不许发：
+  //    发了也带不上图，而用户会以为图一起发过去了。
+  const image = attach.value?.status === 'ready' ? attach.value : null
+  if (!question || phase.value !== 'idle' || uploading.value) return
 
   draft.value = ''
+  // 上传失败了还点了发送 → 别把"没带图"这件事悄悄咽掉，说一句。
+  if (attach.value && image === null) {
+    attachNotice.value = '图片没上传成功，这条问题只带了文字'
+  }
+  attach.value = null
+
   messages.value.push({
     id: nextLocalId(),
     role: 'user',
@@ -147,6 +291,7 @@ async function send(): Promise<void> {
     refused: false,
     latencyMs: null,
     confidence: null,
+    imageId: image?.imageId ?? null,
     createdAt: new Date().toISOString(),
   })
 
@@ -194,6 +339,12 @@ async function send(): Promise<void> {
           pending.citations = event.citations
           pending.refused = event.refused
           pending.confidence = event.confidence
+          // ⚠️ 图的状态**必须落到界面上**：`error` 非空说明这次**没读成图**，
+          //    用户有权知道（否则会以为我们看过图了 —— `PLAN §8.3` D10）。
+          if (event.image) {
+            pending.imageNote = event.image.note
+            pending.imageError = event.image.error
+          }
           // 拒答是**直接给结论**的：后端不会再调模型，所以不会再有 delta。
           // 把它当成"生成中"会让界面一直转圈。
           phase.value = event.refused ? 'idle' : 'generating'
@@ -212,6 +363,7 @@ async function send(): Promise<void> {
         },
       },
       controller.signal,
+      image?.imageId ?? null,
     )
   } catch (err) {
     if (controller.signal.aborted) {
@@ -278,15 +430,60 @@ onBeforeUnmount(() => {
     </main>
 
     <footer class="composer">
-      <p v-if="phaseLabel" class="phase">{{ phaseLabel }}</p>
+      <div class="composer__bar">
+        <button
+          class="btn btn--ghost btn--sm"
+          type="button"
+          :disabled="phase !== 'idle' || uploading"
+          title="也可以直接把截图粘贴进输入框（Ctrl+V）"
+          @click="pickImage"
+        >
+          ＋ 图片
+        </button>
+        <span v-if="phaseLabel" class="phase">{{ phaseLabel }}</span>
+      </div>
+
+      <!--
+        ⚠️ `accept` 只是给文件对话框一个初始筛选，**不是校验**（用户能切成"所有文件"）。
+       真正的拦截是 `describeImageProblem()`（前端）和 `app/images.py::sniff`（后端看文件头）。
+      -->
+      <input
+        ref="fileInput"
+        class="hidden-file"
+        type="file"
+        :accept="IMAGE_ACCEPT"
+        @change="onFileChange"
+      />
+
+      <p v-if="attachNotice" class="alert alert--warn attach-notice">{{ attachNotice }}</p>
+
+      <div v-if="attach" class="attach">
+        <img class="attach__thumb" :src="attach.previewUrl" alt="待发送的图片" />
+        <span class="attach__state">
+          <template v-if="attach.status === 'uploading'">上传中…</template>
+          <template v-else-if="attach.status === 'ready'">已就绪，发送时一起提交</template>
+          <template v-else>{{ attach.error }}</template>
+        </span>
+        <button
+          v-if="attach.status === 'error'"
+          class="btn btn--ghost btn--sm"
+          type="button"
+          @click="retryAttach"
+        >
+          重试
+        </button>
+        <button class="btn btn--ghost btn--sm" type="button" @click="removeAttach">移除</button>
+      </div>
+
       <div class="composer__row">
         <textarea
           v-model="draft"
           class="field composer__input"
           rows="2"
-          placeholder="输入问题，Enter 发送，Shift + Enter 换行"
+          placeholder="输入问题，Enter 发送，Shift + Enter 换行（可以直接 Ctrl+V 粘贴截图）"
           :disabled="phase !== 'idle'"
           @keydown="onKeydown"
+          @paste="onPaste"
         ></textarea>
 
         <button
@@ -301,7 +498,7 @@ onBeforeUnmount(() => {
           v-else
           class="btn composer__send"
           type="button"
-          :disabled="!draft.trim()"
+          :disabled="!canSend"
           @click="send"
         >
           发送
@@ -359,11 +556,56 @@ onBeforeUnmount(() => {
   padding: 10px 20px 14px;
 }
 
-.phase {
+.composer__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   max-width: 820px;
-  margin: 0 auto 6px;
+  margin: 0 auto 8px;
+}
+
+.phase {
+  /* 阶段提示靠右，和左边的"＋ 图片"分开 —— 它们是两类信息 */
+  margin-left: auto;
   color: var(--text-muted);
   font-size: 0.8rem;
+}
+
+.hidden-file {
+  display: none;
+}
+
+.attach-notice {
+  max-width: 820px;
+  margin: 0 auto 8px;
+}
+
+/* 待发送的图：一条细带，不抢输入框的位置 */
+.attach {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  max-width: 820px;
+  margin: 0 auto 8px;
+  padding: 6px 10px 6px 6px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+
+.attach__thumb {
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+.attach__state {
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  word-break: break-word;
 }
 
 .composer__row {

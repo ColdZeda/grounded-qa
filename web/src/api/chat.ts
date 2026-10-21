@@ -16,7 +16,7 @@
 
 import { ApiError, apiFetch, authHeaders } from './client'
 import { consumeSse, type SseFrame } from './sse'
-import type { DoneEvent, ErrorEvent, SourcesEvent } from '@/types/api'
+import type { DoneEvent, ErrorEvent, ImageInfo, SourcesEvent } from '@/types/api'
 
 export interface StreamHandlers {
   /** 检索完成、**开始生成之前**。前端可以先把"参考来源"渲染出来。 */
@@ -47,6 +47,22 @@ function asString(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
+/**
+ * `sources` 里那张图的读数。
+ *
+ * ⚠️ 没有这个字段 = **这条消息没带图**（不是"带了但没读成"）—— 两者在界面上
+ * 是完全不同的提示，所以这里宁可返回 `undefined` 也不返回 `{analyzed:false}`。
+ */
+function asImageInfo(value: unknown): ImageInfo | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const raw = value as Record<string, unknown>
+  return {
+    analyzed: raw.analyzed === true,
+    note: typeof raw.note === 'string' ? raw.note : null,
+    error: typeof raw.error === 'string' ? raw.error : null,
+  }
+}
+
 function dispatch(frame: SseFrame, handlers: StreamHandlers): void {
   const payload = parseJson(frame.data)
   if (payload === null) return
@@ -59,6 +75,7 @@ function dispatch(frame: SseFrame, handlers: StreamHandlers): void {
           : [],
         confidence: asNumber(payload.confidence),
         refused: payload.refused === true,
+        image: asImageInfo(payload.image),
       })
       break
     case 'delta':
@@ -92,12 +109,16 @@ function dispatch(frame: SseFrame, handlers: StreamHandlers): void {
  *   ⚠️ **取消不会撤销任何东西**：后端在生成器的 `finally` 里已经把
  *   **用户提问 + 已生成的那半截回答**落库了（那是刻意的，见 `chat.py` 的注释）。
  *   所以刷新页面会看到它 —— 这是对的行为，"我看到的"和"存下来的"应该一致。
+ * @param imageId 可选：**先** `uploadImage()` 拿到的 id。带图时后端会读一次图。
+ *   ⚠️ 图只对**这一条消息**生效。后续追问靠历史里的文字记忆（模型看不到图），
+ *   所以追问"那多久到账"时它仍然知道刚才有张图 —— 靠的是 `meta.image_note`。
  */
 export async function streamAnswer(
   conversationId: string,
   question: string,
   handlers: StreamHandlers,
   signal?: AbortSignal,
+  imageId?: string | null,
 ): Promise<void> {
   const response = await apiFetch(`/conversations/${conversationId}/messages`, {
     method: 'POST',
@@ -108,7 +129,9 @@ export async function streamAnswer(
       Accept: 'text/event-stream',
       ...authHeaders(),
     },
-    body: JSON.stringify({ question }),
+    // ⚠️ `image_id` 显式给 `null`（而不是省略字段）：这是"我这条消息不带图"的
+    //    明确表态，和"忘了传"区分开。
+    body: JSON.stringify({ question, image_id: imageId ?? null }),
     signal,
   })
 

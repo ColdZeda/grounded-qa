@@ -26,4 +26,20 @@ export interface UiMessage {
   error?: string | null
   /** 用户主动点了"停止"。 */
   cancelled?: boolean
+
+  /**
+   * 这条消息带的那张图（**只有用户消息**）。
+   * ⚠️ 存的是 `image_id` 而不是字节：图留在服务端，界面按 id 取。
+   */
+  imageId?: string | null
+  /**
+   * 助手消息：读图读到了什么（`sources.image.note`）。
+   * ⚠️ 只在**详细**档显示 —— 它是"我们怎么看到的"，不是回答本身。
+   */
+  imageNote?: string | null
+  /**
+   * 助手消息：读图**失败**了（`sources.image.error`）。
+   * ⚠️ 这个**任何档位都要显示**：不说的话，用户会以为我们看过这张图了。
+   */
+  imageError?: string | null
 }
