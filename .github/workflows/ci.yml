@@ -45,7 +45,20 @@ jobs:
         run: uv run ruff format --check .
 
       - name: pytest
-        run: uv run pytest -q
+        # ⚠️ `| tee` 不会吃掉退出码：GitHub Actions 的 bash 默认带 `-o pipefail`，
+        #    所以 pytest 红了这一步照样红。留着 `pytest.log` 是为了下一步能贴出来。
+        run: uv run pytest -q 2>&1 | tee pytest.log
+
+      - name: 失败时把 pytest 输出贴到 commit 评论
+        # ⚠️ 为什么不是只写 `$GITHUB_STEP_SUMMARY`：summary 得登录网页才看得到，
+        #    而 commit 评论走**公开 API** 就能读（`GET /repos/{owner}/{repo}/commits/{sha}/comments`）。
+        #    排查 CI 的时候，"能不能不登录就看到失败原因"是硬需求。
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          body=$(printf 'CI 失败（pytest）。最后 150 行：\n\n```\n%s\n```' "$(tail -n 150 pytest.log)")
+          gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" -f body="$body"
 
   frontend:
     name: 前端 · 类型检查 + 构建
