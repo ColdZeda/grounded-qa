@@ -53,10 +53,14 @@ from app.db.session import dispose_engine, get_session_factory
 from app.rag.pipeline import Answer, RagPipeline, build_clients
 from app.rag.providers import ChatClient, ModelAPIError, aclose_http_client
 from app.rag.retrieval import HybridRetriever, RetrievedChunk
+from app.rag.vision import build_image_client
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 QUESTIONS_DIR = REPO_ROOT / "evals" / "questions"
 RESULTS_DIR = REPO_ROOT / "evals" / "results"
+#: 图片 fixture 与它的真值（都进 git；镜像里排除，见 `.dockerignore`）
+IMAGES_DIR = REPO_ROOT / "evals" / "fixtures" / "images"
+IMAGES_META = REPO_ROOT / "evals" / "fixtures" / "images.meta.yaml"
 
 ABLATIONS = ("fulltext", "vector", "rrf", "rerank")
 
@@ -1005,23 +1009,264 @@ async def _run_answer_layers(args: argparse.Namespace) -> int:
     return 0
 
 
+def _skeleton(text: str) -> str:
+    """把一段文字压成"骨架"：去掉空白与 `¥ , . ：`，转小写。
+
+    ⚠️ 为什么不能按原串比：模型把 `¥1,280.00` 写成 `¥1280.00` 是**对的**，
+        按原串比会把正确答案判成读错。骨架比的是"数字与字母序列对不对"。
+    """
+    return re.sub(r"[\s¥￥,，.。:：]", "", text or "").lower()
+
+
+def _load_image_cases() -> list[dict[str, Any]]:
+    path = IMAGES_META
+    if not path.exists():
+        raise SystemExit(f"缺真值文件：{path}")
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise SystemExit(f"{path} 的顶层结构不是列表")
+    return [dict(item) for item in raw]
+
+
+async def _read_image_cases(client: Any, cases: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """① 读图这一层：**只看"模型读到了什么"，不涉及检索与生成**。
+
+    ⚠️ 与答案层**分开报**：答错了要知道是"读错了"还是"检索/生成错了" ——
+        混成一个数字，badcase 就归因不了（这正是本项目分层评测的初衷）。
+    """
+    rows: list[dict[str, Any]] = []
+    for case in cases:
+        path = IMAGES_DIR / str(case["file"])
+        if not path.exists():
+            raise SystemExit(f"缺图：{path}（fixtures 没齐，先补图；**不许按 0 分算**）")
+        mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+        try:
+            analysis = await client.analyze(path.read_bytes(), content_type=mime)
+        except ModelAPIError as exc:
+            rows.append({**case, "error": f"ModelAPIError: {exc}"})
+            continue
+
+        skeleton = _skeleton(analysis.transcription)
+        must_have = [str(token) for token in case.get("must_have") or []]
+        missing = [token for token in must_have if _skeleton(token) not in skeleton]
+        scene_ok: bool | None = None
+        if case.get("scene_any"):
+            scene = analysis.scene or ""
+            scene_ok = any(str(key) in scene for key in case["scene_any"])
+        exact_ok: bool | None = None
+        if "has_exact_fields" in case:
+            exact_ok = analysis.has_exact_fields == bool(case["has_exact_fields"])
+
+        rows.append(
+            {
+                **case,
+                "image_type": analysis.image_type,
+                "scene": analysis.scene,
+                "transcription": analysis.transcription,
+                "fallback": analysis.fallback,
+                "missing": missing,
+                "scene_ok": scene_ok,
+                "exact_ok": exact_ok,
+                "ok": not missing and scene_ok is not False,
+                #: ⚠️ `has_exact_fields` **不算硬断言**：它在代码里不控制任何分支
+                #:    （抽单号是无条件的，见 `app/api/chat.py::_order_context`），
+                #:    判错只意味着"多查或少查一次库"，对答案没有影响。
+                #:    混进硬断言会把它算成失败，反倒掩盖真正的读错。
+            }
+        )
+    return rows
+
+
+def _print_image_reading(rows: Sequence[dict[str, Any]]) -> None:
+    print()
+    print("【读图层】模型从图里读到了什么（与答案层分开报）")
+    print(f"{'文件':<22}{'类型':<12}{'必须字符串':>10}{'场景':>6}{'精确字段':>10}{'降级':>6}")
+    print("-" * 72)
+    for row in rows:
+        if row.get("error"):
+            print(f"{row['file']:<22} 出错：{row['error']}")
+            continue
+        total = len(row.get("must_have") or [])
+        hit = total - len(row["missing"])
+        scene = "—" if row["scene_ok"] is None else ("✓" if row["scene_ok"] else "✗")
+        exact = "—" if row["exact_ok"] is None else ("✓" if row["exact_ok"] else "✗")
+        print(
+            f"{row['file']:<22}{row['image_type']:<12}{f'{hit}/{total}':>10}"
+            f"{scene:>6}{exact:>10}{'是' if row['fallback'] else '否':>6}"
+        )
+        if row["missing"]:
+            print(f"    缺：{' / '.join(row['missing'])}")
+            print(f"    实际转写：{(row['transcription'] or '（空）')[:120]}")
+    ok = sum(1 for row in rows if row.get("ok"))
+    exact_miss = [str(row["file"]) for row in rows if row.get("exact_ok") is False]
+    print(f"\n读图硬断言：**{ok}/{len(rows)} 张通过**（必须字符串全中 ＋ 场景命中）")
+    if exact_miss:
+        print(
+            f"  ⚠️ `has_exact_fields` 与判据不符 {len(exact_miss)} 张："
+            f"{', '.join(exact_miss)}（只影响要不要查一次订单库，不影响答案）"
+        )
+
+
+async def _run_image_answers(
+    args: argparse.Namespace, rows: Sequence[dict[str, Any]], *, mode: str
+) -> dict[str, Any]:
+    """② 答案层：同一批问题，**带图 / 不带图**各答一遍。
+
+    ⚠️ 有图的这一组用的是**真实读图结果**（上面刚跑出来的），不是真值 ——
+        这样"图读错了"会如实反映到答案上，而不是被真值掩盖。
+    """
+    settings = get_settings()
+    chat, embedder, reranker = build_clients(settings)
+    cases = [row for row in rows if row.get("question")]
+    factory = get_session_factory()
+    results: list[dict[str, Any]] = []
+    started = datetime.now(tz=UTC)
+
+    async with factory() as session:
+        tenant_id = await _resolve_tenant_id(session, settings.default_tenant_id)
+        paths = await _document_paths(session, tenant_id, kb=args.kb)
+        for row in cases:
+            use_image = mode == "image"
+            pipeline = RagPipeline(
+                session=session,
+                tenant_id=tenant_id,
+                chat=chat,
+                embedder=embedder,
+                reranker=reranker,
+                settings=settings,
+                image_scene=(row.get("scene") or "") if use_image else "",
+                image_text=(row.get("transcription") or "") if use_image else "",
+            )
+            text, refused, error = "", False, None
+            try:
+                final: Answer | None = None
+                async for event in pipeline.answer(question=str(row["question"])):
+                    if isinstance(event, Answer):
+                        final = event
+                if final is None:
+                    error = "没有拿到最终 Answer"
+                else:
+                    text, refused = final.text, final.refused
+            except ModelAPIError as exc:
+                error = f"ModelAPIError: {exc}"
+
+            answer_norm = _norm(_strip_citation_marks(text))
+            points = [
+                (point, *_point_hit(point, answer_norm))
+                for point in row.get("required_points") or []
+            ]
+            hit = sum(1 for _, ok, _ in points if ok)
+            results.append(
+                {
+                    "id": row["file"],
+                    "mode": mode,
+                    "question": row["question"],
+                    "refused": refused,
+                    "text": text,
+                    "points_hit": hit,
+                    "points_total": len(points),
+                    "ok": (not error) and hit == len(points),
+                    "cited": [
+                        paths.path_of(c.document_id) for c in (final.citations if final else [])
+                    ],
+                    **({"error": error} if error else {}),
+                }
+            )
+
+    stamp = started.strftime("%Y%m%dT%H%M%SZ")
+    out = RESULTS_DIR / f"image-{mode}-{stamp}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        json.dumps(
+            {"kind": "image-answer", "mode": mode, "rows": results}, ensure_ascii=False, indent=2
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return {
+        "mode": mode,
+        "total": len(results),
+        "ok": sum(1 for item in results if item["ok"]),
+        "rows": results,
+        "result_file": str(out.relative_to(REPO_ROOT)),
+    }
+
+
+async def _run_image(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    client = build_image_client(settings)
+    if client is None:
+        raise SystemExit("读图没启用：检查 IMAGE_ANALYSIS_ENABLED / API key")
+    cases = _load_image_cases()
+    if args.limit:
+        cases = cases[: args.limit]
+
+    print(f"图片 fixture：{len(cases)} 张 · 模型 {client.model}")
+    rows = await _read_image_cases(client, cases)
+    _print_image_reading(rows)
+
+    if args.mode in ("image", "no-image", "both"):
+        modes: tuple[str, ...] = ("image", "no-image") if args.mode == "both" else (args.mode,)
+    else:
+        # `--layer image` 没显式给 `--mode`（默认 open）时，按"带图 vs 不带图"两组跑
+        modes = ("image", "no-image")
+        summaries = [await _run_image_answers(args, rows, mode=mode) for mode in modes]
+        print()
+        print("【答案层】同一批问题：**带图** vs **不带图**")
+        print(f"{'模式':<10}{'要点全中':>10}{'题数':>6}{'拒答':>6}")
+        print("-" * 34)
+        for summary in summaries:
+            refused = sum(1 for item in summary["rows"] if item["refused"])
+            print(
+                f"{summary['mode']:<10}{summary['ok']:>6}/{summary['total']:<3}"
+                f"{summary['total']:>6}{refused:>6}"
+            )
+        for summary in summaries:
+            for item in summary["rows"]:
+                mark = "✓" if item["ok"] else "✗"
+                print(
+                    f"  [{summary['mode']}] {mark} {item['id']}"
+                    f"  要点 {item['points_hit']}/{item['points_total']}"
+                    f"{'  （拒答）' if item['refused'] else ''}"
+                )
+        out = RESULTS_DIR / f"image-contrast-{datetime.now(tz=UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
+        out.write_text(
+            json.dumps(
+                {
+                    "kind": "image-contrast",
+                    "reading": rows,
+                    "answers": summaries,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        print(f"\n对照已存：{out.relative_to(REPO_ROOT)}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="run.py", description="grounded-qa 评测 runner")
     parser.add_argument(
         "--layer",
         default="retrieval",
-        choices=["retrieval", "generation", "refusal", "all"],
-        help="哪一层（all 只跑 generation + refusal；retrieval 单独跑）",
+        choices=["retrieval", "generation", "refusal", "image", "all"],
+        help="哪一层（all 只跑 generation + refusal；retrieval / image 单独跑）",
     )
     parser.add_argument("--kb", default="senyu", help="知识库前缀（ingest 时 --kb 的值）")
     parser.add_argument(
         "--mode",
         default="open",
-        choices=["open", "closed", "both"],
+        choices=["open", "closed", "image", "no-image", "both"],
         help=(
-            "open=线上链路（检索＋精排＋拒答）；"
-            "closed=闭卷对照（关掉检索，模型凭自身知识答）；"
-            "both=两组都跑并打一张对照表"
+            "generation/refusal 层：open=线上链路（检索＋精排＋拒答）；"
+            "closed=闭卷对照（关掉检索）；both=两组都跑。"
+            "image 层：image=带图、no-image=不带图、both=两者对照；"
+            "默认（open）在 image 层等价于 both。"
         ),
     )
     parser.add_argument("--top-k", type=int, default=5, help="hit@k 的 k")
@@ -1045,6 +1290,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _rescore_generation(args)
     if args.layer == "retrieval":
         return asyncio.run(_run_retrieval(args))
+    if args.layer == "image":
+        return asyncio.run(_run_image(args))
     return asyncio.run(_run_answer_layers(args))
 
 

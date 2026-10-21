@@ -43,4 +43,7 @@ docs
 #    三者边界见 `AGENTS.md §13`。
 evals/questions
 evals/run.py
+# ⚠️ 图片 fixture（2026-10-22）：只在开发机跑评测时用，生产不跑评测 —— 别把几 MB 图塞进镜像。
+#    它们进 **git**（`evals/fixtures/images/`），所以换机器能拿到；只是不进**镜像**。
+evals/fixtures
 tests
