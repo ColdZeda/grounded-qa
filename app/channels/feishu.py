@@ -289,9 +289,25 @@ def render_reply(answer: Answer, *, show_sources: bool) -> str:
 
     lines = [body, "", "**—— 参考来源 ——**"]
     for cite in answer.citations:
-        snippet = " ".join(cite.snippet.split())[:60]
-        lines.append(f"**[{cite.index}]** {snippet}（{cite.score_kind} {cite.score:.3f}）")
+        lines.append(
+            f"**[{cite.index}]** {_snippet(cite.snippet)}（{cite.score_kind} {cite.score:.3f}）"
+        )
     return "\n".join(lines)
+
+
+def _snippet(text: str, limit: int = 60) -> str:
+    """来源摘要的**单行化 ＋ 洗表格**。
+
+    ⚠️ 摘要直接取自 chunk 原文，标题和表格行常常一起被带出来
+       （`部件类别 | 期限 | 起算点 | |------|------| | 家具主体…`）。
+       卡片不渲染表格 ⟹ **只降级正文是不够的**，来源区照样会露源码。
+    """
+    flat = " ".join(text.split())
+    # 分隔行（`|------|` / `|:--:|`）整段换成占位符，再统一成全角竖线
+    flat = re.sub(r"\|?\s*:?-{2,}:?\s*\|?", "｜", flat)
+    flat = flat.replace("|", "｜")
+    flat = re.sub(r"(?:｜\s*)+", "｜", flat)  # `｜ ｜` 挤在一起 → 一个
+    return " ".join(flat.split()).strip("｜ ")[:limit]
 
 
 class FeishuChannel:

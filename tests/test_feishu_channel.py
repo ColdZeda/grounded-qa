@@ -201,6 +201,36 @@ def test_to_feishu_markdown_joins_lone_citation_marker() -> None:
     assert "该版本已废止。 [3]" in out
 
 
+def test_render_reply_cleans_table_in_source_snippet() -> None:
+    """来源摘要取自 chunk 原文，常带着表格行 —— 卡片不渲染表格，**摘要也得洗**。
+
+    ⚠️ 2026-10-22 真机第二次看到：正文的表格降级好了，来源区还在露 `|------|`。
+    """
+    answer = Answer(
+        text="家具主体保修 2 年。",
+        refused=False,
+        citations=[
+            Citation(
+                index=3,
+                chunk_id="c3",
+                document_id="d3",
+                score=0.908,
+                score_kind="rerank",
+                snippet="部件类别 | 期限 | 起算点 | |------|------| | 家具主体（床架、书桌）| 2 年",
+            )
+        ],
+        confidence=0.9,
+        latency_ms=10,
+    )
+
+    rendered = render_reply(answer, show_sources=True)
+
+    assert "|" not in rendered  # 半个管道符都不许留
+    assert "---" not in rendered
+    assert "家具主体（床架、书桌）" in rendered  # 内容不许被洗掉
+    assert "rerank 0.908" in rendered
+
+
 class _FakeSender:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
