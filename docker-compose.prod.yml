@@ -96,7 +96,10 @@ services:
     profiles: ["feishu"]
     restart: on-failure
     command: ["python", "-m", "app.channels.feishu_runner"]
-    mem_limit: 96m
+    # ⚠️ 320m 是**实测**出来的：feishu 进程 anon ≈197 MiB（lark ＋ sqlalchemy ＋ asyncpg ＋ httpx）。
+    #    第一版按 96m 估的 → 一开就被内核 SIGKILL（exit 137），**死在打第一行日志之前**，
+    #    `docker logs` 全空、healthcheck 只 pgrep 所以照样 healthy（2026-10-22 实测踩中）。
+    mem_limit: 320m
     healthcheck:
       # ⚠️ 没有监听端口（长连接是**出站**），只能查进程
       test: ["CMD-SHELL", "pgrep -f 'app.channels.feishu_runner' > /dev/null || exit 1"]

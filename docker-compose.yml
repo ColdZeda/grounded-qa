@@ -149,7 +149,9 @@ services:
       redis:
         condition: service_healthy
     command: ["python", "-m", "app.channels.feishu_runner"]
-    mem_limit: 128m
+    # ⚠️ 320m：feishu 进程 anon ≈197 MiB（lark ＋ sqlalchemy ＋ asyncpg ＋ httpx）。
+    #    128m 本地靠 swap 勉强活着，96m 直接 SIGKILL（exit 137）—— 见 `AGENTS §10`。
+    mem_limit: 320m
     healthcheck:
       # ⚠️ 只能查"进程还在吗"：它没有监听端口（长连接是**出站**的）。
       #    镜像里装了 procps（worker 的 healthcheck 也靠它），`pgrep` 可用。
