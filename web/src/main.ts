@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 
 import { onUnauthorized } from '@/api/client'
 import { signOut } from '@/stores/auth'
+import { loadRuntimeEnv } from '@/stores/env'
 import App from './App.vue'
 import router from './router'
 
@@ -19,5 +20,14 @@ onUnauthorized(() => {
   signOut()
   void router.push({ name: 'login' })
 })
+
+/**
+ * 探一次"我现在连的是哪套后端"。
+ *
+ * ⚠️ **不 `await`**：角标是辅助信息，不该拦住首屏。拿不到就不显示（`stores/env.ts` 里
+ *    把失败落成 `unknown`）—— 宁可没有，也不猜一个错的（2026-10-22 那个"分不清本地/生产"
+ *    的坑，猜错比不显示更坏）。
+ */
+void loadRuntimeEnv()
 
 createApp(App).use(router).mount('#app')

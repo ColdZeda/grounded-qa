@@ -5,6 +5,7 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { currentUser, signOut } from '@/stores/auth'
+import { runtimeEnv } from '@/stores/env'
 import { detailLevel, setDetailLevel } from '@/stores/prefs'
 
 const router = useRouter()
@@ -62,6 +63,29 @@ function logout(): void {
     <RouterLink class="brand" :to="{ name: 'conversations' }">
       grounded<span>·</span>qa
     </RouterLink>
+
+    <!--
+      环境角标：`本地` / `生产`。
+      ⚠️ 两套环境的界面**长得一模一样**，右上角都是同一个 `admin@example.com` ——
+         用户 2026-10-22 就在两者之间反复搞混，为"密码为什么错"白排查了半小时。
+      ⚠️ `unknown` 时不显示：宁可没有，也不要标错（`stores/env.ts` 里失败即 unknown）。
+      ⚠️ 条件写在**表达式**里（`runtimeEnv === 'dev'`），不是裸标识符 ——
+         `AGENTS §10` 那个编译期常量折叠的坑，裸标识符当整个条件时 `v-if` 会整段消失。
+    -->
+    <span
+      v-if="runtimeEnv === 'dev'"
+      class="env env--dev"
+      title="连的是本地后端（localhost:58000）—— 这里的账号/数据与生产完全独立"
+    >
+      本地
+    </span>
+    <span
+      v-else-if="runtimeEnv === 'prod'"
+      class="env env--prod"
+      title="连的是生产后端（120.24.67.82）—— 改动会动到线上数据"
+    >
+      生产
+    </span>
 
     <nav class="nav">
       <RouterLink :to="{ name: 'conversations' }" :class="{ 'is-active': inChat() }">
@@ -121,6 +145,28 @@ function logout(): void {
 
 .brand span {
   color: var(--primary);
+}
+
+/* 环境角标：小、但不是装饰 —— 它回答"我现在动的是哪套数据" */
+.env {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.env--dev {
+  border: 1px solid var(--warn);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.env--prod {
+  border: 1px solid var(--ok);
+  background: #ecfdf3;
+  color: var(--ok);
 }
 
 /* 主导航。`router-link-active` 由 vue-router 自动加 —— 不用自己算当前页 */

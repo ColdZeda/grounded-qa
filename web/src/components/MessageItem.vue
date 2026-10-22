@@ -15,6 +15,7 @@ import { computed, ref } from 'vue'
 
 import CitationList from './CitationList.vue'
 import ImageThumb from './ImageThumb.vue'
+import { renderAnswer } from '@/lib/markdown'
 import { isDetailed } from '@/stores/prefs'
 import type { UiMessage } from '@/types/ui'
 
@@ -33,46 +34,34 @@ const time = computed(() => {
 })
 
 /**
- * 正文切段。
+ * 助手回答渲染成 HTML（Markdown + `[n]` 按钮）。
  *
- * ⚠️ 用 `{ text, citeIndex }` 这种**扁平结构**而不是可辨识联合
- *    （`{kind:'text'} | {kind:'cite'}`）：联合类型在 Vue 模板里
- *    靠 `v-if` 做窄化并不可靠，vue-tsc 经常推不出来。
+ * ⚠️ 只给**助手消息**用。用户自己打的字保持"所见即所得"的纯文本 ——
+ *    不然他打一个 `*` 或 `#` 就被排版掉了（而且他打的 `[1]` 也不该变成按钮）。
+ *    ⚠️ 安全：`lib/markdown.ts` 里 `html: false`，原始 HTML 被转义后才进 `v-html`。
  */
-interface Segment {
-  text: string
-  citeIndex: number | null
+const validIndexes = computed(() => new Set(props.message.citations.map((cite) => cite.index)))
+
+const bodyHtml = computed(() =>
+  renderAnswer(props.message.content, validIndexes.value, activeIndex.value),
+)
+
+/**
+ * `[n]` 的点击：**事件委托**。
+ *
+ * ⚠️ `v-html` 出来的 DOM 里挂不了 Vue 的 `@click`，所以由外层容器统一接住，
+ *    再顺着 `data-cite` 找是哪个索引。`lib/markdown.ts` 里就是按这个属性拼的按钮。
+ */
+function onBodyClick(event: MouseEvent): void {
+  const target = event.target as HTMLElement | null
+  const marker = target?.closest?.('[data-cite]') as HTMLElement | null
+  if (!marker) return
+
+  const index = Number(marker.dataset.cite)
+  if (!Number.isFinite(index)) return
+  activeIndex.value = activeIndex.value === index ? null : index
 }
 
-const segments = computed<Segment[]>(() => {
-  const content = props.message.content
-  if (!content) return []
-
-  const valid = new Set(props.message.citations.map((cite) => cite.index))
-  if (valid.size === 0) return [{ text: content, citeIndex: null }]
-
-  const out: Segment[] = []
-  const pattern = /\[(\d{1,2})\]/g
-  let cursor = 0
-  let match: RegExpExecArray | null
-
-  while ((match = pattern.exec(content)) !== null) {
-    const index = Number(match[1])
-    // ⚠️ 只把**确实存在于来源列表里**的 [n] 变成按钮。
-    //    否则正文里正常的方括号（`[2024]`、或者一个没有引用却写了 `[1]` 的回答）
-    //    会变成点了没反应的按钮 —— 比不渲染更让人困惑。
-    if (!valid.has(index)) continue
-
-    if (match.index > cursor) {
-      out.push({ text: content.slice(cursor, match.index), citeIndex: null })
-    }
-    out.push({ text: '', citeIndex: index })
-    cursor = match.index + match[0].length
-  }
-
-  if (cursor < content.length) out.push({ text: content.slice(cursor), citeIndex: null })
-  return out
-})
 </script>
 
 <template>
@@ -118,19 +107,14 @@ const segments = computed<Segment[]>(() => {
     </p>
 
     <div v-if="message.content" class="bubble">
-      <template v-for="(seg, i) in segments" :key="i">
-        <button
-          v-if="seg.citeIndex !== null"
-          type="button"
-          class="marker"
-          :class="{ 'marker--active': seg.citeIndex === activeIndex }"
-          :title="`跳到来源 [${seg.citeIndex}]`"
-          @click="activeIndex = activeIndex === seg.citeIndex ? null : seg.citeIndex"
-        >
-          [{{ seg.citeIndex }}]
-        </button>
-        <span v-else>{{ seg.text }}</span>
-      </template>
+      <!--
+        用户消息：**纯文本**（所见即所得）。
+        助手消息：渲染 Markdown —— 带图提问必然触发结构化长回答，
+        不渲染的话 `**加粗**` / `| 表格 |` 会原样露在脸上（2026-10-22 真机看到的就是这样）。
+      -->
+      <span v-if="isUser">{{ message.content }}</span>
+      <div v-else class="md" @click="onBodyClick" v-html="bodyHtml"></div>
+
       <!-- 流式光标：让人一眼看出"还在写"，而不是"卡住了" -->
       <span v-if="message.streaming" class="caret" aria-hidden="true"></span>
     </div>
@@ -193,16 +177,107 @@ const segments = computed<Segment[]>(() => {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
-  /* ⚠️ `pre-wrap` 是必须的：回答里的换行要保留，
-     否则模型精心排的列表会挤成一坨。 */
-  white-space: pre-wrap;
   word-break: break-word;
 }
 
+/*
+  ⚠️ `pre-wrap` 只留给**用户消息**（他自己打的换行要保住）。
+     助手消息现在走 Markdown 渲染：换行由 `breaks: true` 负责，
+     这里再 `pre-wrap` 会让 `<p>` 之间多出一堆空行。
+*/
 .msg--user .bubble {
   border-color: transparent;
   background: var(--primary);
   color: #fff;
+  white-space: pre-wrap;
+}
+
+/* ---------- 助手回答的 Markdown 排版 ----------
+   ⚠️ 全部要 `:deep()`：内容由 `v-html` 插入，**不带 scoped 属性**，
+      直接写 `.md p` 匹配不到（这是 Vue scoped CSS 与 v-html 的经典坑）。 */
+
+.md > :deep(*:first-child) {
+  margin-top: 0;
+}
+
+.md > :deep(*:last-child) {
+  margin-bottom: 0;
+}
+
+.md :deep(p) {
+  margin: 0 0 0.6em;
+}
+
+.md :deep(ul),
+.md :deep(ol) {
+  margin: 0 0 0.6em;
+  padding-left: 1.4em;
+}
+
+.md :deep(li) {
+  margin: 0.15em 0;
+}
+
+.md :deep(strong) {
+  font-weight: 650;
+}
+
+.md :deep(h1),
+.md :deep(h2),
+.md :deep(h3),
+.md :deep(h4) {
+  margin: 0.8em 0 0.4em;
+  font-size: 1em;
+  font-weight: 650;
+}
+
+.md :deep(code) {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--surface-sunken);
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+.md :deep(pre) {
+  margin: 0 0 0.6em;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  overflow-x: auto;
+}
+
+.md :deep(pre code) {
+  padding: 0;
+  background: none;
+}
+
+.md :deep(blockquote) {
+  margin: 0 0 0.6em;
+  padding: 2px 10px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-muted);
+}
+
+/* 表格：模型特别爱用它做对比。不给样式就是一坨竖线 */
+.md :deep(table) {
+  margin: 0 0 0.6em;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+
+.md :deep(th),
+.md :deep(td) {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.md :deep(th) {
+  background: var(--surface-sunken);
+  font-weight: 600;
 }
 
 .bubble--empty {
@@ -244,8 +319,8 @@ const segments = computed<Segment[]>(() => {
   font-weight: 600;
 }
 
-/* 正文里的 [n] */
-.marker {
+/* 正文里的 [n]。⚠️ `:deep()` 同上：按钮是 `v-html` 拼出来的 */
+.md :deep(.marker) {
   padding: 0 3px;
   border: none;
   border-radius: 4px;
@@ -256,8 +331,8 @@ const segments = computed<Segment[]>(() => {
   vertical-align: 1px;
 }
 
-.marker:hover,
-.marker--active {
+.md :deep(.marker:hover),
+.md :deep(.marker--active) {
   background: var(--primary);
   color: #fff;
 }
