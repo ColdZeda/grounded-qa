@@ -296,6 +296,21 @@ class Settings(BaseSettings):
 
         return self
 
+    # ---------- 飞书渠道（v1.2 第①项）----------
+    #: 关掉开关就**不起长连接**（容器照常在跑，只是不连）—— 没配凭据的环境不该因此起不来。
+    feishu_enabled: bool = False
+    #: 自建应用的凭据（飞书开放平台 → 应用 → 凭证与基础信息）。
+    #: ⚠️ **不是**群机器人 webhook —— 那个只能发、收不到用户消息（告警用的是它，见上一段）。
+    #: ⚠️ 是**凭据**：只从 `.env` 读，**不打印、不进日志、不进仓库**。
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
+    #: 飞书消息统一记在哪个账号名下（用邮箱指人）。
+    #: ⚠️ **v1.2 先接一个"渠道账号"**：`open_id → 用户` 的映射表要管理界面和权限设计，
+    #:    那是另一件事。单账号够把链路跑通、也够演示；多用户映射写进 `CANDIDATES.md`。
+    feishu_channel_email: str = ""
+    #: 回复要不要带上引用来源（纯文本编号列表）。飞书里点不了 `[1]`，所以给的是**文字版**。
+    feishu_show_sources: bool = True
+
     # ---------- 可观测 ----------
     metrics_enabled: bool = True
     #: 看板去问哪台 Prometheus。**容器里用服务名**（compose 网络内解析）；
