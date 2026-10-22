@@ -67,12 +67,20 @@ class LarkSender:
             .build()
         )
 
-    def _send(self, chat_id: str, text: str) -> None:
+    def _send(self, chat_id: str, markdown: str) -> None:
+        # ⚠️ 发**卡片**（`msg_type=interactive`），不是纯文本：飞书**文本消息不渲染
+        #    markdown**，真机联调时用户看到的是 `**保修期按部件类别…**` 和 `|---|---|`
+        #    （2026-10-22 实测）。卡片里的 `lark_md` 由飞书渲染，
+        #    我们只负责先把 `lark_md` 不认的语法降级掉（`feishu.to_feishu_markdown`）。
+        card = {
+            "config": {"wide_screen_mode": True},
+            "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": markdown}}],
+        }
         body = (
             self._lark.im.v1.CreateMessageRequestBody.builder()
             .receive_id(chat_id)
-            .msg_type("text")
-            .content(json.dumps({"text": text}, ensure_ascii=False))
+            .msg_type("interactive")
+            .content(json.dumps(card, ensure_ascii=False))
             .build()
         )
         request = (
@@ -92,8 +100,8 @@ class LarkSender:
                 chat_id,
             )
 
-    async def send_text(self, chat_id: str, text: str) -> None:
-        await asyncio.to_thread(self._send, chat_id, text)
+    async def send_markdown(self, chat_id: str, markdown: str) -> None:
+        await asyncio.to_thread(self._send, chat_id, markdown)
 
 
 def _event_payload(data: Any) -> dict[str, Any]:

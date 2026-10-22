@@ -18,6 +18,7 @@ from app.channels.feishu import (
     render_reply,
     split_reply,
     strip_mentions,
+    to_feishu_markdown,
 )
 from app.rag.pipeline import Answer, Citation
 
@@ -150,12 +151,62 @@ def test_render_reply_can_hide_sources() -> None:
     assert render_reply(answer, show_sources=False) == "家具主体保修 2 年。"
 
 
+def test_to_feishu_markdown_downgrades_table_to_bullets() -> None:
+    """飞书卡片**不支持表格**。不降级的话群里看到的是 `|---|---|` 源码
+    （2026-10-22 真机联调实测）。
+
+    ⚠️ 降级只许换形状，**信息一条都不能丢** —— 表头 + 每个单元格都要在场。
+    """
+    text = (
+        "保修期：\n\n"
+        "| 部件类别 | 保修期限 |\n"
+        "|---|---|\n"
+        "| 家具主体（床架、书桌） | **2 年** |\n"
+        "| 电子件（电机） | 1 年 |\n"
+    )
+
+    out = to_feishu_markdown(text)
+
+    assert "|" not in out  # 一个管道符都不许留下
+    assert "---" not in out
+    assert "- 家具主体（床架、书桌）：**2 年**" in out
+    assert "- 电子件（电机）：1 年" in out
+    assert "部件类别" not in out.split("- 家具主体")[0]  # 表头被吃进 key-value，不再单列
+
+
+def test_to_feishu_markdown_table_without_separator_keeps_every_cell() -> None:
+    """没有 `|---|` 分隔行时认不出表头 —— 那就**全部当数据**，不许把第一行当表头吃掉。"""
+    out = to_feishu_markdown("| 甲 | 乙 |\n| 丙 | 丁 |")
+
+    assert "甲" in out and "乙" in out
+    assert "丙" in out and "丁" in out
+
+
+def test_to_feishu_markdown_downgrades_heading_and_rule() -> None:
+    """`#` 标题和 `---` 分割线 `lark_md` 都不认 → 标题加粗、分割线换空行。"""
+    out = to_feishu_markdown("## 保修期\n\n正文\n\n---\n\n结尾")
+
+    assert "##" not in out
+    assert "**保修期**" in out
+    assert "---" not in out
+    assert "正文" in out and "结尾" in out
+
+
+def test_to_feishu_markdown_joins_lone_citation_marker() -> None:
+    """模型常把 `[3]` 单独甩一行 —— 并回上一行，否则群里孤零零一个数字很奇怪。"""
+    out = to_feishu_markdown("家具主体 **2 年**，该版本已废止。\n\n[3]\n\n下一段")
+
+    assert "[3]" in out
+    assert "[3]" not in out.splitlines()  # 没有任何一行**只有** [3]
+    assert "该版本已废止。 [3]" in out
+
+
 class _FakeSender:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
 
-    async def send_text(self, chat_id: str, text: str) -> None:
-        self.sent.append((chat_id, text))
+    async def send_markdown(self, chat_id: str, markdown: str) -> None:
+        self.sent.append((chat_id, markdown))
 
 
 class _FakeChat:

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -46,7 +47,7 @@ from app.rag.providers import ChatClient, EmbeddingClient, RerankClient
 
 logger = logging.getLogger("grounded.feishu")
 
-#: 单条飞书文本消息的上限（飞书自己允许更大，但长文在群里没人读）。
+#: 单条飞书**卡片**的字数上限（飞书自己允许更大，但长文在群里没人读）。
 #: 超了就按段落切开分多条发 —— **截断**是不可接受的（会把结论吃掉）。
 MAX_REPLY_CHARS = 3500
 
@@ -73,9 +74,14 @@ class FeishuEvent:
 
 
 class FeishuSender(Protocol):
-    """发消息的能力。**协议而不是类**：测试塞假实现，生产塞 `lark` 的客户端。"""
+    """发消息的能力。**协议而不是类**：测试塞假实现，生产塞 `lark` 的客户端。
 
-    async def send_text(self, chat_id: str, text: str) -> None: ...
+    ⚠️ 收的是**飞书卡片的 markdown（`lark_md`）**，不是任意 markdown ——
+       表格 / `#` 标题 / `---` 分割线这三种 `lark_md` **不认**，必须先过
+       `to_feishu_markdown()`（否则用户看到的是 `|---|---|` 这种原文）。
+    """
+
+    async def send_markdown(self, chat_id: str, markdown: str) -> None: ...
 
 
 def strip_mentions(text: str) -> str:
@@ -175,23 +181,116 @@ def split_reply(text: str, limit: int = MAX_REPLY_CHARS) -> list[str]:
     return chunks
 
 
+#: 表格的**分隔行**（`|---|---|` / `|:--:|--|`）：只由 `|` `-` `:` 和空格组成。
+_TABLE_SEP = re.compile(r"^[\s|:\-]+$")
+
+#: `---` / `***` / `___` 独立成行 = 分割线。`lark_md` 不认，会原样露出。
+_HRULE = re.compile(r"^ {0,3}([-*_])\s*(?:\1\s*){2,}$")
+
+#: `## 标题`：卡片里没有标题语法，降级成整行加粗。
+_HEADING = re.compile(r"^ {0,3}#{1,6}\s+(.*?)\s*#*$")
+
+#: 整行只有一个引用标记 `[3]`。
+_LONE_MARKER = re.compile(r"^\s*\[(\d{1,2})\]\s*$")
+
+
+def _table_rows_to_lines(rows: list[list[str]], *, has_sep: bool) -> list[str]:
+    """`| a | b |` 的表格 → 列表行。飞书卡片**不支持表格**，只能降级。
+
+    两列是最常见的形状（`部件类别 | 保修期限`），直接写成 `- key：value`；
+    多列就把表头带上，写成 `- key1：v1｜key2：v2`。
+    ⚠️ **一条信息都不许丢**：宁可难看，也不能把某列静默删掉。
+    """
+    if has_sep and len(rows) >= 2:
+        header, body = rows[0], rows[1:]
+    else:  # 没有分隔行 ⇒ 认不出哪行是表头，全部当数据（别拿第一行冒险）
+        header, body = [], rows
+
+    lines: list[str] = []
+    for row in body:
+        if len(header) == 2 and len(row) >= 2:
+            lines.append(f"- {row[0]}：{row[1]}")
+        elif header:
+            cells = [f"{header[i]}：{row[i]}" for i in range(min(len(header), len(row))) if row[i]]
+            lines.append("- " + "｜".join(cells))
+        else:
+            lines.append("- " + "｜".join(cell for cell in row if cell))
+    return lines
+
+
+def to_feishu_markdown(text: str) -> str:
+    """把模型输出的 markdown **降级**成飞书卡片认得的 `lark_md`。
+
+    `lark_md` 认：粗体 / 斜体 / 删除线 / 链接 / 有序无序列表 / 代码块 / 图片。
+    **不认**这三样 —— **表格**、`#` **标题**、`---` **分割线** —— 不处理就会原样
+    露出 `|---|---|`，用户在群里看到的是源码（2026-10-22 真机联调实测踩中）。
+    """
+    out: list[str] = []
+    table: list[list[str]] = []
+    has_sep = False
+
+    def flush() -> None:
+        nonlocal has_sep
+        if table:
+            out.extend(_table_rows_to_lines(table, has_sep=has_sep))
+            table.clear()
+        has_sep = False
+
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        stripped = line.strip()
+
+        # 表格：连续的 `|` 行收集起来**整块**转换（表头只在第一行）
+        if stripped.startswith("|") and stripped.count("|") >= 2:
+            if _TABLE_SEP.match(stripped):
+                has_sep = True
+            else:
+                table.append([cell.strip() for cell in stripped.strip("|").split("|")])
+            continue
+        flush()
+
+        if not stripped:
+            out.append("")
+            continue
+        if _HRULE.match(line):
+            out.append("")  # 换成空行：卡片里一句 "---" 没有信息量
+            continue
+        heading = _HEADING.match(line)
+        if heading:
+            title = heading.group(1)
+            out.append(f"**{title}**" if title else "")
+            continue
+        marker = _LONE_MARKER.match(line)
+        if marker:
+            # 模型常把 `[3]` 单独甩一行（前面还空了一行）；并回上一行才是"这段的依据在 3"
+            while out and not out[-1].strip():
+                out.pop()
+            if out:
+                out[-1] = f"{out[-1].rstrip()} [{marker.group(1)}]"
+                continue
+        out.append(line)
+
+    flush()
+    return "\n".join(out).strip()
+
+
 def render_reply(answer: Answer, *, show_sources: bool) -> str:
-    """把 `Answer` 变成飞书里看到的文字。
+    """把 `Answer` 变成飞书里看到的文字（**已经是 `lark_md`**）。
 
     ⚠️ 飞书里点不了 `[1]`，所以来源给的是**文字版**（编号 + 摘要 + 分数口径），
        而且**分数必须带口径**（`精排分` / `余弦`）—— 同一个数字不同含义，
        和 Web 端是同一纪律（`architecture.md` §9.21）。
     """
-    body = answer.text.strip()
+    body = to_feishu_markdown(answer.text.strip())
     if not body:
         body = "（没有生成出内容）"
     if not show_sources or not answer.citations:
         return body
 
-    lines = [body, "", "—— 参考来源 ——"]
+    lines = [body, "", "**—— 参考来源 ——**"]
     for cite in answer.citations:
         snippet = " ".join(cite.snippet.split())[:60]
-        lines.append(f"[{cite.index}] {snippet}（{cite.score_kind} {cite.score:.3f}）")
+        lines.append(f"**[{cite.index}]** {snippet}（{cite.score_kind} {cite.score:.3f}）")
     return "\n".join(lines)
 
 
@@ -255,7 +354,7 @@ class FeishuChannel:
             reply = "抱歉，这条我处理失败了。稍后再试一次，或者换个问法。"
 
         for chunk in split_reply(reply):
-            await self._sender.send_text(event.chat_id, chunk)
+            await self._sender.send_markdown(event.chat_id, chunk)
 
     # ---------- 内部 ----------
 
