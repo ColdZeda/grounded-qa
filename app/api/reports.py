@@ -23,7 +23,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from app.api.deps import CurrentUser
+from app.api.deps import AdminUser, CurrentUser, SessionDep
 from app.core.config import get_settings
 from app.schemas.report import ReportListOut, ReportMetric, ReportSnapshot
 
@@ -255,3 +255,20 @@ async def list_reports(current_user: CurrentUser) -> ReportListOut:
         "同一个指标出现多个数值，是因为判分口径随时间改过 —— 比较时请认准同一份快照。"
     )
     return ReportListOut(snapshots=snapshots, note=note)
+
+
+@router.get("/conflicts", summary="知识库冲突检查（按需现算）")
+async def knowledge_conflicts(session: SessionDep, current_admin: AdminUser) -> dict[str, Any]:
+    """同一主题、同一适用范围，两份文档写着不同的数字 —— 列出来给人看。
+
+    ⚠️ **和上面的评测报告不是一回事**：那是"跑分快照"（只读文件），这是**现算的体检**。
+        放在同一个路由前缀下，是因为前端将来都在"报告"页读它；**页面接入还没做**，
+        现在它是给人和脚本用的 JSON。
+    ⚠️ **只管理员能看**：里面会把**内部材料**和**现行政策**并排摆出来，
+        普通成员看见"内部话术库和官网不一致"没有任何意义，反而容易拿去对客户讲。
+    ⚠️ 判定逻辑与取舍（为什么只比同 scope、为什么跳过讲解稿）→ `app/kb/conflicts.py`。
+    """
+    from app.kb.conflicts import build_report, collect
+
+    report = await collect(session, tenant_id=current_admin.tenant_id)
+    return build_report(report)

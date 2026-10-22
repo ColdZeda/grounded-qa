@@ -42,7 +42,7 @@ from typing import Any, Final
 import httpx
 from redis.asyncio import Redis
 
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.core.limits import SHANGHAI
 
 logger = logging.getLogger("grounded.alerts")
@@ -136,6 +136,30 @@ def _check_delivery(kind: str, response: httpx.Response) -> None:
         raise RuntimeError(
             f"群机器人拒绝投递：{expected}={code} msg={body.get('msg') or body.get('errmsg')}"
         )
+
+
+async def push_text(text: str, *, settings: Settings | None = None) -> bool:
+    """把一段**自由文本**推到群机器人（v1.3 阶段 C 的冲突告警用它）。
+
+    ⚠️ 与 `AlertShipper` 走**同一条通道、同一套业务码校验** —— 不要为了"就发一句话"
+        另写一份 httpx 调用：那样 `_check_delivery` 那条"HTTP 200 也可能是拒绝"的
+        教训就只保护了一半的告警。
+
+    Returns:
+        `True` 已投递；`False` 没配 webhook（**静默跳过，不报错** —— 与
+        `ALERT_WEBHOOK_URL` 为空时的语义一致）。投递被拒绝时**抛** `RuntimeError`。
+    """
+    settings = settings or get_settings()
+    url = settings.alert_webhook_url.strip()
+    if not url:
+        logger.info("没有配 ALERT_WEBHOOK_URL，跳过推送")
+        return False
+
+    kind = webhook_kind(url)
+    async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+        response = await client.post(url, json=build_payload(url, text))
+        _check_delivery(kind, response)
+    return True
 
 
 def format_message(alert: Alert, *, resolved: bool) -> str:
