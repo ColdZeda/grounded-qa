@@ -26,7 +26,6 @@ import argparse
 import asyncio
 import json
 import logging
-import signal
 import sys
 import threading
 from typing import Any
@@ -124,7 +123,26 @@ def _event_payload(data: Any) -> dict[str, Any]:
     }
 
 
-async def _serve(settings: Settings) -> None:
+def _run_forever(loop: asyncio.AbstractEventLoop) -> None:
+    """在子线程里跑一个自己的事件循环（我们所有异步活都放这里）。"""
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+
+def _serve(settings: Settings) -> None:
+    """**主线程跑 lark 长连接**，把我们的异步活放到另一个线程的 loop 上。
+
+    ⚠️⚠️ 为什么必须这样分工（2026-10-22 实测踩到的坑）：
+        `lark_oapi.ws.Client` 在**构造时**就用 `get_event_loop()` 抓住了当时的 loop，
+        之后 `start()` 里调 `self._loop.run_until_complete(...)`。
+        如果构造发生在**已经有 loop 在跑**的主线程（`asyncio.run(...)` 里面），
+        再把它丢到别的线程去 `start()`，就会当场炸：
+            `RuntimeError: This event loop is already running`
+        而且它**不会**让进程退出（异常只打在子线程里），表现是"容器 healthy、
+        日志说已启动、但飞书那边一直连接失败" —— 极具误导性。
+        ⟹ 反过来：让 lark **独占主线程**（它自己建 loop，阻塞在此），
+          我们的 asyncio 活另开一条命名线程。
+    """
     import lark_oapi as lark
     from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
 
@@ -133,7 +151,9 @@ async def _serve(settings: Settings) -> None:
         logger.error("飞书渠道起不来：没有对话模型 key（`LLM_API_KEY` 为空）")
         raise SystemExit(2)
 
-    loop = asyncio.get_running_loop()
+    work_loop = asyncio.new_event_loop()
+    threading.Thread(target=_run_forever, args=(work_loop,), name="gq-async", daemon=True).start()
+
     channel = FeishuChannel(
         sender=LarkSender(settings),
         chat=chat,
@@ -146,13 +166,13 @@ async def _serve(settings: Settings) -> None:
     )
 
     def on_message(data: P2ImMessageReceiveV1) -> None:
-        """**同步**回调（lark 在自己的线程里调）。只做一件事：把活丢回事件循环。"""
+        """**同步**回调（lark 在它自己的线程里调）。只做一件事：把活丢给我们的 loop。"""
         try:
             payload = _event_payload(data)
         except Exception:  # 结构不对就丢这一条，别把长连接搞崩
             logger.exception("飞书事件结构异常，已忽略")
             return
-        future = asyncio.run_coroutine_threadsafe(channel.handle_event(payload), loop)
+        future = asyncio.run_coroutine_threadsafe(channel.handle_event(payload), work_loop)
         future.add_done_callback(
             lambda fut: fut.exception() and logger.error("处理飞书消息异常：%s", fut.exception())
         )
@@ -169,17 +189,11 @@ async def _serve(settings: Settings) -> None:
         log_level=lark.LogLevel.INFO,
     )
 
-    # ⚠️ `ws_client.start()` **阻塞**（它自带重连循环），所以放线程里；
-    #    主线程留着收信号，否则 `docker stop` 会等满 10 秒再 SIGKILL。
-    ws_thread = threading.Thread(target=ws_client.start, name="lark-ws", daemon=True)
-    ws_thread.start()
-    logger.info("飞书长连接已启动（出站，不需要任何入站端口）")
-
-    stop = asyncio.Event()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
-    await stop.wait()
-    logger.info("收到退出信号，飞书渠道停止")
+    logger.info("飞书长连接启动中（出站，不需要任何入站端口）")
+    # ⚠️ 阻塞调用（自带重连循环）。**在哪个线程调用，它就用哪个线程的 loop**，
+    #    所以必须在主线程、且此刻主线程没有正在跑的 loop —— 见函数头。
+    ws_client.start()
+    logger.info("飞书长连接已退出")
 
 
 def _redis_client():
@@ -223,7 +237,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        asyncio.run(_serve(settings))
+        # ⚠️ **不 `asyncio.run(...)`**：那会在主线程建一个正在跑的 loop，
+        #    而 lark 的 `ws.Client` 要在主线程 `run_until_complete` 它自己抓到的 loop
+        #    —— 两者撞车就是 "This event loop is already running"。见 `_serve` 的函数头。
+        _serve(settings)
     except KeyboardInterrupt:  # 本机 Ctrl-C
         return 0
     return 0

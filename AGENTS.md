@@ -426,6 +426,7 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | **群机器人"发送成功"了，群里却没有消息** | 飞书 / 企微 webhook **被拒绝时也回 HTTP 200**，错误在 body 里（飞书 `{"code":19021,"msg":"sign match fail"}`、企微 `{"errcode":93000,…}`）—— 最常见的触发是 **IP 白名单没放行**、关键词不匹配、或勾了签名校验 | **必须校验业务码**：飞书看 `code`、企微看 `errcode`，非 0 就当失败（**并且不能记账**，否则"没投递"会被记成"已投递"、**永不重推**）。见 `app/core/alerts.py::_check_delivery`、`architecture.md` §9.30 ⑤ |
 | **改了 `.env` 的 `ADMIN_PASSWORD`，登录还是说"密码错"** | `python -m app.db.seed` **只在建号时**写密码，用户已存在就**不改**（刻意的：引导脚本不该悄悄改运营密码）。所以改 `.env` 只对"下次建号"生效，对**已有库无效，且不报错**（2026-10-22 用户就这么被挡在门外） | 判据：seed 输出「管理员已存在 …（未改动）」。用**建号时**那个密码登录；真要换密码得手动更新 `users.hashed_password`，或重建库 |
 | **某一步"静默没生效"，而且日志里一点痕迹都没有** | 命令末尾挂着 `\|\| echo 跳过` 这类"失败也算成功"的兜底 —— 于是通道本身出问题时**没人知道**。2026-10-19 真踩到：CI 里 `docker exec … /-/reload` 静默失败，正式告警规则一直没生效，而部署照常绿 | **兜底只许用于"这条真的可以没有"**；关键步骤要**可验证**（改完 reload 就**重启容器并探测健康**），失败**让部署红**。📌 判据：**`\|\| 兜底成功` ＋ 看不见的通道 ＝ 静默失效** —— 和本项目其它坑（全文检索 / 向量漂移 / 限额放行）是同一个病 |
+| **飞书容器 `healthy`、日志说"已启动"，但飞书一直显示连接失败** | `lark-oapi` 的 `ws.Client` **在构造时**就用 `get_event_loop()` 抓住当时的 loop，`start()` 里再 `run_until_complete` 它。若在**已有 loop 在跑**的主线程里构造（`asyncio.run(...)` 里面）、又丢到别的线程去 `start()` → 子线程里抛 `RuntimeError: This event loop is already running`，**而进程不退出**（所以容器照样 healthy） | 让 lark **独占主线程**（它自己建 loop、阻塞在此），我们的异步活另开一条线程（`gq-async`）。判据：日志里必须有 **`Lark connected to wss://…`** 才算连上。见 `app/channels/feishu_runner.py::_serve` 函数头（2026-10-22 实测踩中） |
 
 ---
 
