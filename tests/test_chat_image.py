@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.chat import get_clients, get_image_client
 from app.core.config import get_settings
 from app.core.limits import peek_quota
-from app.db.models.conversation import Conversation
+from app.db.models.conversation import Conversation, MessageRole
 from app.db.models.conversation import Message as MessageRow
 from app.db.models.image import Image
 from app.db.models.knowledge import Chunk, Document, DocumentStatus
@@ -223,8 +223,17 @@ async def test_scene_enters_retrieval_and_order_enters_context(
     assert "实木床架" in system
 
     # ④ 读数落进用户消息的 meta（不污染 content）
+    # ⚠️ **必须筛 `role=USER` 而且排序**：一个会话里还有助手那条消息，
+    #    不带条件的 `select` 返回顺序**由 PG 决定**（数据量变了就可能换执行计划）——
+    #    2026-10-23 全量跑时它就真的把助手那句 "好的，我来看看。" 当成了用户消息。
+    #    这类"偶尔红"的断言比没有断言更糟：它会被当成噪音跳过。
     user_message = await session.scalar(
-        select(MessageRow).where(MessageRow.conversation_id == conversation_id)
+        select(MessageRow)
+        .where(
+            MessageRow.conversation_id == conversation_id,
+            MessageRow.role == MessageRole.USER,
+        )
+        .order_by(MessageRow.created_at)
     )
     assert user_message is not None
     assert user_message.content == "这个怎么处理"

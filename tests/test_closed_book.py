@@ -70,8 +70,15 @@ def _chunk() -> RetrievedChunk:
     )
 
 
-async def _fake_retrieve(question: str) -> tuple[list[RetrievedChunk], float, str]:
-    """开卷对照用的固定检索结果（不连库）。"""
+async def _fake_retrieve(
+    question: str, *, ref_time: object = None
+) -> tuple[list[RetrievedChunk], float, str]:
+    """开卷对照用的固定检索结果（不连库）。
+
+    ⚠️ `ref_time` 这个关键字**必须留着**：`RagPipeline.answer` 会把它传下来
+        （v1.3 B2 的时间基准）。签名对不上 = 整个开卷对照组 TypeError，
+        而报错信息看起来像"测试桩写错了"，很容易被当成无关噪音。
+    """
     return [_chunk()], 0.95, "rerank"
 
 

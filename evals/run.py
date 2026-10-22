@@ -40,7 +40,7 @@ import statistics
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -340,7 +340,12 @@ def _print_report(reports: Sequence[AblationReport], *, top_k: int, total: int) 
 
 
 def _dump(
-    reports: Sequence[AblationReport], *, top_k: int, settings: Settings, meta: dict[str, Any]
+    reports: Sequence[AblationReport],
+    *,
+    top_k: int,
+    settings: Settings,
+    meta: dict[str, Any],
+    ref_time: date | None = None,
 ) -> Path:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -356,6 +361,9 @@ def _dump(
             # ⚠️ 必须记下来：`all` 与 `current` 是**两支尺子**，分数不同但都合法。
             #    不记的话两组结果文件长得一样，事后分不清哪份是哪份（2026-10-22 踩过）。
             "retrieval_scope": settings.retrieval_scope,
+            # ⚠️ 同理，`ref_time` 也必须记：同一个 `--scope current` 之下，
+            #    按 2024-03 和按今天召回的是**两套不同的文档**（v1.3 B2）。
+            "ref_time": ref_time.isoformat() if ref_time else None,
             "rerank_model": settings.rerank_model,
             "embedding_model": settings.embedding_model,
         },
@@ -418,8 +426,12 @@ async def _run_retrieval(args: argparse.Namespace) -> int:
             paths = await _document_paths(session, tenant_id, kb=args.kb)
             # ⚠️ 评测直接建 retriever，**不走 pipeline** —— 所以 scope 必须在这里显式传，
             #    否则 `--scope` 只改了配置、这里仍然用构造函数的默认值（静默失效，2026-10-22 踩中）。
+            #    `ref_time` 同理：`--ref-time` 不往这里传 = 这个开关等于没加。
             retriever = HybridRetriever(
-                session, tenant_id=tenant_id, scope=settings.retrieval_scope
+                session,
+                tenant_id=tenant_id,
+                scope=settings.retrieval_scope,
+                ref_time=args.ref_time,
             )
             print(
                 f"题库 {len(questions)} 题 · 知识库 {args.kb} · "
@@ -450,8 +462,10 @@ async def _run_retrieval(args: argparse.Namespace) -> int:
         top_k=args.top_k,
         settings=settings,
         meta={"kb": args.kb, "questions": len(questions), "ablations": list(names)},
+        ref_time=args.ref_time,
     )
     print(f"全文门槛 fulltext_min_similarity = {ft_min}")
+    print(f"参照时刻 ref_time = {args.ref_time or '（今天）'}")
     print(f"结果已存：{out.relative_to(REPO_ROOT)}")
     return 0
 
@@ -641,6 +655,8 @@ async def _run_answer_layer(
                     settings=settings,
                     # 闭卷：同一段代码，只是不检索（见 `RagPipeline` 的 `closed_book`）
                     closed_book=mode == "closed",
+                    # 冻结参照时刻（v1.3 B2）：不传则用今天，历史版本只在它当时有效
+                    ref_time=args.ref_time,
                 )
                 result = AnswerResult(
                     id=item["id"],
@@ -1144,6 +1160,9 @@ async def _run_image_answers(
                 settings=settings,
                 image_scene=(row.get("scene") or "") if use_image else "",
                 image_text=(row.get("transcription") or "") if use_image else "",
+                # 冻结时间基准：图片层的题不涉及版本，但两个 runner **同一套旋钮**，
+                # 免得"这个参数在另一层不起作用"这种坑再来一次。
+                ref_time=args.ref_time,
             )
             text, refused, error = "", False, None
             try:
@@ -1302,7 +1321,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             "all = 全库召回，用于复现历史数字。两支尺子并存，**都不是作弊**"
         ),
     )
+    parser.add_argument(
+        "--ref-time",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help=(
+            "冻结参照时刻（v1.3 阶段 B2）。不传 = 用今天。"
+            "历史版本只在它当时有效 —— 要测'2024 年买的沙发'这类问题，"
+            "就得把时间钉死，否则同一批题换个日子跑就换了答案"
+        ),
+    )
     args = parser.parse_args(argv)
+    if args.ref_time:
+        # ⚠️ 转成 `date` 存回 namespace：下游（retrieval / pipeline）只认 `date`，
+        #    解析只在这里做一次，避免每个调用点各写一遍字符串解析。
+        try:
+            args.ref_time = date.fromisoformat(args.ref_time)
+        except ValueError:
+            raise SystemExit(f"--ref-time 要 YYYY-MM-DD 形式，收到 {args.ref_time!r}") from None
     if args.scope:
         # ⚠️ 必须在第一次 `get_settings()` 之前设进环境；而且**光设环境不够** ——
         #    `get_settings` 是 `lru_cache` 的，模块导入阶段可能已经缓存过默认值，

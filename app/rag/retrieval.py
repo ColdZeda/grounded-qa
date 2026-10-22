@@ -20,8 +20,9 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.knowledge import Chunk, ContentStatus, Document
@@ -79,17 +80,26 @@ class HybridRetriever:
     """
 
     def __init__(
-        self, session: AsyncSession, *, tenant_id: uuid.UUID, scope: str = "current"
+        self,
+        session: AsyncSession,
+        *,
+        tenant_id: uuid.UUID,
+        scope: str = "current",
+        ref_time: date | None = None,
     ) -> None:
         self._session = session
         #: `tenant_id` 单独留一份：筛"哪些文档有资格被引用"时要用（子查询里也得带租户）。
         self._tenant_id = tenant_id
         self._repo = TenantScopedRepository(session, tenant_id=tenant_id, model=Chunk)
-        #: v1.3 阶段 B：`current` = 只在 active 文档里召回（产品态）；`all` = 全库（复现历史数字）。
+        #: v1.3 阶段 B：`current` = 只在有资格的文档里召回（产品态）；`all` = 全库（复现历史数字）。
         self._scope = scope
+        #: v1.3 阶段 B2：**用哪一天的眼光**判断"这份文档当时有效吗"（`app/rag/reftime.py`）。
+        #: ⚠️ 默认**今天** —— 没有信号时这就等价于阶段 B 的"只认现行"，不改变既有行为。
+        #: ⚠️ 它只进 `WHERE`，**不进任何分数**（`AGENTS §7.1` 约定 20）。
+        self._ref_time = ref_time or date.today()
 
     def _eligibility_filter(self) -> ColumnElement[bool] | None:
-        """**有效性**过滤：这份文档今天有没有资格被引用。
+        """**有效性**过滤：这份文档在参照时刻有没有资格被引用。
 
         ⚠️ 与**相关性**严格分开（`AGENTS §7.1` 约定 20）：
            这里只回答"能不能用"，**不参与打分**；分数仍由向量/精排决定。
@@ -98,13 +108,25 @@ class HybridRetriever:
         ⚠️ **两条路（全文 / 向量）都要加**。只加一路 = 没加：另一路照样把存档版送进融合。
         ⚠️ 用**子查询**而不是 join：`_repo.select()` 的列已经定死是 `Chunk`，
            join 会让返回行的形状变掉（`(chunk, doc)` 二元组），测试和调用点都得改。
+
+        ⚠️ **v1.3 B2 起，判据从"是 active"变成"在参照时刻有效"**：
+           · 状态只放 `active` ＋ `superseded` —— 历史版本**在它当时是有效的**，
+             阶段 B 把它一刀切掉，于是"2024 年买的沙发保修多久"只能拿到现行版，答非所问。
+           · `draft` / `internal` / `sibling_brand` **永远排除**：它们不是"时间没到"，
+             而是**根本不该给客户看**（未生效草案 / 内部口径 / 兄弟品牌）。
+           · 生效区间是**闭区间**（`effective_from <= ref <= effective_to`）：
+             政策通常写着"自某日起施行 / 于某日废止"，那一天本身仍算有效。
+           · 区间为空 = 一直有效（`00-` 品牌介绍、`94-` 相邻概念这类本来就没有版本概念）。
         """
         if self._scope != "current":
             return None
+        ref = self._ref_time
         return Chunk.document_id.in_(
             select(Document.id).where(
                 Document.tenant_id == self._tenant_id,
-                Document.content_status == ContentStatus.ACTIVE,
+                Document.content_status.in_((ContentStatus.ACTIVE, ContentStatus.SUPERSEDED)),
+                or_(Document.effective_from.is_(None), Document.effective_from <= ref),
+                or_(Document.effective_to.is_(None), Document.effective_to >= ref),
             )
         )
 

@@ -24,12 +24,14 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
+from datetime import date, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.rag import prompt as prompt_module
 from app.rag.providers import ChatClient, EmbeddingClient, ModelAPIError, RerankClient
+from app.rag.reftime import RefTime, RefTimeSource, resolve_ref_time
 from app.rag.retrieval import HybridRetriever, RetrievedChunk
 
 
@@ -152,6 +154,8 @@ class RagPipeline:
         image_scene: str = "",
         image_text: str = "",
         order_facts: str = "",
+        order_placed_at: Sequence[datetime | date] = (),
+        ref_time: date | None = None,
     ) -> None:
         self._session = session
         self._tenant_id = tenant_id
@@ -170,6 +174,13 @@ class RagPipeline:
         #: ⚠️ 空串 = 没查到订单。**故意不给"没查到"这种句子** ——
         #:    给了模型会顺着猜，不给它就没有材料可编。
         self._order_facts = order_facts
+        #: 上述订单的**下单时间**（v1.3 B2）。用来定 `ref_time` —— 老订单要以
+        #: 当年生效的条款为准，见 `app/rag/reftime.py`。
+        #: ⚠️ 订单由**调用方**查（要 `user_id`，pipeline 只有 `tenant_id`），这里只收结果。
+        self._order_placed_at = tuple(order_placed_at)
+        #: **冻结**的参照时刻（`evals/run.py --ref-time`）。非空则不再看订单、也不读问句。
+        #: ⚠️ 只给评测用：同一批题在不同日子跑必须能复现。线上永远是 `None`。
+        self._ref_time = ref_time
         #: **闭卷**：完全跳过检索，直接让模型凭自身知识回答。
         #: ⚠️ 只给评测的对照组用（`evals\run.py --mode closed`），**线上永远是 `False`** ——
         #:    这个开关存在的意义是让"有证据"与"没证据"跑**同一段代码**，
@@ -180,16 +191,37 @@ class RagPipeline:
 
     # ---------- 检索 ----------
 
-    async def _retrieve(self, question: str) -> tuple[list[RetrievedChunk], float | None, str]:
+    def _resolve_ref_time(self, question: str) -> RefTime:
+        """这次问答**用哪一天的眼光**看知识库（v1.3 B2）。
+
+        ⚠️ 冻结值优先于一切：评测里"同一批题、同一天跑"是复现的前提。
+        ⚠️ 注意传的是**用户原话**，不是拼了图片描述的检索 query ——
+           图片描述里不该出现日期语义，真出现了也不该被当成用户的时间基准。
+        """
+        if self._ref_time is not None:
+            return RefTime(self._ref_time, RefTimeSource.FROZEN)
+        return resolve_ref_time(question=question, order_placed_at=self._order_placed_at)
+
+    async def _retrieve(
+        self, question: str, *, ref_time: date | None = None
+    ) -> tuple[list[RetrievedChunk], float | None, str]:
         """混合检索 + 精排。
+
+        Args:
+            ref_time: **有效性**判定用的参照时刻（"这份文档当时有效吗"）。
+                不影响任何分数，只影响哪些文档有资格进候选。
 
         Returns:
             `(最终候选, 置信度, 置信度的口径)`。口径取值：`rerank` / `vector_cosine` / `none`。
         """
         settings = self._settings
-        # ⚠️ `scope` 决定"**有没有资格被引用**"，与"相不相关"无关（v1.3 阶段 B）。
+        # ⚠️ `scope` 决定"**有没有资格被引用**"，与"相不相关"无关（v1.3 阶段 B）；
+        #    `ref_time` 决定"**在参照时刻**有没有资格"（v1.3 阶段 B2）。
         retriever = HybridRetriever(
-            self._session, tenant_id=self._tenant_id, scope=settings.retrieval_scope
+            self._session,
+            tenant_id=self._tenant_id,
+            scope=settings.retrieval_scope,
+            ref_time=ref_time,
         )
 
         query_embedding: list[float] | None = None
@@ -266,6 +298,9 @@ class RagPipeline:
         """
         started = time.perf_counter()
         settings = self._settings
+        # ⚠️ **在检索之前定时间基准**（v1.3 B2）：它决定"哪些文档有资格进候选"。
+        #    放到检索之后就没有意义了 —— 那时 top-k 已经定死。
+        ref_time = self._resolve_ref_time(question)
 
         if self._closed_book:
             # ---- 闭卷：不检索、不判拒答、没有引用 ----
@@ -283,7 +318,9 @@ class RagPipeline:
             search_query = (
                 f"{self._image_scene} {question}".strip() if self._image_scene else question
             )
-            hits, confidence, score_kind = await self._retrieve(search_query)
+            hits, confidence, score_kind = await self._retrieve(
+                search_query, ref_time=ref_time.value
+            )
             hits = hits[: settings.rerank_top_n]
 
             refused = self._should_refuse(hits, confidence, score_kind)
@@ -319,7 +356,10 @@ class RagPipeline:
                 citations=citations,
                 confidence=confidence,
                 latency_ms=_elapsed_ms(started),
-                extra={"reason": "no_evidence" if not hits else "low_confidence"},
+                extra={
+                    "reason": "no_evidence" if not hits else "low_confidence",
+                    **ref_time.as_extra(),
+                },
             )
             return
 
@@ -333,6 +373,9 @@ class RagPipeline:
                 order_facts=self._order_facts,
                 image_scene=self._image_scene,
                 image_text=self._image_text,
+                # 只有"真的收到了时间信号"才告诉模型 —— 平白说一句"按今天"会
+                # 让模型以为用户在问时间，反而多一层猜测（见 `RefTime.informed`）。
+                ref_time=ref_time if ref_time.informed else None,
             )
         )
         collected: list[str] = []
@@ -357,7 +400,7 @@ class RagPipeline:
             confidence=confidence,
             latency_ms=_elapsed_ms(started),
             error=error,
-            extra={"score_kind": score_kind},
+            extra={"score_kind": score_kind, **ref_time.as_extra()},
             usage=usage,
         )
 

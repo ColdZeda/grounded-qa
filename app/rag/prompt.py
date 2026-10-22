@@ -13,7 +13,18 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from app.rag.reftime import RefTime, RefTimeSource
 from app.rag.retrieval import RetrievedChunk
+
+#: 给模型看的"这个时间基准是哪来的"（`RefTime.source` → 一句人话）。
+#: ⚠️ 必须写成能直接说给用户听的话 —— 它会顺着出现在回答里
+#:    （"这是你下单时适用的版本"）。写成"source=order"那种内部词就白费了。
+_REF_TIME_REASONS = {
+    RefTimeSource.ORDER: "用户订单的下单时间",
+    RefTimeSource.QUESTION: "用户在提问里自己说的日期",
+    RefTimeSource.FROZEN: "本次指定的参照日期",
+    RefTimeSource.TODAY: "今天",
+}
 
 #: 证据不足时的固定回答。
 #:
@@ -131,6 +142,7 @@ def build_messages(
     order_facts: str = "",
     image_scene: str = "",
     image_text: str = "",
+    ref_time: RefTime | None = None,
 ) -> list[dict[str, str]]:
     """组装发给对话模型的 messages。
 
@@ -145,6 +157,11 @@ def build_messages(
 
     ⚠️ **图里读到的文字标成"可能有误"**：那是模型的转写，不是原文。
         不标的话，模型会把一个读错的数字当权威事实复述出去。
+
+    ⚠️ `ref_time`（v1.3 B2）**只在真的收到时间信号时才有值**，作用是解除一个必然的误读：
+        按 2024 年的时点作答时，检索到的正是**2023 版条款**，而它正文里写着
+        "已于 2025-12-31 废止" —— 不解释，模型会拿这句去**劝用户忽略**这份资料，
+        于是正确答案被自己的语料否掉了。见 `app/rag/reftime.py`。
     """
     system = SYSTEM_PROMPT.format(context=build_context(hits))
 
@@ -161,6 +178,17 @@ def build_messages(
             system += f"画面内容：{image_scene}\n"
         if image_text:
             system += f"图中文字（模型转写，可能有误，仅供定位）：{image_text[:400]}\n"
+
+    if ref_time is not None:
+        system += (
+            "\n【时间基准】\n"
+            f"这笔问题按 **{ref_time.value.isoformat()}** 这个时点适用的条款来回答"
+            f"（依据：{_REF_TIME_REASONS[ref_time.source]}）。\n"
+            "参考资料里若写着「某日废止」，只要废止日在这个时点**之后**，"
+            "它对这笔订单就是**当时有效**的条款，请照常据此作答，"
+            "并在回答里说明「这是你下单时适用的版本」；"
+            "如果资料里能看出之后的新版本内容，再补一句现行规定。\n"
+        )
 
     messages: list[dict[str, str]] = [{"role": "system", "content": system}]
     messages.extend({"role": item["role"], "content": item["content"]} for item in history)

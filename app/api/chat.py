@@ -170,16 +170,20 @@ async def _prepare_image(
 
 async def _order_context(
     session: SessionDep, user: User, *, text: str
-) -> tuple[list[dict[str, object]], str]:
-    """从这段文字里捞单号 → 查库 → 事实卡片 ＋ 提示词块。
+) -> tuple[list[dict[str, object]], str, list[datetime]]:
+    """从这段文字里捞单号 → 查库 → 事实卡片 ＋ 提示词块 ＋ 下单时间。
 
     ⚠️ 查库**很便宜**（一次 SQL），所以每轮都可以做 —— 贵的是模型调用。
         用户追问"我的单到哪了"时，重新从这句话里抽单号再查一次就行，不需要缓存。
+
+    ⚠️ 第三个返回值（下单时间）是给 **v1.3 B2 的 `ref_time`** 用的：老订单要以
+        **当年生效的条款**为准。订单只能在这里查（要 `user_id`），pipeline 只有
+        `tenant_id` —— 所以把结果传下去，而不是让 pipeline 自己去查。
     """
     orders = await resolve_orders(session, tenant_id=user.tenant_id, user_id=user.id, text=text)
     now = datetime.now(UTC)
     snapshots = [order_snapshot(order, now=now) for order in orders]
-    return snapshots, render_order_facts(snapshots)
+    return snapshots, render_order_facts(snapshots), [order.placed_at for order in orders]
 
 
 # ------------------------------------------------------------
@@ -276,7 +280,7 @@ async def ask(
 
     # ④ 订单：从"图里读到的文字 + 用户原话"里捞单号，精确查库。
     #    ⚠️ 图里的转写排前面：用户从图里抄单号时，那句话往往就是"SF10001 这单…"。
-    order_snapshots, order_facts = await _order_context(
+    order_snapshots, order_facts, order_placed_at = await _order_context(
         session, current_user, text=f"{image_context.text} {question}".strip()
     )
 
@@ -291,6 +295,8 @@ async def ask(
         image_scene=image_context.scene,
         image_text=image_context.text,
         order_facts=order_facts,
+        # 查到订单就以**下单时间**为时间基准（老订单按当年条款答），见 `app/rag/reftime.py`
+        order_placed_at=order_placed_at,
     )
 
     # ① 用户消息先落库（并提交）—— 即使后面生成失败，提问记录也在
