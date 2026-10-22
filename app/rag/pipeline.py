@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
@@ -29,10 +30,14 @@ from datetime import date, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.core.metrics import record_citation_support
+from app.rag import citations as citation_module
 from app.rag import prompt as prompt_module
 from app.rag.providers import ChatClient, EmbeddingClient, ModelAPIError, RerankClient
 from app.rag.reftime import RefTime, RefTimeSource, resolve_ref_time
 from app.rag.retrieval import HybridRetriever, RetrievedChunk
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -393,6 +398,20 @@ class RagPipeline:
             #    如果库里存的是空，事后排查就对不上了。
             error = str(exc)
 
+        # 引用可核对性（v1.3 收尾）：**流式发完了才能核**，所以放在这里。
+        # ⚠️ 只记录 + 打 warning，**不改写已经发出去的文字**（理由见 `citations.py`）。
+        audit = citation_module.audit("".join(collected), hits)
+        if audit.checked:
+            record_citation_support(audit.ok)
+        if not audit.ok:
+            logger.warning(
+                "引用串号：%d/%d 句对不上（首个：markers=%s atoms=%s）",
+                audit.unsupported,
+                audit.checked,
+                audit.issues[0].markers,
+                audit.issues[0].atoms,
+            )
+
         yield Answer(
             text="".join(collected),
             refused=False,
@@ -400,7 +419,12 @@ class RagPipeline:
             confidence=confidence,
             latency_ms=_elapsed_ms(started),
             error=error,
-            extra={"score_kind": score_kind, **ref_time.as_extra()},
+            extra={
+                "score_kind": score_kind,
+                **ref_time.as_extra(),
+                # 引用可核对性：**只抓不改**（理由见 `app/rag/citations.py`）
+                "citation_audit": audit.summary(),
+            },
             usage=usage,
         )
 

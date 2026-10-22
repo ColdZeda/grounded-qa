@@ -75,6 +75,21 @@ def record_image_analysis(result: str) -> None:
     image_analysis.labels(result=result).inc()
 
 
+#: **引用可核对性**（v1.3 收尾）：回答里的 `[n]` 指对了没有。
+#: ⚠️ 必须同时记 `ok`：只有分子没有分母，"串号 3 次"到底是 3/10 还是 3/1000 看不出来。
+#: ⚠️ 这是**观察项**，不是红线 —— 见 `app/rag/citations.py` 为什么只抓不改。
+citation_support = Counter(
+    "gq_citation_support_total",
+    "引用核对结果（result=ok 数字都能在对应段落里找到 / unsupported 有对不上的）",
+    ["result"],
+)
+
+
+def record_citation_support(ok: bool) -> None:
+    """记一次引用核对（仅在有可核句子的回答上调用）。"""
+    citation_support.labels(result="ok" if ok else "unsupported").inc()
+
+
 class MetricsMiddleware:
     """把每个 HTTP 请求记成「计数 + 耗时」。
 
