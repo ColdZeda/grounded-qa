@@ -33,12 +33,13 @@ import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.db.models.knowledge import Chunk, Document, DocumentStatus
+from app.db.models.knowledge import Chunk, ContentStatus, Document, DocumentStatus
 from app.kb.text import TEXT_SUFFIXES, chunk_bytes
 from app.rag.providers import EmbeddingClient
 
@@ -86,6 +87,67 @@ def is_supported(filename: str) -> bool:
     """文件名后缀是不是我们吃得下的文本类。"""
     lowered = filename.lower()
     return any(lowered.endswith(suffix) for suffix in TEXT_SUFFIXES)
+
+
+# ------------------------------------------------------------
+# v1.3：目录名 → `content_status`
+# ------------------------------------------------------------
+#: ⚠️ **这是一条隐性契约**（`PLAN §8.6` 的"唯一隐性成本"）：
+#:    语料目录一挪，这里必须同步改 —— **改错了不会报错**，只会让不该引用的文档
+#:    悄悄混进候选集。缓解：下面的单测 `test_kb_content_status.py` 逐条钉死。
+#:    顺序有意义：先命中先返回。
+_CONTENT_STATUS_BY_DIR: tuple[tuple[str, ContentStatus], ...] = (
+    ("90-干扰-历史版本", ContentStatus.SUPERSEDED),
+    ("91-干扰-森屿Lab", ContentStatus.SIBLING_BRAND),
+    ("92-干扰-其他地区", ContentStatus.DRAFT),
+    ("93-干扰-内部FAQ", ContentStatus.INTERNAL),
+    # 94-干扰-相邻概念 **故意不列** → 落到 ACTIVE：
+    # "保修与退换货的区别"这类是**给客户看的**，本来就该被引用。
+)
+
+#: 目录整体是什么状态，但**这几份不是**（同样要单测盯着）。
+_CONTENT_STATUS_EXCEPTIONS: dict[str, ContentStatus] = {
+    # 变更公告是"现行"的：它讲的就是"哪版作废了"，引给用户正好
+    "90-干扰-历史版本/06-版本变更公告.md": ContentStatus.ACTIVE,
+    # 澄清稿件是"现行"的：它是辟谣用的
+    "92-干扰-其他地区/04-站外流传的假政策澄清.md": ContentStatus.ACTIVE,
+}
+
+#: 2023 版政策的生效区间（原文横幅写着"已于 2025-12-31 废止"）。
+_LEGACY_RANGE = (date(2023, 1, 1), date(2025, 12, 31))
+#: 现行政策的生效起点。
+_CURRENT_FROM = date(2026, 1, 1)
+
+
+def classify_content_status(filename: str) -> tuple[ContentStatus, date | None, date | None]:
+    """`kb/相对路径` → `(content_status, effective_from, effective_to)`。
+
+    ⚠️ **判"这份文档有没有资格被引用"，不判"它回不回答这个问题"** ——
+       后者是向量/精排的事。两件事不许混（`AGENTS §7.1` 约定 20）。
+    ⚠️ 生效区间只给**政策类**文档：品牌介绍、FAQ、相邻概念这些没有"版本"概念，
+       留空（= 一直有效）比瞎填一个日期更诚实。
+    """
+    normalized = filename.replace("\\", "/")
+
+    for suffix, status in _CONTENT_STATUS_EXCEPTIONS.items():
+        if normalized.endswith(suffix):
+            status_ = status
+            break
+    else:
+        status_ = ContentStatus.ACTIVE
+        for marker, status in _CONTENT_STATUS_BY_DIR:
+            if f"/{marker}/" in f"/{normalized}":
+                status_ = status
+                break
+
+    if "2023版" in normalized:
+        return status_, *_LEGACY_RANGE
+    if status_ is ContentStatus.SUPERSEDED:
+        # 90 目录下没被例外放行的（理论上只剩变更公告），有效期从新政策起点算
+        return status_, _CURRENT_FROM, None
+    if any(f"/{prefix}" in f"/{normalized}" for prefix in ("00-", "10-", "20-", "30-", "40-")):
+        return status_, _CURRENT_FROM, None
+    return status_, None, None
 
 
 # ------------------------------------------------------------
@@ -146,6 +208,9 @@ async def prepare_document(
         # "重传即重试"——见 docstring
         await _forget(session, duplicate)
 
+    # ⚠️ 内容有效性**在建行时就定下来**（按路径映射），不留到检索时猜 ——
+    #    见 `classify_content_status`：判错了不会报错，只会让不该引的文档混进候选集。
+    content_status, effective_from, effective_to = classify_content_status(filename)
     document = Document(
         tenant_id=tenant_id,
         filename=filename,
@@ -155,6 +220,9 @@ async def prepare_document(
         # ⚠️ 先落 PENDING 并**提交**：这样"文档在库里"这件事在算向量之前就成立，
         #    失败时还能把它标成 FAILED 被列表看见（状态机见 knowledge.py 的 docstring）。
         status=DocumentStatus.PENDING,
+        content_status=content_status,
+        effective_from=effective_from,
+        effective_to=effective_to,
     )
     session.add(document)
     await session.commit()
