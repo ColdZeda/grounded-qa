@@ -21,10 +21,10 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import func
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models.knowledge import Chunk
+from app.db.models.knowledge import Chunk, ContentStatus, Document
 from app.db.repository import TenantScopedRepository
 
 
@@ -78,9 +78,35 @@ class HybridRetriever:
         它已经把 `WHERE tenant_id = ?` 焊进去了。**不要绕开它自己写 select**。
     """
 
-    def __init__(self, session: AsyncSession, *, tenant_id: uuid.UUID) -> None:
+    def __init__(
+        self, session: AsyncSession, *, tenant_id: uuid.UUID, scope: str = "current"
+    ) -> None:
         self._session = session
+        #: `tenant_id` 单独留一份：筛"哪些文档有资格被引用"时要用（子查询里也得带租户）。
+        self._tenant_id = tenant_id
         self._repo = TenantScopedRepository(session, tenant_id=tenant_id, model=Chunk)
+        #: v1.3 阶段 B：`current` = 只在 active 文档里召回（产品态）；`all` = 全库（复现历史数字）。
+        self._scope = scope
+
+    def _eligibility_filter(self) -> ColumnElement[bool] | None:
+        """**有效性**过滤：这份文档今天有没有资格被引用。
+
+        ⚠️ 与**相关性**严格分开（`AGENTS §7.1` 约定 20）：
+           这里只回答"能不能用"，**不参与打分**；分数仍由向量/精排决定。
+        ⚠️ **必须写在 SQL 的 `WHERE` 里、在 `LIMIT` 之前**。召回后再筛是错的：
+           那时 top-k 已经定死，被筛掉的名额**补不回来** —— 而第 21 名可能正是现行条款。
+        ⚠️ **两条路（全文 / 向量）都要加**。只加一路 = 没加：另一路照样把存档版送进融合。
+        ⚠️ 用**子查询**而不是 join：`_repo.select()` 的列已经定死是 `Chunk`，
+           join 会让返回行的形状变掉（`(chunk, doc)` 二元组），测试和调用点都得改。
+        """
+        if self._scope != "current":
+            return None
+        return Chunk.document_id.in_(
+            select(Document.id).where(
+                Document.tenant_id == self._tenant_id,
+                Document.content_status == ContentStatus.ACTIVE,
+            )
+        )
 
     async def _fulltext(
         self, query: str, *, limit: int, min_similarity: float
@@ -103,9 +129,11 @@ class HybridRetriever:
             self._repo.select()
             .add_columns(similarity.label("score"))
             .where(similarity >= min_similarity)
-            .order_by(similarity.desc())
-            .limit(limit)
         )
+        # ⚠️ 有效性过滤**必须在 `LIMIT` 之前**（这里就是之前），见 `_eligibility_filter`
+        if (eligibility := self._eligibility_filter()) is not None:
+            stmt = stmt.where(eligibility)
+        stmt = stmt.order_by(similarity.desc()).limit(limit)
         rows = (await self._session.execute(stmt)).all()
         return [
             RetrievedChunk(
@@ -142,11 +170,14 @@ class HybridRetriever:
             self._repo.select()
             .add_columns(distance.label("distance"))
             .where(Chunk.embedding.is_not(None))
-            .order_by(distance.asc())
-            .limit(limit)
         )
         if expected_model is not None:
             stmt = stmt.where(Chunk.embedding_model == expected_model)
+        # ⚠️ 同上：有效性过滤必须在 `LIMIT` 之前，而且**向量路也得加** ——
+        #    只加全文路等于没加（另一路照样把存档版送进 RRF）。
+        if (eligibility := self._eligibility_filter()) is not None:
+            stmt = stmt.where(eligibility)
+        stmt = stmt.order_by(distance.asc()).limit(limit)
         rows = (await self._session.execute(stmt)).all()
         return [
             RetrievedChunk(

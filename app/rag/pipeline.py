@@ -187,7 +187,10 @@ class RagPipeline:
             `(最终候选, 置信度, 置信度的口径)`。口径取值：`rerank` / `vector_cosine` / `none`。
         """
         settings = self._settings
-        retriever = HybridRetriever(self._session, tenant_id=self._tenant_id)
+        # ⚠️ `scope` 决定"**有没有资格被引用**"，与"相不相关"无关（v1.3 阶段 B）。
+        retriever = HybridRetriever(
+            self._session, tenant_id=self._tenant_id, scope=settings.retrieval_scope
+        )
 
         query_embedding: list[float] | None = None
         if self._embedder is not None:

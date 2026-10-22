@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -117,6 +118,12 @@ class Settings(BaseSettings):
 
     # ---------- 检索 / 生成 ----------
     retrieve_top_k: int = 20
+    #: 召回范围（v1.3 阶段 B）。**相关度 ≠ 有效性**（`AGENTS §7.1` 约定 20）：
+    #: · `current` = 只在**有资格被引用**的文档里召回（`content_status = 'active'`）← 产品态
+    #: · `all`     = 全库召回（**含存档/草案/兄弟品牌/内部材料**），用于**复现历史数字**
+    #: ⚠️ 这两个值不是"新旧配置"，是**两支尺子**：`all` 衡量"版本鉴别能力"（分数允许低），
+    #:    `current` 是产品实际表现，**两者之差 = 知识库治理值多少分**（`PLAN §8.6`）。
+    retrieval_scope: Literal["all", "current"] = "current"
     rerank_top_n: int = 5
     chunk_size: int = 800
     chunk_overlap: int = 100

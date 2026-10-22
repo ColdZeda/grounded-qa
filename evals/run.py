@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
 import statistics
 import uuid
@@ -352,6 +353,9 @@ def _dump(
             "retrieve_top_k": settings.retrieve_top_k,
             "rrf_k": settings.rrf_k,
             "fulltext_min_similarity": settings.fulltext_min_similarity,
+            # ⚠️ 必须记下来：`all` 与 `current` 是**两支尺子**，分数不同但都合法。
+            #    不记的话两组结果文件长得一样，事后分不清哪份是哪份（2026-10-22 踩过）。
+            "retrieval_scope": settings.retrieval_scope,
             "rerank_model": settings.rerank_model,
             "embedding_model": settings.embedding_model,
         },
@@ -412,7 +416,11 @@ async def _run_retrieval(args: argparse.Namespace) -> int:
         async with factory() as session:
             tenant_id = await _resolve_tenant_id(session, settings.default_tenant_id)
             paths = await _document_paths(session, tenant_id, kb=args.kb)
-            retriever = HybridRetriever(session, tenant_id=tenant_id)
+            # ⚠️ 评测直接建 retriever，**不走 pipeline** —— 所以 scope 必须在这里显式传，
+            #    否则 `--scope` 只改了配置、这里仍然用构造函数的默认值（静默失效，2026-10-22 踩中）。
+            retriever = HybridRetriever(
+                session, tenant_id=tenant_id, scope=settings.retrieval_scope
+            )
             print(
                 f"题库 {len(questions)} 题 · 知识库 {args.kb} · "
                 f"候选 {settings.retrieve_top_k} · 文档 {paths.document_count}"
@@ -1285,7 +1293,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--rescore", default=None, help="用已存的结果文件重算判分（不调模型，只换尺子）"
     )
+    parser.add_argument(
+        "--scope",
+        default=None,
+        choices=["all", "current"],
+        help=(
+            "召回范围（v1.3）：current = 只在有资格被引用的文档里召回（产品态）；"
+            "all = 全库召回，用于复现历史数字。两支尺子并存，**都不是作弊**"
+        ),
+    )
     args = parser.parse_args(argv)
+    if args.scope:
+        # ⚠️ 必须在第一次 `get_settings()` 之前设进环境；而且**光设环境不够** ——
+        #    `get_settings` 是 `lru_cache` 的，模块导入阶段可能已经缓存过默认值，
+        #    所以这里必须 `cache_clear()`，否则 `--scope` **静默失效**（跑出来两组数字一样，
+        #    看起来像"治理没效果"，其实是参数没进去 —— 2026-10-22 实测踩中）。
+        os.environ["RETRIEVAL_SCOPE"] = args.scope
+        get_settings.cache_clear()
     if args.rescore:
         return _rescore_generation(args)
     if args.layer == "retrieval":
