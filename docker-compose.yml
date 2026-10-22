@@ -120,6 +120,46 @@ services:
       start_period: 20s
 
   # ------------------------------------------------------------
+  # 飞书渠道（v1.2 第①项）：常驻长连接
+  # ⚠️ **和 api / worker 同一个镜像**，只是 `command` 不同 —— 长连接要一直挂着，
+  #    塞进 API 进程会跟着它重启，也把"请求-响应"和"常驻连接"两种生命周期混在一起。
+  # ⚠️ **`restart: on-failure`，不是 `unless-stopped`**：`FEISHU_ENABLED=false` 时进程
+  #    会**正常退出（0）**；用 `unless-stopped` 的话 Docker 会一直把它拉起来 ——
+  #    重启风暴 + 日志刷屏。`on-failure` 只在非 0 退出（真故障 / 配置错）时重试。
+  # ⚠️ 挂在 `feishu` profile 下：不显式启用就不会被拉起（本地默认不起它）。
+  # ------------------------------------------------------------
+  feishu:
+    profiles: ["feishu"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: grounded-qa-api:0.1.0
+    container_name: gq-feishu
+    restart: on-failure
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      POSTGRES_PORT: "5432"
+      REDIS_PORT: "6379"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python", "-m", "app.channels.feishu_runner"]
+    mem_limit: 128m
+    healthcheck:
+      # ⚠️ 只能查"进程还在吗"：它没有监听端口（长连接是**出站**的）。
+      #    镜像里装了 procps（worker 的 healthcheck 也靠它），`pgrep` 可用。
+      test: ["CMD", "pgrep", "-f", "app.channels.feishu_runner"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ------------------------------------------------------------
   # 自研 mini worker（Redis BLPOP；**不是 Celery**）
   # 文档解析 / 切分 / 向量化，串行执行
   # ------------------------------------------------------------

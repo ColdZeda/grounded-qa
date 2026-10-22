@@ -49,11 +49,13 @@ dependencies = [
     #    "按内容认格式"（不信后缀）和 "EXIF 转正"（手机照片常带旋转标记，
     #    不转正模型看到的是躺倒的图 —— 字全废）。
     "pillow>=11.0,<13.0",
+    # --- 飞书渠道（v1.2 第①项：长连接，出站）---
+    # ⚠️ **放在主依赖里，不做成 optional extra**：镜像只有一套（api / worker / feishu 三个
+    #    容器同一个镜像，只是 command 不同），extra 装不进镜像 ⟹ 飞书容器运行时 ImportError。
+    #    代价：其余容器白带几 MB。清单里省一个 extra，换"不会因为构建参数忘了加 extra 而炸"，
+    #    这笔账划算（`AGENTS §7.1` 约定 19「客户端构造时注入」也更容易守住）。
+    "lark-oapi>=1.4,<2.0",
 ]
-
-[project.optional-dependencies]
-# 飞书渠道（v1.2 才用；v1.0 只预留 channels/ 目录）
-feishu = ["lark-oapi>=1.4,<2.0"]
 
 [dependency-groups]
 dev = [
