@@ -83,6 +83,29 @@ services:
       start_period: 20s
 
   # ------------------------------------------------------------
+  # 飞书渠道（v1.2 第①项）：常驻长连接
+  # ⚠️ 和 api / worker **同一个镜像**，只是 command 不同。
+  # ⚠️ `restart: on-failure`（**不是** `unless-stopped`）：`FEISHU_ENABLED=false` 时进程
+  #    正常退出（0），`unless-stopped` 会把它无限拉起 → 重启风暴 + 日志刷屏。
+  # ⚠️ 挂在 `feishu` profile 下，CD 里四处都要带 `--profile feishu` ——
+  #    不带的话 `up -d --remove-orphans` 会把它当孤儿删掉（`AGENTS §10` monitoring 那个坑的翻版）。
+  # ------------------------------------------------------------
+  feishu:
+    <<: *api-common
+    container_name: gq-feishu
+    profiles: ["feishu"]
+    restart: on-failure
+    command: ["python", "-m", "app.channels.feishu_runner"]
+    mem_limit: 96m
+    healthcheck:
+      # ⚠️ 没有监听端口（长连接是**出站**），只能查进程
+      test: ["CMD-SHELL", "pgrep -f 'app.channels.feishu_runner' > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ------------------------------------------------------------
   # 自研 mini worker（Redis BLPOP，不是 Celery）
   # ------------------------------------------------------------
   worker:

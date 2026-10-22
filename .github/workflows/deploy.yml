@@ -206,13 +206,16 @@ jobs:
         #    不带这个 flag 时它们**不在本次操作的启用集合里** ——
         #    而 `--remove-orphans` 会把"不在集合里的容器"当孤儿清掉。
         #    结果就是：每次部署都顺手把监控干掉，而且日志里只有一行 orphans。
+        # ⚠️ `--profile feishu` 同理（v1.2 第①项起）：**四处都要带**（pull / up / 回滚 / logs）。
+        #    它默认 `FEISHU_ENABLED=false`，进程会**正常退出**，容器停在 `Exited (0)` ——
+        #    这是预期状态，不是故障；`restart: on-failure` 保证不会被反复拉起。
         run: |
           set -euo pipefail
           ssh target "cd $REMOTE_DIR && \
             ACR_REGISTRY='$ACR_REGISTRY' IMAGE_TAG='$IMAGE_TAG' \
-            docker compose -f $COMPOSE_FILE --profile monitoring pull && \
+            docker compose -f $COMPOSE_FILE --profile monitoring --profile feishu pull && \
             ACR_REGISTRY='$ACR_REGISTRY' IMAGE_TAG='$IMAGE_TAG' \
-            docker compose -f $COMPOSE_FILE --profile monitoring up -d --remove-orphans"
+            docker compose -f $COMPOSE_FILE --profile monitoring --profile feishu up -d --remove-orphans"
 
       # ------------------------------------------------------------
       # ⚠️ **迁移与 seed 为什么必须由 CI 跑**（2026-10-17 补）
@@ -338,7 +341,7 @@ jobs:
           echo "开始回滚到：$prev"
           ssh target "cd $REMOTE_DIR && \
             ACR_REGISTRY='$ACR_REGISTRY' IMAGE_TAG='$prev' \
-            docker compose -f $COMPOSE_FILE --profile monitoring up -d --remove-orphans"
+            docker compose -f $COMPOSE_FILE --profile monitoring --profile feishu up -d --remove-orphans"
           ssh target "curl -fsS http://127.0.0.1:8080/healthz" \
             && echo "✅ 回滚成功" \
             || { echo "❌ 回滚后仍不健康，请立即人工介入"; exit 1; }
@@ -347,5 +350,6 @@ jobs:
         if: failure()
         # ⚠️ 带 `--profile monitoring`：不带的话 `logs` 只覆盖默认集合，
         #    而红掉的恰恰可能是 prometheus（拉不到 / 起不来 / OOM）。
+        # ⚠️ `--profile feishu` 同理：飞书进程的报错只会出现在它自己的日志里。
         run: |
-          ssh target "cd $REMOTE_DIR && docker compose -f $COMPOSE_FILE --profile monitoring logs --tail=200" || true
+          ssh target "cd $REMOTE_DIR && docker compose -f $COMPOSE_FILE --profile monitoring --profile feishu logs --tail=200" || true
