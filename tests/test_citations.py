@@ -98,3 +98,24 @@ def test_out_of_range_marker_is_flagged() -> None:
 
     assert result.unsupported == 1
     assert result.issues[0].markers == (9,)
+
+
+def test_calendar_dates_and_derived_expiry_are_not_flagged() -> None:
+    """⚠️ **真机首跑就误报的那一条**（2026-10-23 02:06，飞书）。
+
+    回答写"2024 年 3 月签收的订单，其 1 年保修期已于 2025 年 3 月前后到期 [3]"：
+    `2024 年 3 月` 来自**用户提问**、`2025 年 3 月` 是模型**算出来**的，
+    只有 `1 年` 需要在 `[3]` 里。不排除日历分量的话，
+    **任何做了日期推算的回答都会被判串号**，这个比例就废了。
+    """
+    answer = "- 按签收日起算，2024 年 3 月签收的订单，其 1 年保修期已于 2025 年 3 月前后到期 [3]"
+
+    result = audit(answer, _HITS)
+
+    assert result.unsupported == 0, result.issues
+
+
+def test_term_values_are_still_checked() -> None:
+    """日历分量豁免了，**条款数值不能跟着一起豁免** —— 那是串号的正题。"""
+    assert audit("家具主体保修 2 年 [3]", _HITS).unsupported == 1
+    assert audit("布艺与填充件 6 个月 [2]", _HITS).unsupported == 1

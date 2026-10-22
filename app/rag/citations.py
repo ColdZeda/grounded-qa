@@ -55,9 +55,37 @@ def _norm(text: str) -> str:
     return text.replace(",", "").replace(" ", "").replace("\u3000", "").lower()
 
 
+#: **日历分量**（`2024年` / `3月` / `15日`）不算"必须能在原文里找到"的原子。
+#:
+#: ⚠️ 这一条是**真机打出来的**（2026-10-23 02:06，飞书）：回答写
+#:    "2024 年 3 月签收的订单，其 1 年保修期已于 2025 年 3 月前后到期 [3]"，
+#:    被本模块判成串号 —— 但 `2024 年 3 月` 来自**用户提问**、`2025 年 3 月` 是模型
+#:    **算出来**的，只有 `1 年` 才需要在原文里。
+#:    不排除的话，**任何做了日期推算的回答都会被判串号**，这个比例就没意义了。
+#: 📌 真正的串号风险在"7 天 / 30 天 / 2 年 / 6 个月"这类**条款数值**上，那些照样要核。
+_CALENDAR = re.compile(r"^(?P<num>\d+(?:\.\d+)?)(?P<unit>年|月|日)$")
+#: 单位 → 算作"日历分量"的数值区间（闭区间）。
+#: ⚠️ **年看下限、月日看上限**：`2024年` 是年份，`3月`/`15日` 是月日；
+#:    而 `2年` / `13月` / `45日` 更像条款期限，仍要核。
+_CALENDAR_RANGES = {"年": (1900.0, float("inf")), "月": (0.0, 12.0), "日": (0.0, 31.0)}
+
+
+def _is_calendar(atom: str) -> bool:
+    """`2024年` / `3月` / `15日` → True；`2年` / `6个月` / `30天` → False。
+
+    ⚠️ `个月` 与 `月` **必须区分**：`6 个月` 是条款数值（要核），`3 月` 是日历（不核）。
+    """
+    match = _CALENDAR.match(atom)
+    if match is None:
+        return False
+    low, high = _CALENDAR_RANGES[match.group("unit")]
+    return low <= float(match.group("num")) <= high
+
+
 def _atoms_of(sentence: str) -> list[str]:
     """一句话里的数字原子（**先去引用标记**，否则 `[3]` 里的 3 会被当成数据）。"""
-    return [_norm(atom) for atom in _ATOM.findall(_MARKER.sub("", sentence))]
+    atoms = [_norm(atom) for atom in _ATOM.findall(_MARKER.sub("", sentence))]
+    return [atom for atom in atoms if atom and not _is_calendar(atom)]
 
 
 @dataclass(frozen=True)
