@@ -16,7 +16,13 @@
 
 import { ApiError, apiFetch, authHeaders } from './client'
 import { consumeSse, type SseFrame } from './sse'
-import type { DoneEvent, ErrorEvent, ImageInfo, SourcesEvent } from '@/types/api'
+import type {
+  CitationAudit,
+  DoneEvent,
+  ErrorEvent,
+  ImageInfo,
+  SourcesEvent,
+} from '@/types/api'
 
 export interface StreamHandlers {
   /** 检索完成、**开始生成之前**。前端可以先把"参考来源"渲染出来。 */
@@ -63,6 +69,25 @@ function asImageInfo(value: unknown): ImageInfo | undefined {
   }
 }
 
+/**
+ * `done` 里的引用核对结果。
+ *
+ * ⚠️ `checked <= 0` 一律当**没有**（返回 `undefined`）—— 后端也只在 `checked > 0`
+ * 时才带这个字段，两边口径一致的话，调用方只需要判 `undefined`。
+ */
+function asCitationAudit(value: unknown): CitationAudit | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const raw = value as Record<string, unknown>
+  const checked = asNumber(raw.checked) ?? 0
+  if (checked <= 0) return undefined
+  return {
+    checked,
+    unsupported: asNumber(raw.unsupported) ?? 0,
+    rate: asNumber(raw.rate) ?? 0,
+    issues: Array.isArray(raw.issues) ? (raw.issues as CitationAudit['issues']) : [],
+  }
+}
+
 function dispatch(frame: SseFrame, handlers: StreamHandlers): void {
   const payload = parseJson(frame.data)
   if (payload === null) return
@@ -81,13 +106,16 @@ function dispatch(frame: SseFrame, handlers: StreamHandlers): void {
     case 'delta':
       handlers.onDelta?.(asString(payload.text))
       break
-    case 'done':
+    case 'done': {
+      const audit = asCitationAudit(payload.citation_audit)
       handlers.onDone?.({
         refused: payload.refused === true,
         confidence: asNumber(payload.confidence),
         latency_ms: asNumber(payload.latency_ms) ?? 0,
+        citation_audit: audit,
       })
       break
+    }
     case 'error':
       handlers.onError?.({
         detail: asString(payload.detail) || '生成过程中出错',

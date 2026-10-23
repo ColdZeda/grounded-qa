@@ -251,7 +251,7 @@ async def list_reports(current_user: CurrentUser) -> ReportListOut:
     snapshots.sort(key=lambda item: item.generated_at, reverse=True)
 
     note = (
-        f"共 {len(snapshots)} 份快照，新的在前。**这是只读快照，不是在页面上现跑的评测**；"
+        f"共 {len(snapshots)} 份快照，新的在前。「这是只读快照，不是在页面上现跑的评测」；"
         "同一个指标出现多个数值，是因为判分口径随时间改过 —— 比较时请认准同一份快照。"
     )
     return ReportListOut(snapshots=snapshots, note=note)

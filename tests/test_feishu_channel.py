@@ -14,6 +14,7 @@ from app.channels.feishu import (
     MAX_REPLY_CHARS,
     FeishuChannel,
     FeishuEvent,
+    citation_hint,
     parse_event,
     render_reply,
     split_reply,
@@ -149,6 +150,81 @@ def test_render_reply_can_hide_sources() -> None:
     )
     assert render_reply(answer, show_sources=True) == "家具主体保修 2 年。"
     assert render_reply(answer, show_sources=False) == "家具主体保修 2 年。"
+
+
+def _answer_with_audit(unsupported: int, checked: int = 2) -> Answer:
+    """带引用核对结果的回答（`checked` 句可核，其中 `unsupported` 句对不上）。"""
+    return Answer(
+        text="家具主体保修 2 年[1]，布艺 6 个月[2]。",
+        refused=False,
+        citations=[
+            Citation(
+                index=1,
+                chunk_id="c1",
+                document_id="d1",
+                score=0.98,
+                score_kind="rerank",
+                snippet="家具主体保修期为 24 个月",
+            )
+        ],
+        confidence=0.98,
+        latency_ms=900,
+        extra={
+            "citation_audit": {
+                "checked": checked,
+                "unsupported": unsupported,
+                "rate": unsupported / checked,
+                "issues": [],
+            }
+        },
+    )
+
+
+def test_citation_hint_only_says_we_could_not_verify() -> None:
+    """串号降级 = **末尾加一行提示**（v1.4 A1，`PLAN §8.7` D1）。
+
+    ⚠️ 措辞只陈述"我们没核对上"，**不说"答案是错的"** —— 检查器自己会误报
+       （判据刻意宽松），替用户下结论比不给提示更糟。
+    """
+    hint = citation_hint(_answer_with_audit(unsupported=1))
+
+    assert hint is not None
+    assert "1 处" in hint
+    assert "未能核对上" in hint
+    assert "错" not in hint
+
+
+def test_citation_hint_is_absent_when_every_marker_checks_out() -> None:
+    """核对全通过 → **不提示**。
+
+    ⚠️ 没有审计字段（拒答 / 闭卷 / 老回答）也要安静 —— 提示是异常信号，
+       常态下每次回答都挂一句警告，用户很快就会当成水印不再读。
+    """
+    assert citation_hint(_answer_with_audit(unsupported=0)) is None
+    assert (
+        citation_hint(
+            Answer(text="好的", refused=True, citations=[], confidence=None, latency_ms=5)
+        )
+        is None
+    )
+
+
+def test_render_reply_appends_hint_at_the_end_without_touching_body() -> None:
+    rendered = render_reply(_answer_with_audit(unsupported=1), show_sources=True)
+
+    # 正文一个字不动（含 `[1]` `[2]` 原样保留）
+    assert rendered.startswith("家具主体保修 2 年[1]，布艺 6 个月[2]。")
+    # 提示在**最后一行**，且在来源区之后
+    assert rendered.splitlines()[-1].startswith("⚠️ 本次有 1 处引用未能核对上")
+    assert rendered.index("参考来源") < rendered.index("⚠️")
+
+
+def test_render_reply_keeps_hint_when_sources_are_hidden() -> None:
+    """关掉来源 ≠ 关掉降级提示 —— **没有来源可点**时这行提示恰恰更重要。"""
+    rendered = render_reply(_answer_with_audit(unsupported=1), show_sources=False)
+
+    assert rendered.endswith("请以原文为准。")
+    assert "参考来源" not in rendered
 
 
 def test_to_feishu_markdown_downgrades_table_to_bullets() -> None:

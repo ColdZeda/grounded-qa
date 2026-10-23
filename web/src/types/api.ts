@@ -180,6 +180,54 @@ export interface ReportListOut {
 }
 
 // ------------------------------------------------------------
+// 知识库冲突体检（app/kb/conflicts.py，`GET /reports/conflicts`）
+// ------------------------------------------------------------
+
+/** 一条"期限事实"：某篇文档说，在某个适用范围下，某主题是多少。 */
+export interface ConflictFact {
+  /** 文档文件名（相对知识库根）—— ⚠️ 只给文件名，不给正文 */
+  doc: string
+  /** `active`（现行政策）/ `internal`（内部材料）/ … */
+  status: string
+  topic: string
+  /** 适用范围（`德国站` / `全局`） */
+  scope: string
+  value: number
+  /** 单位族：`day` / `month` / `year` / `hour` —— ⚠️ **只在同族内比较** */
+  unit_family: string
+  /** 支撑这条数值的**原句**（后端截到 120 字）。**没有原句的告警等于"你自己去找"** */
+  sentence: string
+  /** ⚠️ 只有 `right` 带上：同一个错值可能出现在好几篇文档里，合并显示 */
+  docs?: string[]
+}
+
+/** 一对数字对不上的事实。 */
+export interface ConflictItem {
+  /** `internal_vs_policy`（内部材料 ≠ 现行政策）或 `active_vs_active`（两份现行互斥） */
+  kind: string
+  topic: string
+  scope: string
+  unit_family: string
+  left: ConflictFact
+  right: ConflictFact
+}
+
+/**
+ * `GET /reports/conflicts` —— **按需现算**的体检（不是评测快照）。
+ *
+ * ⚠️ 只报不一致，**不判谁对**：运维动作取决于人（改内部稿 / 走产品决策）。
+ */
+export interface ConflictReport {
+  /** 参与**配对**的文档数 */
+  documents: number
+  /** 被跳过的（讲解稿 / 辟谣稿：说的是**别人的**规则） */
+  skipped_documents: number
+  facts: number
+  conflicts: number
+  items: ConflictItem[]
+}
+
+// ------------------------------------------------------------
 // 运维看板（app/schemas/monitoring.py）
 // ------------------------------------------------------------
 
@@ -292,11 +340,34 @@ export interface DeltaEvent {
   text: string
 }
 
+/**
+ * 引用可核对性（`app/rag/citations.py`）：回答里每个 `[n]` 后面那句的**数字**，
+ * 是否真的在被引段落里。
+ *
+ * ⚠️ 它是**比例不是开关** —— `unsupported / checked` 才是串号率，
+ * `unsupported === 0` 只说明这次核到的都对上了。
+ */
+export interface CitationAudit {
+  /** 有引用标记、且含可核数字的句子数（分母） */
+  checked: number
+  /** 其中核对不上的句子数（分子） */
+  unsupported: number
+  /** `unsupported / checked`，后端已四舍五入到 4 位 */
+  rate: number
+  /** 最多 3 条明细（后端截断） */
+  issues: { markers: number[]; atoms: string[]; sentence: string }[]
+}
+
 /** `event: done` —— 收尾。注意**它不代表成功**，出错时 `error` 事件之后照样会来一个 `done`。 */
 export interface DoneEvent {
   refused: boolean
   confidence: number | null
   latency_ms: number
+  /**
+   * ⚠️ **只在真的有可核的引用句时才出现**（`checked > 0`）：
+   * 拒答 / 闭卷 / 整句全是名词 → 没有这个字段（不是 `null`）。
+   */
+  citation_audit?: CitationAudit
 }
 
 /** `event: error` —— 流开始**之后**出的错，只能这样告诉前端（改不了状态码了）。 */

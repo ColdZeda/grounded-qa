@@ -231,7 +231,8 @@ async def list_messages(
         200: {
             "content": {"text/event-stream": {}},
             "description": (
-                "SSE 事件流：`sources`（引用来源，最先发）→ `delta`*（增量文本）→ `done`（收尾）。"
+                "SSE 事件流：`sources`（引用来源，最先发）→ `delta`*（增量文本）→ "
+                "`done`（收尾，`citation_audit` 在校到东西时才带）。"
                 "流中出错会发 `error` 事件。"
             ),
         }
@@ -433,14 +434,20 @@ async def _stream(
                 record_chat_outcome(_outcome_of(event))
                 if event.error:
                     yield _sse("error", {"detail": event.error, "stage": "generation"})
-                yield _sse(
-                    "done",
-                    {
-                        "refused": event.refused,
-                        "confidence": event.confidence,
-                        "latency_ms": event.latency_ms,
-                    },
-                )
+                done_payload: dict[str, object] = {
+                    "refused": event.refused,
+                    "confidence": event.confidence,
+                    "latency_ms": event.latency_ms,
+                }
+                # 引用可核对性（v1.4 A1）：**让"这次有几处对不上"跟着收尾事件出去**，
+                # web 端才有机会在不改正文的前提下提示一句（飞书那边同理，
+                # `channels/feishu.py::render_reply`）。
+                # ⚠️ 只在**真的核过**（`checked > 0`）时才带：没有可核数字的回答
+                #    （拒答 / 闭卷 / 全名词句）带上一个全零对象，只会让前端多判断一次。
+                audit = event.extra.get("citation_audit")
+                if isinstance(audit, dict) and audit.get("checked"):
+                    done_payload["citation_audit"] = audit
+                yield _sse("done", done_payload)
     except Exception as exc:
         # ⚠️ 这里**不能**再抛 HTTP 异常：响应头早就发出去了，改不了状态码。
         #    唯一能做的是在流里告诉前端"出错了"。

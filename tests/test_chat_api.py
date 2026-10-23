@@ -214,6 +214,8 @@ async def test_refuses_and_never_calls_the_model_when_kb_is_empty(
 
     done = events_of(events, "done")[0]
     assert done["refused"] is True
+    # ⚠️ 拒答没有可核的引用句 → **不带** `citation_audit`（不是带一个全零对象）
+    assert "citation_audit" not in done
 
     # 回答内容就是那段固定文案（逐段流式发出）
     streamed = "".join(d["text"] for d in events_of(events, "delta"))
@@ -331,7 +333,11 @@ async def test_answers_and_emits_citations_when_evidence_exists(
     assert citation["score_kind"] == "vector_cosine"
 
     assert "".join(d["text"] for d in events_of(events, "delta")) == chat.answer_text
-    assert events_of(events, "done")[0]["refused"] is False
+    done = events_of(events, "done")[0]
+    assert done["refused"] is False
+    # 引用核对：这句 `7 天` 确实在 `[1]` 里 → 核过 1 句、0 句对不上
+    assert done["citation_audit"]["checked"] == 1
+    assert done["citation_audit"]["unsupported"] == 0
 
     # 模型确实拿到了参考资料（否则就是"无依据硬答"）
     assert chat.calls, "模型应该被调用一次"
@@ -339,6 +345,40 @@ async def test_answers_and_emits_citations_when_evidence_exists(
     assert system_prompt["role"] == "system"
     assert "签收后 7 天内" in system_prompt["content"]
     assert chat.calls[0][-1] == {"role": "user", "content": "退款政策"}
+
+
+async def test_done_event_carries_citation_audit_when_marker_mismatches(
+    client: AsyncClient, app: Any, make_account, login, session: AsyncSession
+) -> None:
+    """**串号要跟着 `done` 事件出去**（v1.4 A1）。
+
+    模型说"24 个月[1]"，而 `[1]` 原文是 12 个月 —— 这就是 B2 真机抓到的那个缺陷
+    （"`6 个月` 标成 `[2]`"）的实验室版本。
+
+    ⚠️ 审计**只抓不改**：正文原样发出去（一个字都不许动），收尾事件里带上
+       "有几句对不上"，**由渠道决定怎么提示**（`channels/feishu.py::citation_hint`）。
+    """
+    chat = FakeChat(chunks=("保修期为 ", "24 个月[1]。"))
+    app.dependency_overrides[get_clients] = lambda: (chat, FakeEmbedder(UNIT_VECTOR), None)
+    account = await make_account()
+    await _seed_chunk(
+        session,
+        tenant_id=account.tenant_id,
+        content="本店产品保修期为 12 个月，自签收之日起算。",
+        embedding=UNIT_VECTOR,
+    )
+
+    token = await login(account.email, account.password)
+    conversation = await _new_conversation(client, token)
+
+    _status, events = await _ask(client, token, conversation["id"], "保修期多久")
+
+    assert "".join(d["text"] for d in events_of(events, "delta")) == "保修期为 24 个月[1]。"
+    audit = events_of(events, "done")[0]["citation_audit"]
+    assert audit["checked"] == 1
+    assert audit["unsupported"] == 1
+    assert audit["issues"][0]["markers"] == [1]
+    assert audit["issues"][0]["atoms"] == ["24个月"]
 
 
 async def test_citations_and_refused_flag_are_persisted(
