@@ -426,3 +426,5 @@ async def test_notify_sends_the_report_only_when_it_has_a_conflict() -> None:
     assert "1 处冲突" in sent[0]
     assert "德国站" in sent[0]
     assert "30" in sent[0] and "14" in sent[0]
+    # ⚠️ 群机器人发的是**纯文本**：`**` 会原样显示成星号（2026-10-23 截图里就是这样）
+    assert "**" not in sent[0]

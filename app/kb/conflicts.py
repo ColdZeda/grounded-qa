@@ -494,7 +494,18 @@ async def notify_report(report: dict[str, Any], *, push: PushFn | None = None) -
         from app.core.alerts import push_text
 
         push = push_text
-    return bool(await push("🚨 知识库冲突检查\n" + render_text(report)))
+    return bool(await push("🚨 知识库冲突检查\n" + _plain(render_text(report))))
+
+
+def _plain(text: str) -> str:
+    """把 `render_text` 里的轻量 markdown 抹掉 —— **群机器人发的是纯文本**。
+
+    ⚠️ 飞书的 `msg_type=text` 不渲染 markdown：`**1 处冲突**` 会原样显示成星号
+       （2026-10-23 真机截图里就是这样）。我们只在 `render_text` 里用了 `**` 一种标记，
+       所以这里只抹它 —— 真要做富文本得换成卡片（`msg_type=interactive`），
+       而 `push_text` 是**飞书 / 企微共用**的告警通道，为一句加粗换消息类型不值当。
+    """
+    return text.replace("**", "")
 
 
 async def collect(session: AsyncSession, *, tenant_id: uuid.UUID) -> list[DocumentText]:
