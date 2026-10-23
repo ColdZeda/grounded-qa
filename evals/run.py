@@ -35,6 +35,7 @@ import argparse
 import asyncio
 import json
 import os
+import random
 import re
 import statistics
 import uuid
@@ -48,7 +49,7 @@ import yaml
 from sqlalchemy import select
 
 from app.core.config import Settings, get_settings
-from app.db.models.knowledge import Document
+from app.db.models.knowledge import Chunk, Document
 from app.db.models.tenant import Tenant
 from app.db.session import dispose_engine, get_session_factory
 from app.rag.pipeline import Answer, RagPipeline, build_clients
@@ -728,6 +729,62 @@ class AnswerResult:
         return self.points_hit == self.points_total
 
 
+class RandomEvidencePipeline(RagPipeline):
+    """**随机证据组**（v1.4 B3）：同一个提示词、同一段代码，只把检索结果换成 5 段无关内容。
+
+    为什么需要它：闭卷 vs 开卷只能证明"**给了证据**比没给强"，但那份证据里混着两样东西 ——
+    **检索找对了**（内容相关）和**提示词要求引用资料**（格式上有抓手）。要拆开，
+    就得有第三组：**开卷的提示词 ＋ 无关的证据**。
+
+        闭卷 → 随机证据 → 真证据
+              └─ 提示词 ─┘└─ 检索 ─┘
+
+    ⚠️ 只覆盖 `_retrieve` 一个方法 —— 提示词、拒答、引用、落库全都走原路径，
+       否则差值里会混进"两套实现"的噪音（和闭卷那条纪律一样，见 §9.34 ②）。
+    ⚠️ 置信度给 `None`：没有可信的相关性分数，就不该拿它去判拒答
+       （`RagPipeline._should_refuse` 对"没分数但有命中"的结论是**照答**，
+       这正是我们要的 —— 随机证据组要和开卷组**一样地尽力回答**）。
+    """
+
+    def __init__(self, *, evidence: Sequence[RetrievedChunk], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._evidence = list(evidence)
+
+    async def _retrieve(  # type: ignore[override]
+        self, question: str, *, ref_time: date | None = None
+    ) -> tuple[list[RetrievedChunk], float | None, str]:
+        return list(self._evidence), None, "none"
+
+
+def _random_evidence(
+    pool: Sequence[RetrievedChunk],
+    *,
+    exclude_paths: set[str],
+    path_of: Any,
+    count: int,
+    rng: random.Random,
+) -> list[RetrievedChunk]:
+    """从库里随机抽 `count` 段，**排掉这道题的标准出处**，长度尽量和真证据接近。
+
+    三条保证（`PLAN §8.7` ③）缺一条这个实验就白做：
+      ① 固定随机种子（`--seed`）—— 否则"某次运气好"无法复现；
+      ② **同样 `count` 段、长度相近** —— 否则"证据更少/更短"会混进结论；
+      ③ **排除同文件** —— 不然随机抽到正解所在文档，这组就不是"无关证据"了。
+    """
+    usable = [chunk for chunk in pool if path_of(chunk.document_id) not in exclude_paths]
+    if len(usable) < count:
+        usable = list(pool)
+    if not usable:
+        return []
+    lengths = sorted(len(chunk.content) for chunk in usable)
+    median = lengths[len(lengths) // 2]
+    # 长度相近：中位数 ±40%。抽不够就放宽，宁可长度略偏也不许少于 count 段。
+    near = [chunk for chunk in usable if median * 0.6 <= len(chunk.content) <= median * 1.6]
+    candidates = near if len(near) >= count else usable
+    rng.shuffle(candidates)
+    return candidates[:count]
+
+
 def _load_items(path: Path) -> list[dict[str, Any]]:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, list):
@@ -763,9 +820,50 @@ async def _run_answer_layer(
             tenant_id = await _resolve_tenant_id(session, settings.default_tenant_id)
             paths = await _document_paths(session, tenant_id, kb=args.kb)
             print(f"题库 {len(items)} 题 · 层 {layer} · 知识库 {args.kb}")
+            pool: list[RetrievedChunk] = []
+            if mode == "random":
+                rows = (
+                    await session.execute(
+                        select(
+                            Chunk.id,
+                            Chunk.document_id,
+                            Chunk.ordinal,
+                            Chunk.content,
+                        ).where(Chunk.tenant_id == tenant_id)
+                    )
+                ).all()
+                pool = [
+                    RetrievedChunk(
+                        chunk_id=chunk_id,
+                        document_id=document_id,
+                        ordinal=ordinal,
+                        content=content,
+                        score=0.0,
+                    )
+                    for chunk_id, document_id, ordinal, content in rows
+                ]
+                print(f"随机证据池：{len(pool)} 段（种子 {args.seed}）")
             for index, item in enumerate(items, start=1):
                 spy.calls = 0
-                pipeline = RagPipeline(
+                # ⚠️ 随机证据组走 `RandomEvidencePipeline`（只换检索结果），
+                #    其余模式一律用**同一条** `RagPipeline` —— 对照组和被试组的差异里
+                #    不许混进"两套实现"的噪音。
+                pipeline_cls: type[RagPipeline] = (
+                    RandomEvidencePipeline if mode == "random" else RagPipeline
+                )
+                evidence: list[RetrievedChunk] = []
+                if mode == "random":
+                    evidence = _random_evidence(
+                        pool,
+                        exclude_paths=set(item.get("must_hit", [])),
+                        path_of=paths.path_of,
+                        count=settings.rerank_top_n,
+                        # 每题一个稳定的种子：同一批题重跑抽到的是同一批段落
+                        # ⚠️ 这里**要的就是可复现的伪随机**（不是密码学随机），
+                        #    所以对 S311 明确豁免：随机性只用在对结果做对照上。
+                        rng=random.Random(f"{args.seed}:{item['id']}"),  # noqa: S311
+                    )
+                pipeline = pipeline_cls(
                     session=session,
                     tenant_id=tenant_id,
                     chat=spy,  # type: ignore[arg-type]
@@ -776,6 +874,7 @@ async def _run_answer_layer(
                     closed_book=mode == "closed",
                     # 冻结参照时刻（v1.3 B2）：不传则用今天，历史版本只在它当时有效
                     ref_time=args.ref_time,
+                    **({"evidence": evidence} if mode == "random" else {}),
                 )
                 result = AnswerResult(
                     id=item["id"],
@@ -855,13 +954,21 @@ def _report_answer_layer(
     started: datetime,
 ) -> dict[str, Any]:
     print()
-    tag = "开卷（有检索证据）" if mode == "open" else "闭卷（无检索，凭模型自身知识）"
+    #: 三种模式的标题。⚠️ 随机证据组的措辞要能一眼看出"**证据是无关的**"，
+    #:    否则读报告的人会以为它也检索了（v1.4 B3）。
+    tags = {
+        "open": "开卷（有检索证据）",
+        "closed": "闭卷（无检索，凭模型自身知识）",
+        "random": "随机证据（开卷提示词 ＋ 无关段落）",
+    }
+    tag = tags.get(mode, mode)
     print(f"===== {args.kb} · {layer} · {tag} =====")
     if layer == "generation":
         ok = sum(1 for r in results if r.passed)
         strict = [r for r in results if r.weak_points == 0]
         strict_ok = sum(1 for r in strict if r.passed)
-        rules = "要点全中 ＋ 无禁语" if mode == "closed" else "要点全中 ＋ 引用对 ＋ 无禁语"
+        # ⚠️ 只有开卷判引用：闭卷没检索，随机证据组的"引用"是随机的，判它等于判它作弊
+        rules = "要点全中 ＋ 引用对 ＋ 无禁语" if mode == "open" else "要点全中 ＋ 无禁语"
         print(f"生成层：**{ok}/{len(results)} 题全通过**（{rules}）")
         if strict:
             print(
@@ -1081,16 +1188,21 @@ def _modes(arg: str, *, layer: str) -> tuple[str, ...]:
        闭卷没有候选、也没有分数，硬跑只会得到"全部拒答"，是假满分。
     """
     if layer == "refusal":
-        if arg == "closed":
-            raise SystemExit("拒答层只有开卷：闭卷没有检索分数，无从判拒答")
+        if arg in {"closed", "random"}:
+            raise SystemExit("拒答层只有开卷：闭卷 / 随机证据都没有「证据够不够」这回事")
         return ("open",)
     if arg == "both":
         return ("open", "closed")
+    if arg == "all":
+        # v1.4 B3：三组一起跑 —— 闭卷 → 随机证据 → 真证据（差值即归因）
+        return ("closed", "random", "open")
+    if arg == "random":
+        return ("random",)
     return ("open",) if arg == "open" else ("closed",)
 
 
 def _print_contrast(summaries: Sequence[dict[str, Any]], *, kb: str, layer: str) -> None:
-    """打印闭卷 / 开卷对照表 —— 这就是「对照实验」的结论页。"""
+    """打印 闭卷 / 随机证据 / 开卷 对照表 —— 这就是「对照实验」的结论页。"""
     print()
     print(f"===== 对照：{kb} · {layer} =====")
     print(
@@ -1099,9 +1211,8 @@ def _print_contrast(summaries: Sequence[dict[str, Any]], *, kb: str, layer: str)
     )
     print("-" * 66)
     for row in summaries:
-        cite = (
-            f"{row['cite_ok']}/{row['cite_checked']}" if row["cite_checked"] else "—（闭卷无引用）"
-        )
+        # ⚠️ 只有开卷判引用：闭卷没检索，随机证据组的"引用"是随机的 —— 都不该显示成"0/20"
+        cite = f"{row['cite_ok']}/{row['cite_checked']}" if row["cite_checked"] else "—（不判引用）"
         print(
             f"{row['mode']:<8}{row['all_points']:>6}/{row['total']:<3}"
             f"{row['points_rate']:>11.1%}"
@@ -1110,7 +1221,24 @@ def _print_contrast(summaries: Sequence[dict[str, Any]], *, kb: str, layer: str)
             f"{cite:>12}"
         )
     by_mode = {row["mode"]: row for row in summaries}
-    if {"open", "closed"} <= set(by_mode):
+    # ⚠️ 三组（v1.4 B3）时差值要**分两段算**，别再报"开卷 − 闭卷"那一个数 ——
+    #    那一个数把"提示词的功劳"和"检索的功劳"混在一起，正是这个实验要拆开的东西。
+    if {"closed", "random", "open"} <= set(by_mode):
+        closed, random_row, opened = by_mode["closed"], by_mode["random"], by_mode["open"]
+        prompt_gain = random_row["points_rate"] - closed["points_rate"]
+        retrieval_gain = opened["points_rate"] - random_row["points_rate"]
+        print(
+            f"\n三组归因（要点命中率）：闭卷 {closed['points_rate']:.1%} → "
+            f"随机证据 {random_row['points_rate']:.1%} → 开卷 {opened['points_rate']:.1%}"
+        )
+        print(f"  · 提示词 ＋ 格式的功劳 ＝ {prompt_gain:+.1%}（随机组 − 闭卷；**可能是负的**）")
+        print(f"  · 检索的功劳 ＝ {retrieval_gain:+.1%}（开卷 − 随机组）")
+        if prompt_gain < 0:
+            print(
+                "  ⚠️ 提示词这一段是**负贡献**：无关证据比没有证据更糟 —— "
+                "模型会把不相关的段落当成依据，还更敢给具体数字。"
+            )
+    elif {"open", "closed"} <= set(by_mode):
         opened, closed = by_mode["open"], by_mode["closed"]
         delta = opened["all_points_rate"] - closed["all_points_rate"]
         print(
@@ -1436,13 +1564,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--mode",
         default="open",
-        choices=["open", "closed", "image", "no-image", "both"],
+        choices=["open", "closed", "random", "all", "image", "no-image", "both"],
         help=(
             "generation/refusal 层：open=线上链路（检索＋精排＋拒答）；"
-            "closed=闭卷对照（关掉检索）；both=两组都跑。"
+            "closed=闭卷对照（关掉检索）；random=随机证据对照（开卷提示词＋无关段落）；"
+            "both=开卷＋闭卷；all=闭卷→随机证据→开卷（三组归因，见 v1.4 B3）。"
             "image 层：image=带图、no-image=不带图、both=两者对照；"
             "默认（open）在 image 层等价于 both。"
         ),
+    )
+    parser.add_argument(
+        "--seed",
+        default="20261023",
+        help="随机证据组的种子（固定住，否则「某次运气好」无法复现）",
     )
     parser.add_argument("--top-k", type=int, default=5, help="hit@k 的 k")
     parser.add_argument("--only", default="all", choices=["all", *ABLATIONS], help="只跑某一组消融")
