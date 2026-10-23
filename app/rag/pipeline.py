@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.core.metrics import record_citation_support
 from app.rag import citations as citation_module
+from app.rag import followup as followup_module
 from app.rag import prompt as prompt_module
 from app.rag.providers import ChatClient, EmbeddingClient, ModelAPIError, RerankClient
 from app.rag.reftime import RefTime, RefTimeSource, resolve_ref_time
@@ -307,6 +308,9 @@ class RagPipeline:
         #    放到检索之后就没有意义了 —— 那时 top-k 已经定死。
         ref_time = self._resolve_ref_time(question)
 
+        #: 短追问拼出来的检索 query（空 = 没拼）。放进 `extra` 是为了 badcase 归因：
+        #: "这题召回错了"要能一眼看出是不是改写惹的祸。
+        followup_query = ""
         if self._closed_book:
             # ---- 闭卷：不检索、不判拒答、没有引用 ----
             hits: list[RetrievedChunk] = []
@@ -315,13 +319,18 @@ class RagPipeline:
             citations: list[Citation] = []
             refused = False
         else:
+            #: v1.4 C1'：**短追问**（「德国呢」）自己检索不到东西 —— 把上一轮问句拼进检索 query。
+            #: ⚠️ 只影响检索：提示词里仍然是用户这一问的原话（不替用户重述问题）。
+            #:    触发条件刻意保守（≤15 字 ＋ 指代词 ＋ 有历史），见 `app/rag/followup.py`。
+            followup_query = followup_module.retrieval_query(question, history)
             #: ⚠️ 带图时检索 query = `scene` + 用户原话（`PLAN §8.3` D6）。
             #:    为什么不加 `image_text`：转写里是单号/金额这类**精确串**，
             #:    对全文(trgm)和向量都没有语义，加进去只会稀释原话的召回。
             #:    `scene` 是"图里有什么"的自然语言描述，正好补原话里缺失的语境
             #:    （用户只发一句"这能退吗"，光看这句话检索不到"破损"）。
+            base_query = followup_query or question
             search_query = (
-                f"{self._image_scene} {question}".strip() if self._image_scene else question
+                f"{self._image_scene} {base_query}".strip() if self._image_scene else base_query
             )
             hits, confidence, score_kind = await self._retrieve(
                 search_query, ref_time=ref_time.value
@@ -424,6 +433,9 @@ class RagPipeline:
                 **ref_time.as_extra(),
                 # 引用可核对性：**只抓不改**（理由见 `app/rag/citations.py`）
                 "citation_audit": audit.summary(),
+                # 追问改写（v1.4 C1'）：非空表示这次检索用了"上一轮问句 ＋ 本问"。
+                # ⚠️ 记账是为了 badcase 归因 —— "召回错了"要能一眼看出是不是改写惹的祸。
+                **({"followup_query": followup_query} if followup_query else {}),
             },
             usage=usage,
         )
