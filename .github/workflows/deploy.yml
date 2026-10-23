@@ -164,9 +164,13 @@ jobs:
           # ⚠️ 告警规则必须**和 prometheus.yml 同一次**过去：`rule_files:` 指向它，
           #    只传 prometheus.yml 的话 Prometheus 会因为找不到规则文件而**起不来**。
           scp deploy/prometheus/alerts.yml   target:$REMOTE_DIR/deploy/prometheus/alerts.yml
-          # 运维脚本（备份 / 恢复演练）。它们由**服务器的 systemd timer** 调用，
+          # 运维脚本（备份 / 恢复演练 / 冲突体检）。它们由**服务器的 systemd timer** 调用，
           # 所以必须落在宿主机上，不能只待在镜像里；scp 不保留可执行位 ⟹ 补一次 chmod。
-          scp deploy/ops/backup.sh deploy/ops/restore-drill.sh target:$REMOTE_DIR/deploy/ops/
+          # ⚠️ `deploy/systemd/*.unit` **不随 CD 同步**：unit 进 `/etc/systemd/system` 要
+          #    `daemon-reload`，让每次部署悄悄改定时任务不是好事。它们在仓库里存档，
+          #    安装/更新由人工 scp（步骤见 `..\ops\server-notes.md`）。
+          scp deploy/ops/backup.sh deploy/ops/restore-drill.sh deploy/ops/conflicts-check.sh \
+            target:$REMOTE_DIR/deploy/ops/
           ssh target "chmod +x $REMOTE_DIR/deploy/ops/*.sh"
           echo "ℹ️ 服务器上的 .env 由人工维护，CI 绝不覆盖（每个环境一份独立 .env）"
 

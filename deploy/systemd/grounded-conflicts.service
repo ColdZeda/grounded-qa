@@ -1,0 +1,12 @@
+# 知识库冲突体检（v1.4 A3）。
+#
+# ⚠️ 这个 unit 只管"跑起来"，**失败要发声是脚本自己的责任**
+#    （`deploy/ops/conflicts-check.sh` 会先推一条失败告警再 exit 1）。
+#    这里再让 systemd 把它记成 failed，`systemctl --failed` 一眼能看到。
+[Unit]
+Description=grounded-qa 知识库冲突体检（有冲突推飞书）
+Documentation=file:///opt/grounded-qa/deploy/ops/conflicts-check.sh
+
+[Service]
+Type=oneshot
+ExecStart=/opt/grounded-qa/deploy/ops/conflicts-check.sh

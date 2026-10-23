@@ -1,0 +1,19 @@
+# 每天 09:30 跑一次知识库冲突体检（v1.4 A3）。
+#
+# 09:30 不是随手挑的：
+#   · 备份是 03:00（`grounded-backup.timer`），错开；
+#   · 上午看告警比半夜看有用 —— 一条没人白天处理的告警等于没发。
+[Unit]
+Description=每天 09:30 跑一次 grounded-qa 知识库冲突体检
+
+[Timer]
+OnCalendar=*-*-* 09:30:00
+# ⚠️ 关机 / 重启错过了 09:30，开机后**补跑一次** ——
+#    否则"那天没体检"这件事没有任何痕迹（和备份那条同一个纪律）
+Persistent=true
+# 抖动 5 分钟：不要和其他定时任务挤在同一秒
+RandomizedDelaySec=5m
+Unit=grounded-conflicts.service
+
+[Install]
+WantedBy=timers.target

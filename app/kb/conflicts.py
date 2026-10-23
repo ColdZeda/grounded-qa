@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -104,6 +104,10 @@ _NOT_A_POLICY = ("干扰-相邻概念", "站外流传")
 #: ⚠️ `superseded` 不参与 —— 2023 版 15 天和现行 7 天**不是冲突**，是版本变更（阶段 B2 已解决）。
 #: ⚠️ `draft` 未生效、`sibling_brand` 是另一门生意（Lab 政策独立），都不该和主品牌比。
 _COMPARABLE = ("active", "internal")
+
+#: 推送函数（注入点）：`(text) -> 是否真的发出去了`。
+#: 测试塞假实现，生产用 `app.core.alerts.push_text`。
+PushFn = Callable[[str], Awaitable[bool]]
 
 
 @dataclass(frozen=True)
@@ -362,6 +366,25 @@ def render_text(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+async def notify_report(report: dict[str, Any], *, push: PushFn | None = None) -> bool:
+    """把报告推到群机器人。返回**是否真的发出去了**（"无事可报"也算成功）。
+
+    ⚠️ **没冲突就什么都不发**：每天推一条"一切正常"，等于训练所有人忽略这个群。
+    ⚠️ **要求推送却发不出去 → 返回 False**，调用方必须把它当成失败：
+        `push_text` 在 `ALERT_WEBHOOK_URL` 没配时是**静默返回 False** 的 ——
+        不在这里翻成失败，定时任务就会天天"成功"而群里一条没有
+        （`AGENTS §10` 那条"某一步静默没生效"就是这个病）。
+    ⚠️ 投递被拒绝（业务码非 0）时 `push_text` 会**抛** `RuntimeError` —— 照样以失败告终。
+    """
+    if not report.get("conflicts"):
+        return True
+    if push is None:
+        from app.core.alerts import push_text
+
+        push = push_text
+    return bool(await push("🚨 知识库冲突检查\n" + render_text(report)))
+
+
 async def collect(session: AsyncSession, *, tenant_id: uuid.UUID) -> list[DocumentText]:
     """从库里取当前租户**所有文档的全文**（按 `ordinal` 拼回整篇）。
 
@@ -397,10 +420,12 @@ __all__ = [
     "Conflict",
     "DocumentText",
     "Fact",
+    "PushFn",
     "build_report",
     "collect",
     "extract_facts",
     "find_conflicts",
+    "notify_report",
     "render_text",
     "scope_of",
     "topic_of",
@@ -410,16 +435,16 @@ __all__ = [
 async def _main(argv: Sequence[str] | None = None) -> int:
     """CLI：`uv run python -m app.kb.conflicts [--notify] [--json]`。
 
-    ⚠️ **不放进任何一个容器的启动流程**：它是体检，不是业务。挂在定时任务上也行
-        （`ops` 有记），但**先让人看过几轮输出**再谈自动化 —— 一条没人看的定时告警
-        等于没有告警（`AGENTS §10` 那条"某一步静默没生效"是同一个病）。
+    ⚠️ **不放进任何一个容器的启动流程**：它是体检，不是业务。
+        生产的调用方是服务器上的 **systemd timer**（`grounded-conflicts.timer`，
+        每天 09:30，见 `ops\server-notes.md`），unit 调 `deploy/ops/conflicts-check.sh`。
     """
     import argparse
     import json
+    import sys
 
     from sqlalchemy import select as sa_select
 
-    from app.core.alerts import push_text
     from app.core.config import get_settings
     from app.db.models.tenant import Tenant
     from app.db.session import dispose_engine, get_session_factory
@@ -447,9 +472,13 @@ async def _main(argv: Sequence[str] | None = None) -> int:
     else:
         print(render_text(report))
 
-    if args.notify and report["conflicts"]:
-        # ⚠️ **只在真有冲突时推**：没冲突也推 = 训练所有人忽略这个群
-        await push_text("🚨 知识库冲突检查\n" + render_text(report))
+    if args.notify and not await notify_report(report):
+        print(
+            "告警没推出去：ALERT_WEBHOOK_URL 没配（群里不会有这条）—— 按失败退出，"
+            "免得定时任务天天'成功'而没人收到过任何东西",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

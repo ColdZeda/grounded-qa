@@ -11,6 +11,7 @@ from app.kb.conflicts import (
     build_report,
     extract_facts,
     find_conflicts,
+    notify_report,
     scope_of,
     topic_of,
 )
@@ -174,3 +175,69 @@ def test_report_carries_denominators_and_merges_duplicates() -> None:
         # 每条冲突都必须带**原句**，否则等于让看告警的人自己去翻文档
         assert item["left"]["sentence"] and item["right"]["sentence"]
         assert item["left"]["doc"] and item["right"]["docs"]
+
+
+# ------------------------------------------------------------
+# 推送（v1.4 A3：定时告警）
+# ------------------------------------------------------------
+
+
+def _report_with_conflict() -> dict:
+    return build_report(
+        [
+            _doc("senyu/93-干扰-内部FAQ/01-手册.md", GERMANY_INTERNAL, status="internal"),
+            _doc("senyu/10-退换货/10-退换货总则.md", GERMANY_POLICY),
+        ]
+    )
+
+
+async def test_notify_says_nothing_when_there_is_no_conflict() -> None:
+    """没有冲突 → **一条都不发**。
+
+    ⚠️ 每天推一条"一切正常"，等于训练所有人忽略这个群 —— 等真有冲突时没人看。
+    """
+    sent: list[str] = []
+
+    async def fake_push(text: str) -> bool:
+        sent.append(text)
+        return True
+
+    clean = build_report(
+        [_doc("a/1-退货总则.md", "# 退货总则\n\n签收后 7 个自然日内无理由退货。\n")]
+    )
+
+    assert clean["conflicts"] == 0
+    assert await notify_report(clean, push=fake_push) is True
+    assert sent == []
+
+
+async def test_notify_reports_failure_when_nothing_was_delivered() -> None:
+    """要求推送、却什么都没发出去（`ALERT_WEBHOOK_URL` 没配）→ **返回 False**。
+
+    ⚠️ 这条防的是定时任务"天天成功、群里一条没有"：
+       `push_text` 在没配 webhook 时是**静默返回 False** 的，不在这里翻成失败，
+       systemd 那边看到的永远是绿的（`AGENTS §10`「某一步静默没生效」）。
+    """
+    report = _report_with_conflict()
+    assert report["conflicts"] == 1
+
+    async def push_nothing(text: str) -> bool:
+        return False
+
+    assert await notify_report(report, push=push_nothing) is False
+
+
+async def test_notify_sends_the_report_only_when_it_has_a_conflict() -> None:
+    report = _report_with_conflict()
+    sent: list[str] = []
+
+    async def fake_push(text: str) -> bool:
+        sent.append(text)
+        return True
+
+    assert await notify_report(report, push=fake_push) is True
+    assert len(sent) == 1
+    # 推出去的必须是**人读版**：带分母、带两份文档、带原句
+    assert "1 处冲突" in sent[0]
+    assert "德国站" in sent[0]
+    assert "30" in sent[0] and "14" in sent[0]
