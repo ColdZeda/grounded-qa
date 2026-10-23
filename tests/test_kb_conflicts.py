@@ -358,6 +358,8 @@ def test_report_prefers_the_policy_document_as_representative() -> None:
     assert policy_side["status"] == "active"
     # 两篇都记在这一侧的 `docs` 里 —— 挑代表文档不许把另一篇丢掉
     assert len(policy_side["docs"]) == 2
+    # ⚠️ **现行政策固定在左边**：左右顺序不该取决于"哪篇先被抽出来"
+    assert item["left"]["status"] == "active"
 
 
 # ------------------------------------------------------------

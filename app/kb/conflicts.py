@@ -438,6 +438,12 @@ def build_report(documents: Sequence[DocumentText]) -> dict[str, Any]:
             candidates = fact_of.get((side["docs"][0], side["value"])) or []
             if candidates:
                 side.update(_best_sentence(candidates, item["scope"], item["topic"]).as_dict())
+        # ⚠️ **现行政策固定放左边**：左右顺序不该取决于"哪篇先被抽出来" ——
+        #    同一个知识库，本机跑和生产跑给出相反的顺序，读的人会以为看错了报告。
+        if _STATUS_PRIORITY.get(item["left"]["status"], 9) > _STATUS_PRIORITY.get(
+            item["right"]["status"], 9
+        ):
+            item["left"], item["right"] = item["right"], item["left"]
         item["kind"] = _kind_of(item["left"]["status"], item["right"]["status"])
 
     return {
