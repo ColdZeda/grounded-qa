@@ -1,0 +1,665 @@
+{
+  "kind": "generation",
+  "mode": "open",
+  "generated_at": "20261023T150331Z",
+  "kb": "fastapi",
+  "questions": "evals/questions/generation-fastapi.yaml",
+  "llm_model": "deepseek-flash",
+  "results": [
+    {
+      "id": "fa-01",
+      "question": "Which command starts the dev server, and on which port?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__bigger-applications.md",
+        "tutorial__security__first-steps.md",
+        "tutorial__first-steps.md",
+        "tutorial__first-steps.md",
+        "tutorial__first-steps.md"
+      ],
+      "points": [
+        {
+          "point": "启动命令是 `fastapi dev`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "服务跑在 `8000` 端口",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "- **Command:** `fastapi dev` — typically run as `uv run fastapi dev` [1][2][5]\n- **Port:** `8000`, i.e. the server runs at `http://127.0.0.1:8000` (press CTRL+C to quit) [1][2]\n- **API docs:** once running, the automatic docs are available at `http://127.0.0.1:8000/docs` [1]"
+    },
+    {
+      "id": "fa-02",
+      "question": "Where do I see the raw OpenAPI schema, and which version is it?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__first-steps.md",
+        "tutorial__path-params.md",
+        "tutorial__first-steps.md",
+        "tutorial__first-steps.md",
+        "tutorial__first-steps.md"
+      ],
+      "points": [
+        {
+          "point": "地址是 `/openapi.json`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "版本号是 `3.1.0`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "- View the raw OpenAPI schema at `http://127.0.0.1:8000/openapi.json` [1].\n- The schema version shown is OpenAPI `3.1.0` [1]."
+    },
+    {
+      "id": "fa-03",
+      "question": "I annotated item_id as int. What does /items/3 return?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__path-params.md",
+        "tutorial__path-params.md",
+        "tutorial__bigger-applications.md",
+        "tutorial__dependencies__index.md",
+        "tutorial__bigger-applications.md"
+      ],
+      "points": [
+        {
+          "point": "`item_id` 是 `int` 类型的 `3`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "不是字符串，返回的仍是 `3`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "`/items/3` returns:\n\n```JSON\n{\"item_id\":3}\n```\n\n`item_id` is received and returned as a Python `int` (`3`), not as the string `\"3\"` [1]."
+    },
+    {
+      "id": "fa-04",
+      "question": "How do I accept a path that contains slashes as one parameter?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__path-params.md",
+        "tutorial__path-params.md",
+        "tutorial__path-params.md",
+        "tutorial__path-params.md",
+        "tutorial__body.md"
+      ],
+      "points": [
+        {
+          "point": "用 `{file_path:path}` 声明",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "`:path` 后缀允许参数包含 `/`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Use Starlette’s `:path` convertor in the route declaration:\n\n```python\n/files/{file_path:path}\n```\n\nHere `file_path` is the parameter name, and `:path` tells it to match any path, including slashes [1].\n\nThen a value like `home/johndoe/myfile.txt` can be passed as one path parameter [2].\n\nIf the value must include a leading slash, use a double slash between `files` and `home`, e.g. `/files//home/johndoe/myfile.txt` [1].\n\nNote: OpenAPI does not support declaring that a path parameter contains a path, but this still works in FastAPI using Starlette’s internal tooling [3]."
+    },
+    {
+      "id": "fa-05",
+      "question": "What are the default values of skip and limit?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__query-params.md",
+        "tutorial__dependencies__index.md",
+        "tutorial__dependencies__classes-as-dependencies.md",
+        "tutorial__query-params.md",
+        "tutorial__query-params.md"
+      ],
+      "points": [
+        {
+          "point": "`skip` 默认 `0`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "`limit` 默认 `10`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "- In the query parameters example, `skip` defaults to `0` and `limit` defaults to `10` [1].\n- In the dependency examples, `skip` defaults to `0` and `limit` defaults to `100` [2][3]."
+    },
+    {
+      "id": "fa-06",
+      "question": "How do I cap a query parameter at 50 characters?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__query-params-str-validations.md",
+        "tutorial__query-params-str-validations.md",
+        "tutorial__query-params-str-validations.md",
+        "tutorial__query-params-str-validations.md",
+        "tutorial__query-params-str-validations.md"
+      ],
+      "points": [
+        {
+          "point": "用 `Query(max_length=50)`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "放在 `Annotated` 里声明",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Use `Query(max_length=50)` inside `Annotated` for the query parameter, and keep the default as `None` so it remains optional [1]:\n\n```python\nfrom typing import Annotated\nfrom fastapi import FastAPI, Query\n\napp = FastAPI()\n\n@app.get(\"/items/\")\nasync def read_items(q: Annotated[str | None, Query(max_length=50)] = None):\n    ...\n```\n\nWith this, FastAPI will:\n\n- **Validate** that the value is at most 50 characters [3]\n- Show a **clear error** when the data is invalid [3]\n- **Document** the parameter in the OpenAPI schema and automatic docs UI [3]\n\nThe older style is to use `Query` as the default value:\n\n```python\nq: str | None = Query(default=None, max_length=50)\n```\n\nThat also validates the data, shows a clear error when invalid, and documents the parameter in the OpenAPI schema [2]. For new code, prefer `Annotated` whenever possible [5]."
+    },
+    {
+      "id": "fa-07",
+      "question": "Which FastAPI version added Annotated, and what should I upgrade to?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__dependencies__index.md",
+        "tutorial__query-params-str-validations.md",
+        "tutorial__query-params-str-validations.md",
+        "tutorial__dependencies__classes-as-dependencies.md",
+        "tutorial__dependencies__classes-as-dependencies.md"
+      ],
+      "points": [
+        {
+          "point": "`Annotated` 从 `0.95.0` 开始支持",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "旧版本至少升到 `0.95.1`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "- FastAPI added support for `Annotated` (and began recommending it) in version **0.95.0** [1][2].\n- You should upgrade to **at least 0.95.1** before using `Annotated` [1][2] — on older versions you would get errors when trying to use it [1][2].\n\n(Background: before 0.95.0, `Query` had to be used as the parameter's default value instead of being placed inside `Annotated`, and that older style is still found in existing code — prefer `Annotated` for new code [3].)"
+    },
+    {
+      "id": "fa-08",
+      "question": "How minimal can a dependency be in the simplest example?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__dependencies__index.md",
+        "tutorial__dependencies__classes-as-dependencies.md",
+        "tutorial__dependencies__sub-dependencies.md",
+        "tutorial__dependencies__index.md",
+        "tutorial__dependencies__index.md"
+      ],
+      "points": [
+        {
+          "point": "最简依赖只要 `2` 行",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "A dependency can be as minimal as a plain function:\n\n- It can take the same parameters as a path operation function and can return anything [1].\n- It does not need the path operation decorator, such as `@app.get(...)` [1].\n- In the simplest example, it is just **2 lines** [1].\n- For example, it can simply declare an optional query parameter `q` as a `str` and return it [3]."
+    },
+    {
+      "id": "fa-09",
+      "question": "How do I declare a request body with validation?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__body.md",
+        "tutorial__body.md",
+        "tutorial__body.md",
+        "tutorial__body.md",
+        "tutorial__body.md"
+      ],
+      "points": [
+        {
+          "point": "用 Pydantic 的 `BaseModel` 子类",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "模型从 `pydantic` 导入",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "- Create a data model class that inherits from `BaseModel`, using standard Python types for its attributes [4].\n- In your path operation, declare a parameter whose type is that Pydantic model, just as you declare path and query parameters [3]. A parameter declared as a Pydantic model is interpreted as a request body [5].\n- FastAPI will read the request body as JSON, convert types if needed, and validate the data; invalid data returns a clear error indicating exactly where and what was incorrect [2].\n- The received data is available in that parameter, with editor support for its attributes and types [2], and JSON Schema definitions are generated for the model [2].\n- Model attributes with default values are not required; attributes without defaults are required, and `None` makes an attribute optional [4].\n- To send data, use `POST` (most common), `PUT`, `DELETE`, or `PATCH` [1].\n- You can declare body, path, and query parameters together; FastAPI takes data from the correct place: path if also declared in the path, singular types as query parameters, and Pydantic models as the request body [5]."
+    },
+    {
+      "id": "fa-10",
+      "question": "How do I wrap a single body model under an item key?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__body-multiple-params.md",
+        "tutorial__body-multiple-params.md",
+        "tutorial__body-multiple-params.md",
+        "tutorial__body-multiple-params.md",
+        "tutorial__body-multiple-params.md"
+      ],
+      "points": [
+        {
+          "point": "用 `Body(embed=True)`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "多一层 `item` 键",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Use the `Body` parameter with `embed=True` on your single Pydantic-model parameter [1]:\n\n```Python\nitem: Annotated[Item, Body(embed=True)]\n```\n\nWith this declaration, FastAPI expects a body containing an `item` key wrapping the model contents, instead of the model fields directly at the top level [1]:\n\n```JSON\n{\n    \"item\": {\n        \"name\": \"Foo\",\n        \"description\": \"The pretender\",\n        \"price\": 42.0,\n        \"tax\": 3.2\n    }\n}\n```\n\nThis works even when only a single parameter is declared [4]."
+    },
+    {
+      "id": "fa-11",
+      "question": "Can a Python class be used as a dependency?",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__dependencies__classes-as-dependencies.md",
+        "tutorial__dependencies__classes-as-dependencies.md",
+        "tutorial__dependencies__classes-as-dependencies.md",
+        "tutorial__dependencies__classes-as-dependencies.md",
+        "tutorial__dependencies__classes-as-dependencies.md"
+      ],
+      "points": [
+        {
+          "point": "可以，依赖只要是 callable",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "FastAPI 会解析 `__init__` 的参数",
+          "hit": false,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Yes.\n\n- A Python class is callable, so it can be used as a dependency in FastAPI [1].\n- A dependency must be a “callable,” and a class qualifies if Python can call it [4].\n- FastAPI calls the class, creates an instance, and passes that instance as the parameter to your function [3].\n- If the dependency is specifically a class, FastAPI also provides a shortcut: declare the parameter type and use `Depends()` without repeating the class inside it [2][5]."
+    },
+    {
+      "id": "fa-12",
+      "question": "Is a shared sub-dependency called once per request?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__dependencies__sub-dependencies.md",
+        "tutorial__dependencies__sub-dependencies.md",
+        "tutorial__dependencies__index.md",
+        "tutorial__dependencies__dependencies-with-yield.md",
+        "tutorial__dependencies__sub-dependencies.md"
+      ],
+      "points": [
+        {
+          "point": "`Depends` 默认缓存，同一请求只解析一次",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "要每次都调用就设 `use_cache=False`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Yes—by default, a shared sub-dependency is called only once per request [1].\n\n- If the same dependency is declared multiple times for a path operation, or multiple dependencies share a common sub-dependency, the returned value is cached and passed to all dependants in that request instead of calling it repeatedly [1].\n- If you need the dependency to be called at every step—possibly multiple times—in the same request, set `use_cache=False` in `Depends` [2]."
+    },
+    {
+      "id": "fa-13",
+      "question": "How do I run a dependency without using its return value?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__dependencies__dependencies-in-path-operation-decorators.md",
+        "tutorial__dependencies__dependencies-in-path-operation-decorators.md",
+        "tutorial__dependencies__dependencies-with-yield.md",
+        "tutorial__dependencies__dependencies-in-path-operation-decorators.md",
+        "tutorial__dependencies__dependencies-with-yield.md"
+      ],
+      "points": [
+        {
+          "point": "用装饰器的 `dependencies` 参数传一个 `list`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "列表元素是 `Depends()`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Use the path operation decorator’s `dependencies` argument:\n\n- Add `dependencies=[Depends(your_dependency)]` to the path operation decorator instead of declaring a `Depends` parameter in the path operation function [1][4].\n- It should be a `list` of `Depends()` [4].\n- The dependencies are executed/solved like normal dependencies, but their return value—if any—is **not** passed to your path operation function [4].\n- This is useful when you need the dependency to run but don’t need its return value, or when it doesn’t return a value [1].\n- You can reuse a normal dependency that returns a value; the value will simply be ignored [2].\n- This also avoids editor/tooling errors about unused function parameters [4]."
+    },
+    {
+      "id": "fa-14",
+      "question": "What happens if a yield dependency swallows an exception?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__dependencies__dependencies-with-yield.md",
+        "tutorial__dependencies__dependencies-with-yield.md",
+        "tutorial__dependencies__dependencies-with-yield.md",
+        "tutorial__dependencies__dependencies-with-yield.md",
+        "tutorial__dependencies__dependencies-with-yield.md"
+      ],
+      "points": [
+        {
+          "point": "客户端仍收到 `500` 错误",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "服务端没有日志，必须重新 `raise`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "If a dependency with `yield` catches an exception and does **not** re-raise it or raise a new one:\n\n- FastAPI will not notice that an exception occurred [1].\n- The client will still receive an **HTTP 500 Internal Server Error** response, assuming no `HTTPException` or similar was raised [1].\n- The server will have **no logs or other indication** of what the error was [1].\n\nTo avoid this, unless you are raising another `HTTPException` or similar, **re-raise the original exception**—for example with a bare `raise` [2]. Exceptions raised in the path operation, including `HTTPException`, are passed to dependencies with `yield`, and in most cases you should re-raise the same exception or a new one so it is properly handled [4]."
+    },
+    {
+      "id": "fa-15",
+      "question": "How do I close a dependency before the response is sent?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__dependencies__dependencies-with-yield.md",
+        "tutorial__dependencies__dependencies-with-yield.md",
+        "tutorial__dependencies__dependencies-with-yield.md",
+        "tutorial__dependencies__dependencies-with-yield.md",
+        "tutorial__dependencies__dependencies-with-yield.md"
+      ],
+      "points": [
+        {
+          "point": "用 `Depends(scope=\"function\")`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "默认 `\"request\"` 是在响应发出后才退出",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Use a dependency with `yield` and set `Depends(scope=\"function\")`.\n\n- Normally, the exit code of a dependency with `yield` runs **after the response is sent** to the client [1].\n- With `scope=\"function\"`, the dependency starts before the path operation function, and its exit code runs after the path operation function returns but **before the response is sent** [2].\n- By contrast, `scope=\"request\"` ends the dependency **after the response is sent** [2]."
+    },
+    {
+      "id": "fa-16",
+      "question": "Which two extra responses does the custom items path document?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__bigger-applications.md",
+        "tutorial__bigger-applications.md",
+        "tutorial__bigger-applications.md",
+        "tutorial__bigger-applications.md",
+        "tutorial__body-multiple-params.md"
+      ],
+      "points": [
+        {
+          "point": "一个 `404`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "一个 `403`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "自定义 items 路径在文档中额外记录了两种响应：`404` 和 `403` [1][2]。"
+    },
+    {
+      "id": "fa-17",
+      "question": "How do I add a 418 response when including a router?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__bigger-applications.md",
+        "tutorial__bigger-applications.md",
+        "tutorial__bigger-applications.md",
+        "tutorial__bigger-applications.md",
+        "tutorial__bigger-applications.md"
+      ],
+      "points": [
+        {
+          "point": "用 `include_router` 的 `responses` 参数",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "响应码写 `418`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "Pass a `responses` mapping containing `418` to `app.include_router(...)` when you include the router [3]. You can pass it together with other inclusion options such as `prefix`, `tags`, and `dependencies` [3].\n\nThis keeps the original `APIRouter` unmodified and reusable by other projects [2][3]. The `418` response will then apply to each path operation from that router in your app [2], and the change is scoped to that inclusion rather than affecting other code that uses the same router [1]."
+    },
+    {
+      "id": "fa-18",
+      "question": "What header format does a bearer token use?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__security__first-steps.md",
+        "tutorial__security__index.md",
+        "tutorial__security__first-steps.md",
+        "tutorial__security__first-steps.md",
+        "tutorial__bigger-applications.md"
+      ],
+      "points": [
+        {
+          "point": "请求头是 `Authorization`",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "值是 `Bearer ` 加 token",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "A bearer token is sent in an `Authorization` header whose value is `Bearer ` followed by the token [1][2].\n\n- Header name: `Authorization`\n- Header value format: `Bearer <token>` — for example, if the token is `foobar`, the header is `Bearer foobar` [1][2]\n- If the `Authorization` header is missing or doesn't contain a `Bearer ` token, the response is a 401 (`UNAUTHORIZED`) error [3]"
+    },
+    {
+      "id": "fa-19",
+      "question": "What happens if the Authorization header is missing?",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__security__first-steps.md",
+        "tutorial__security__first-steps.md",
+        "tutorial__security__index.md",
+        "tutorial__bigger-applications.md",
+        "tutorial__dependencies__dependencies-with-yield.md"
+      ],
+      "points": [
+        {
+          "point": "直接返回 `401`（`UNAUTHORIZED`）",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "由 `OAuth2PasswordBearer` 负责检查",
+          "hit": false,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "If the `Authorization` header is missing—or its value doesn’t contain a `Bearer ` token—the response is directly a **401 `UNAUTHORIZED` error** [1]."
+    },
+    {
+      "id": "fa-20",
+      "question": "What does OAuth2PasswordBearer need to know about the login endpoint?",
+      "passed": true,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "tutorial__security__first-steps.md",
+        "tutorial__security__first-steps.md",
+        "tutorial__security__first-steps.md",
+        "tutorial__security__first-steps.md",
+        "tutorial__security__first-steps.md"
+      ],
+      "points": [
+        {
+          "point": "创建实例时传入 `tokenUrl` 参数",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "示例里是一个相对地址 `token`",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": true,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "`OAuth2PasswordBearer` needs the **URL of the token/login endpoint**, passed as the `tokenUrl` parameter. This is the URL the frontend uses to send `username` and `password` to obtain a token [1].\n\n- It **does not create** that endpoint; it only declares which URL clients should use, and this information is used in OpenAPI and the interactive docs [2].\n- A relative URL such as `token` is equivalent to `./token` [1].\n- With a relative URL, the actual URL depends on where the API is mounted: `https://example.com/` → `https://example.com/token`; `https://example.com/api/v1/` → `https://example.com/api/v1/token` [3]."
+    }
+  ]
+}

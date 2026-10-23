@@ -472,9 +472,118 @@ async def _run_retrieval(args: argparse.Namespace) -> int:
 
 # ---------------------------------------------------------------- 生成层 / 拒答层
 
-#: 判分时只认"数字"和"拉丁词"这两类原子 —— 它们是政策文档里**最不可替换**的部分。
-#: （"7 天"和"30 天"是同义词吗？不是。而"退货"和"退换"在语义上等价，不该强判。）
-_ATOM = re.compile(r"\d+(?:\.\d+)?%?|[A-Za-z]{2,}")
+#: 中文数字 → 数值。只收语料里真会出现的写法（"两"最常见：`2 年` 常被写成 `两年`）。
+_CN_DIGITS = {
+    "零": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+
+#: 单位 → **(比较用的族, 换算到基准单位的倍数)**。
+#:
+#: ⚠️ **只换算有定义或足够硬的**：`1 年 = 12 个月`、`1 天 = 24 小时`。
+#:    **月 ↔ 天不换算**（`30 天 ≠ 1 个月`，2 月只有 28 天）——
+#:    拿约等号去判分，会把"120 天"和"4 个月"判成同一个，方向正好反了。
+_UNITS: dict[str, tuple[str, float]] = {
+    "个自然日": ("hour", 24.0),
+    "自然日": ("hour", 24.0),
+    "个工作日": ("workday", 1.0),
+    "工作日": ("workday", 1.0),
+    "小时": ("hour", 1.0),
+    "个月": ("month", 1.0),
+    "天": ("hour", 24.0),
+    "日": ("hour", 24.0),
+    "月": ("month", 1.0),
+    "年": ("month", 12.0),
+    "%": ("percent", 1.0),
+}
+
+#: 钟点（`09:00`）。⚠️ 它是**格式**不是政策数值：拆成 9 和 00 之后，
+#: 回答里的 `0900`（`_norm` 会把冒号抹掉）永远对不上 —— 实测把一道**全对**的题
+#: 判成错（知识库 B gen-15 客服响应时段）。所以核对数字前先把钟点整段抹掉。
+_CLOCK = re.compile(r"\d{1,2}\s*[:：]\s*\d{2}")
+
+_UNIT_ALT = "|".join(sorted((re.escape(unit) for unit in _UNITS), key=len, reverse=True))
+_CN_NUMBER = "".join(_CN_DIGITS) + "十"
+_NUM = rf"\d+(?:\.\d+)?|[{_CN_NUMBER}]{{1,3}}"
+
+#: "数字 （可选区间） （可选单位）"。
+#: ⚠️ 区间必须**连着一起来**：`3~5 个工作日` 里那个 `3` 属于"工作日"，
+#:    单独抽出来会变成"裸数字 3"，于是要点判不过一个完全正确的回答。
+_NUMERIC = re.compile(
+    rf"(?P<num>{_NUM})\s*"
+    rf"(?:(?P<sep>[~\-–—至到])\s*(?P<high>{_NUM})\s*)?"
+    rf"(?P<unit>{_UNIT_ALT})?"
+)
+
+#: 拉丁词（型号 / 平台名：`PayPal`、`SF10001` 里的字母部分）。
+#: ⚠️ 数字写在拉丁词里的（`QR30`）两样都要求 —— 判分宁可少认一个"对"，不要多认一个"错"。
+_LATIN = re.compile(r"[A-Za-z]{2,}")
+
+
+def _to_number(raw: str) -> float | None:
+    """`3` / `12.5` / `二十四` / `十五` / `十` → 数值；认不出 → `None`。"""
+    if raw[:1].isdigit():
+        return float(raw)
+    if not all(ch in _CN_DIGITS or ch == "十" for ch in raw):
+        return None
+    if "十" not in raw:
+        return float(_CN_DIGITS[raw]) if len(raw) == 1 else None
+    head, _, tail = raw.partition("十")
+    if head and head not in _CN_DIGITS:
+        return None
+    if tail and tail not in _CN_DIGITS:
+        return None
+    tens = _CN_DIGITS[head] if head else 1
+    ones = _CN_DIGITS[tail] if tail else 0
+    return float(tens * 10 + ones)
+
+
+def _numeric_atoms(text: str) -> list[tuple[str, float]]:
+    """把文字里的"数字 ＋ 单位"抽成**可比较的原子**：`(族, 换算后的数值)`。
+
+    ⚠️ 这比"把数字当字符串在回答里找一遍"**严**，也比它**松**，两边都是必需的：
+
+      · **更严**：要点写 `家具主体 2 年`，回答却写 `24 个月`（或只提了 `2024` 年），
+        旧写法只要回答里有个 `2` 就算命中 —— **同义改写反而蒙混过关**；
+      · **更松**：`两年` / `2年` / `24 个月` 是同一个意思，现在都认。
+
+    📌 这就是 v1.4 B1（#9「判分改数字集合比对」）：判的是**集合**，不是"找个子串"。
+    """
+    atoms: list[tuple[str, float]] = []
+    # 钟点先整段抹掉（理由见 `_CLOCK`）
+    text = _CLOCK.sub(" ", text)
+    for match in _NUMERIC.finditer(text):
+        raw = match.group("num")
+        chinese = not raw[:1].isdigit()
+        unit = match.group("unit")
+        # ⚠️ **中文数字只有带单位才算数量**：`一层`、`一次`、`同一`、`统一` 里的"一"
+        #    是量词/副词，不是数据。不挡的话，要点"多一层 `item` 键"会要求回答里出现数字 1，
+        #    一个完全正确的回答会被判错（实测：知识库 A 的 20 题里误杀 4 题）。
+        if chinese and unit is None:
+            continue
+        if chinese and _to_number(raw) is None:
+            continue
+        high_raw = match.group("high")
+        numbers = [raw] + ([high_raw] if high_raw else [])
+        for piece in numbers:
+            value = _to_number(piece)
+            if value is None:
+                continue
+            if unit is None:
+                atoms.append(("bare", value))
+            else:
+                family, factor = _UNITS[unit]
+                atoms.append((family, value * factor))
+    return atoms
 
 
 def _strip_citation_marks(text: str) -> str:
@@ -517,20 +626,30 @@ def _point_hit(point: str, answer_norm: str) -> tuple[bool, bool]:
 
     判定规则（刻意简单、可解释，**不用 LLM 当裁判**）：
 
-    1. 要点里的**数字/百分比/拉丁词**必须**全部**出现在回答里 —— 硬条件；
+    1. 要点里的**数字＋单位**与**拉丁词**必须**全部**在回答里 —— 硬条件。
+       数字按 `(族, 换算后数值)` 做**集合比对**：`2 年` = `24 个月`、`48 小时` = `2 天`；
     2. 中文部分看**二元组覆盖率**：要点里的中文二元组有多少比例出现在回答里，
        阈值 0.6（去掉括号补充说明后再算）。
 
     ⚠️ "弱判定" = 要点里既没数字也没拉丁词，只靠二元组覆盖 ——
-       这种判定天然偏松，输出里单独计数，别和数字型要点同等看待。
+        这种判定天然偏松，输出里单独计数，别和数字型要点同等看待。
+    ⚠️ 第 1 条为什么必须是**硬**条件：数字是政策里**最不可替换**的证据
+        （"7 天"和"30 天"不是同义词）；中文部分才允许同义改写（"退货"与"退换"等价），
+        那正是二元组覆盖率的用武之地。
     """
-    atoms = _ATOM.findall(point)
-    if atoms:
-        # 有数字/拉丁词 ⟹ **以它为准**。它们才是政策里不可替换的证据
-        # （"7 天"和"30 天"不是同义词；而"新马"与"新加坡/马来西亚"是同义的 —— 后者不该扣分）。
-        return all(_norm(atom) in answer_norm for atom in atoms), False
-
     plain = re.sub(r"[（(][^）)]*[）)]", "", point)
+    atoms = _numeric_atoms(plain)
+    latin = {word.lower() for word in _LATIN.findall(plain)}
+    if atoms or latin:
+        got_atoms = set(_numeric_atoms(answer_norm))
+        # ⚠️ 拉丁词仍按**子串**判（不是词集合）：`_norm` 会把空格抹掉，
+        #    `fastapi dev` 在回答里会粘成 `fastapidev` —— 按词比会把**答对的**判成错
+        #    （实测：知识库 A 的 20 题里误杀 3 题）。
+        return (
+            all(atom in got_atoms for atom in atoms) and all(word in answer_norm for word in latin),
+            False,
+        )
+
     want = _bigrams(plain)
     if not want:
         return False, True
@@ -887,7 +1006,26 @@ def _rescore_generation(args: argparse.Namespace) -> int:
         raise SystemExit(f"找不到结果文件：{path}")
 
     payload = json.loads(path.read_text(encoding="utf-8"))
-    items = {item["id"]: item for item in _load_items(QUESTIONS_DIR / "generation.yaml")}
+    # ⚠️ 题集要**从结果文件里读**（`payload["questions"]`），不能假设是 `generation.yaml`：
+    #    知识库 A 用的是 `generation-fastapi.yaml`，写死的话每题都对不上题号，
+    #    于是"重判"出来的是一份 **0/0 的空报告**，而且**照样存档、照样显示成功**
+    #    （2026-10-23 实测踩到 —— 又一个"静默失效"）。
+    questions_name = str(payload.get("questions") or "generation.yaml")
+    questions_path = Path(questions_name)
+    if not questions_path.is_absolute():
+        questions_path = (REPO_ROOT / questions_path).resolve()
+    if not questions_path.exists():
+        questions_path = QUESTIONS_DIR / Path(questions_name).name
+    if not questions_path.exists():
+        raise SystemExit(f"找不到题集：{questions_name}")
+    print(f"题集：{questions_path.relative_to(REPO_ROOT)}")
+    items = {item["id"]: item for item in _load_items(questions_path)}
+    # ⚠️ 模式与知识库也**从结果文件里读**：重判要复现"当时那次运行的口径"，
+    #    不能拿命令行的默认值（默认 kb=senyu / mode=open）去覆盖 ——
+    #    否则存出来的快照会被贴错标签（实测：fastapi 的那份被写成 senyu）。
+    mode = str(payload.get("mode") or "open")
+    args.kb = str(payload.get("kb") or args.kb)
+    args.questions = questions_name
 
     results: list[AnswerResult] = []
     for row in payload.get("results", []):
@@ -908,17 +1046,27 @@ def _rescore_generation(args: argparse.Namespace) -> int:
             hit, weak = _point_hit(point, answer_norm)
             result.points.append((point, hit, weak))
         must_cite = item.get("must_cite", [])
-        if must_cite:
+        # ⚠️ 闭卷**不判引用**（它压根没检索），和正跑时的口径保持一致
+        if must_cite and mode == "open":
             result.cite_ok = bool(set(must_cite) & set(result.cited))
         for banned in item.get("must_not_say", []):
             if _norm(banned) and _norm(banned) in answer_norm:
                 result.forbidden_hit.append(banned)
         results.append(result)
 
+    if not results:
+        # ⚠️ **一条都没重判上就是失败**，不许打印一张 0/0 的报告然后存档 ——
+        #    那看起来像"跑完了、没有题通过"，实际是"题号一个都没对上"。
+        raise SystemExit(
+            f"没有一条结果能重判：题号对不上（结果里是 {sorted({r['id'] for r in payload.get('results', [])})[:3]}…，"
+            f"题集里是 {sorted(items)[:3]}…）"
+        )
+
     print(f"重判 {path.name}（同一批回答、只换判分器）")
     _report_answer_layer(
         results,
         layer="generation",
+        mode=mode,
         settings=get_settings(),
         args=args,
         started=datetime.now(tz=UTC),
