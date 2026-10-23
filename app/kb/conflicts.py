@@ -44,7 +44,12 @@ _TOPICS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("退货期限", ("无理由退货", "无理由", "撤回权", "撤回")),
     ("质量退换期限", ("质量问题", "质量缺陷")),
     ("保修期限", ("保修期", "保修")),
-    ("报障时限", ("破损", "报障")),
+    # ⚠️ **破损**必须排在"报障"前面，而且不能和它合并成一个主题：
+    #    破损是 **48 小时**、丢件/少件是 **7 天** —— 合成一个"报障时限"会造出
+    #    "48 小时 vs 7 天"的假冲突，而真正要抓的（内部稿把破损写成 7 天）
+    #    反而淹没在里面（v1.4 A4 实测：合并时 3 处假冲突，拆开后只剩真的）。
+    ("破损报障时限", ("破损",)),
+    ("丢件少件报障时限", ("丢件", "少件", "错发", "报障")),
 )
 
 #: 地区 → 适用范围。**没命中就是"全局"**（总则类文档的规则适用于所有站）。
@@ -65,6 +70,14 @@ _FAMILY = {
     "年": "year",
     "小时": "hour",
 }
+
+#: **跨单位也能比**的那一对：小时 ↔ 天（`1 天 = 24 小时` 是定义，不是估算）。
+#: ⚠️ **只收这一对**。`1 个月 = 30 天` 是**约等于**，拿它去判"4 个月 vs 120 天"
+#:    会把两条都对的规则报成冲突（月长不固定，2 月只有 28 天）—— 宁可漏，不可乱报。
+_CANONICAL_HOURS = {"hour": 1.0, "day": 24.0}
+
+#: 展示用单位名。报告里**每一侧各用自己的单位**。
+_UNIT_LABEL = {"day": "天", "hour": "小时", "month": "个月", "year": "年"}
 
 #: 括注里通常写"长于总则的 7 天"这类**对照**，取数字前先剥掉，否则会把参引当成规则值。
 _PAREN = re.compile(r"[（(][^）)]*[）)]")
@@ -145,7 +158,12 @@ class Fact:
 
 @dataclass(frozen=True)
 class Conflict:
-    """一对数字对不上的事实。"""
+    """一对数字对不上的事实。
+
+    `family` 是**用来比较的族**：两边同族时就是那个族；`天 ↔ 小时` 换算后比较时是
+    `"time"`（见 `_CANONICAL_HOURS`）。⚠️ 展示时**每一侧各用自己的单位** ——
+    "7 天 vs 48 小时" 写成 "7 vs 48（day）" 是在说假话。
+    """
 
     topic: str
     scope: str
@@ -223,9 +241,13 @@ def extract_facts(document: DocumentText) -> list[Fact]:
         if any(word in cleaned for word in _RUMOUR):
             continue
         matches = list(_DURATION.finditer(cleaned))
-        if len(matches) != 1:
-            # 0 条 = 没有期限；≥2 条 = 一行里塞了多条规则（"美国 30 / 德国 14"），
-            # 拆不准就不猜 —— 宁可漏一条事实，也不要造一条错的
+        # ⚠️ 一行里出现**同一个值**多次（"签收后 **7 天**内…看到 **7 天**内的破损单"）
+        #    不是"多条规则"，只是同一句话说两遍 —— 这种要**照常提取**。
+        #    v1.4 A4 之前这里是 `len(matches) != 1 → 跳过`，于是语料里两处故意写错的
+        #    （保修"统一 1 年"、破损"7 天内"）**一条都没被抽出来**。
+        #    出现**不同**的值（"美国 30 天 / 德国 14 天"）才真的拆不准 ⟹ 仍然跳过。
+        distinct = {(float(m.group("value")), m.group("unit")) for m in matches}
+        if len(distinct) != 1:
             continue
         if _ENTRY.match(cleaned) is None and _ANCHOR.search(cleaned) is None:
             continue
@@ -260,8 +282,34 @@ def _aliases(filename: str) -> set[str]:
     return {stem, re.sub(r"^[\d\-]+", "", stem), re.sub(r"^\d+-", "", stem)}
 
 
+def _comparison_family(left: Fact, right: Fact) -> str | None:
+    """这两条事实能在哪个"族"里比？不能比 → `None`。
+
+    · 同族 → 就是那个族；
+    · **天 / 小时** → `"time"`（换算成小时比，见 `_CANONICAL_HOURS`）；
+    · 其余一律不能比（月与年不互换 —— `1 个月 ≠ 30 天`）。
+    """
+    if left.family == right.family:
+        return left.family
+    if left.family in _CANONICAL_HOURS and right.family in _CANONICAL_HOURS:
+        return "time"
+    return None
+
+
+def _in_hours(fact: Fact) -> float:
+    """只在 `_comparison_family()` 返回 `"time"` 时调用。"""
+    return fact.value * _CANONICAL_HOURS[fact.family]
+
+
+def _same_duration(left: Fact, right: Fact, family: str) -> bool:
+    """换算到同一把尺子之后是否相等 —— `48 小时` 与 `2 天` **不是**冲突。"""
+    if family == "time":
+        return abs(_in_hours(left) - _in_hours(right)) < 1e-9
+    return left.value == right.value
+
+
 def find_conflicts(documents: Sequence[DocumentText]) -> list[Conflict]:
-    """两两比对，找出「同主题 + 同范围 + 同单位族 + 值不同」的冲突。"""
+    """两两比对，找出「同主题 + 同范围 + **能不能比** + 值不同」的冲突。"""
     comparable = [
         document
         for document in documents
@@ -278,9 +326,14 @@ def find_conflicts(documents: Sequence[DocumentText]) -> list[Conflict]:
         for right in facts[index + 1 :]:
             if left.doc == right.doc:
                 continue
-            if (left.topic, left.scope, left.family) != (right.topic, right.scope, right.family):
+            if (left.topic, left.scope) != (right.topic, right.scope):
                 continue
-            if left.value == right.value:
+            # ⚠️ 单位族放在**能比之后**判，不再要求两边字符串相同 —— 否则
+            #    "破损 7 天" 和 "破损 48 小时" 永远配不到一起（v1.4 A4）。
+            family = _comparison_family(left, right)
+            if family is None:
+                continue
+            if _same_duration(left, right, family):
                 continue
             # 明确写了"谁优先"的一对**不算冲突**（例：地区差异明确优先于总则）
             if references[left.doc] & _aliases(right.doc):
@@ -291,7 +344,7 @@ def find_conflicts(documents: Sequence[DocumentText]) -> list[Conflict]:
                 Conflict(
                     topic=left.topic,
                     scope=left.scope,
-                    family=left.family,
+                    family=family,
                     left=left,
                     right=right,
                 )
@@ -319,21 +372,23 @@ def build_report(documents: Sequence[DocumentText]) -> dict[str, Any]:
     merged: dict[tuple[Any, ...], dict[str, Any]] = {}
     for conflict in conflicts:
         left, right = conflict.left, conflict.right
-        key = (
-            conflict.topic,
-            conflict.scope,
-            conflict.family,
-            left.doc,
-            left.value,
-            right.value,
-        )
+        # ⚠️ 合并键**不含文档名**：同一个错值可能同时被"物流政策"和"竞品对比"写着，
+        #    按文档名分会把**同一个问题**刷成两行（v1.4 A4 实测：5 条里有 2 条是这种重复）。
+        #    值排序后再进键，左右颠倒的同一条冲突才会并到一起。
+        key = (conflict.topic, conflict.scope, conflict.family, *sorted((left.value, right.value)))
         item = merged.get(key)
         if item is None:
             item = conflict.as_dict()
+            item["left"]["docs"] = [left.doc]
             item["right"]["docs"] = [right.doc]
             merged[key] = item
-        elif right.doc not in item["right"]["docs"]:
-            item["right"]["docs"].append(right.doc)
+        else:
+            # 左右可能颠倒（谁先被抽出来取决于文档顺序）—— 按**值**去找该并到哪一侧。
+            # ⚠️ 不能按"左边并左边"，那样颠倒的那条会**静默丢掉**（v1.4 A4 实测）。
+            for value, doc in ((left.value, left.doc), (right.value, right.doc)):
+                for side in (item["left"], item["right"]):
+                    if value == side["value"] and doc not in side["docs"]:
+                        side["docs"].append(doc)
 
     return {
         "documents": len(comparable),
@@ -359,7 +414,8 @@ def render_text(report: dict[str, Any]) -> str:
         others = "、".join(right["docs"])
         lines.append(
             f"\n· [{item['kind']}] {item['topic']}（{item['scope']}）："
-            f"{left['value']:g} vs {right['value']:g}（{item['unit_family']}）"
+            f"{left['value']:g} {_UNIT_LABEL.get(left['unit_family'], left['unit_family'])}"
+            f" vs {right['value']:g} {_UNIT_LABEL.get(right['unit_family'], right['unit_family'])}"
             f"\n    A {left['doc']}（{left['status']}）：{left['sentence']}"
             f"\n    B {others}（{right['status']}）：{right['sentence']}"
         )
@@ -437,7 +493,7 @@ async def _main(argv: Sequence[str] | None = None) -> int:
 
     ⚠️ **不放进任何一个容器的启动流程**：它是体检，不是业务。
         生产的调用方是服务器上的 **systemd timer**（`grounded-conflicts.timer`，
-        每天 09:30，见 `ops\server-notes.md`），unit 调 `deploy/ops/conflicts-check.sh`。
+        每天 09:30，见 `ops/server-notes.md`），unit 调 `deploy/ops/conflicts-check.sh`。
     """
     import argparse
     import json

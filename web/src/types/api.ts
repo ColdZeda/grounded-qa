@@ -193,7 +193,10 @@ export interface ConflictFact {
   /** 适用范围（`德国站` / `全局`） */
   scope: string
   value: number
-  /** 单位族：`day` / `month` / `year` / `hour` —— ⚠️ **只在同族内比较** */
+  /**
+   * 单位族：`day` / `month` / `year` / `hour` —— ⚠️ 比较时**天与小时会换算**
+   * （`ConflictItem.unit_family` 此时是 `time`），但**展示一律用各自的单位**。
+   */
   unit_family: string
   /** 支撑这条数值的**原句**（后端截到 120 字）。**没有原句的告警等于"你自己去找"** */
   sentence: string
@@ -207,6 +210,7 @@ export interface ConflictItem {
   kind: string
   topic: string
   scope: string
+  /** 用来比较的族：同族时就是那一族；天/小时换算后比较时是 `time` */
   unit_family: string
   left: ConflictFact
   right: ConflictFact

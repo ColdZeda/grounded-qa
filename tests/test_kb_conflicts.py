@@ -46,7 +46,9 @@ def _doc(name: str, text: str, status: str = "active") -> DocumentText:
 def test_topic_and_scope_vocabulary() -> None:
     assert topic_of("无理由退货期限") == "退货期限"
     assert topic_of("质量问题退换") == "质量退换期限"
-    assert topic_of("客户说商品破损了") == "报障时限"
+    # ⚠️ 破损与丢件/少件是**两个主题**：前者 48 小时、后者 7 天（v1.4 A4）
+    assert topic_of("客户说商品破损了") == "破损报障时限"
+    assert topic_of("少件 / 错发") == "丢件少件报障时限"
     # ⚠️ 伞形词不算主题：收进来会把"质量 30 天"归成"退货期限"，然后和真的 7 天打架
     assert topic_of("退换货流程") is None
     assert scope_of("德国站：30 天") == "德国站"
@@ -147,6 +149,135 @@ def test_same_value_is_not_a_conflict() -> None:
     left = _doc("a/1-退货总则.md", "# 退货总则\n\n签收后 7 个自然日内无理由退货。\n")
     right = _doc("b/2-区域.md", "# 区域\n\n签收后 7 个自然日内无理由退货。\n")
     assert find_conflicts([left, right]) == []
+
+
+# ------------------------------------------------------------
+# v1.4 A4：放宽召回（同值重复 / 跨单位 / 主题拆分）
+# ------------------------------------------------------------
+
+DAMAGE_POLICY_48H = """
+# 丢件与破损的报障时限
+
+| 情形 | 报障时限 | 必填材料 |
+|---|---|---|
+| **外箱破损 / 商品破损** | **签收后 48 小时内** | 外箱六面照片 |
+"""
+
+QC_DAMAGE_7D = """
+# 质检与报障判定标准（内部）
+
+## 报障窗口怎么算
+
+- **破损**：签收日后 **7 天**内，一线看到 7 天内的破损单直接建紧急单。
+"""
+
+QC_LOST_7D = """
+# 质检与报障判定标准（内部）
+
+- **丢件**：签收日后 **7 天**内可报障。
+"""
+
+WARRANTY_POLICY = """
+# 保修与维修
+
+## 保修期限
+
+| 部件类别 | 期限 | 起算点 |
+|---|---|---|
+| **家具主体** | **2 年** | 签收日 |
+"""
+
+SCRIPT_ONE_YEAR = """
+# 客服话术库·高频问题
+
+10. 「森屿的保修是全线统一 1 年，从签收日开始算，超过 1 年就不在保修范围内了。」
+"""
+
+
+def test_repeated_same_value_in_one_line_is_one_fact() -> None:
+    """同一行把**同一个值**说两遍，不是"多条规则" —— 要照常抽出来。
+
+    ⚠️ 语料里两处故意写错的正是这种写法（"**7 天**内…看到 **7 天**内的破损单"）。
+       v1.4 A4 之前这条被判成"拆不准"直接跳过 ⟹ 漏抓。
+    """
+    facts = extract_facts(_doc("senyu/93-内部FAQ/03-质检标准（内部）.md", QC_DAMAGE_7D, "internal"))
+
+    damage = [fact for fact in facts if fact.topic == "破损报障时限"]
+    assert [fact.value for fact in damage] == [7.0]
+
+
+def test_repeated_different_values_in_one_line_is_still_skipped() -> None:
+    """一行里两个**不同**的值（"美国 30 天、德国 14 天"）仍然不猜 —— 宁可漏，不可乱报。"""
+    text = "# 地区差异\n\n签收后 7 天内无理由退货；美国站 30 天、德国站 14 天。\n"
+    values = {fact.value for fact in extract_facts(_doc("senyu/10-退换货/11-地区差异.md", text))}
+    assert not values & {30.0, 14.0}
+
+
+def test_damage_window_7_days_vs_48_hours_is_a_conflict() -> None:
+    """**破损**窗口：现行 48 小时 vs 内部稿 7 天 —— 跨单位也要抓到。
+
+    ⚠️ 这两个数在各自的单位里都"看起来正常"，只有换算到同一把尺子上才看得出矛盾
+       （48 小时 = 2 天 ≠ 7 天）。
+    """
+    conflicts = find_conflicts(
+        [
+            _doc("senyu/20-物流时效与运费.md", DAMAGE_POLICY_48H),
+            _doc("senyu/93-内部FAQ/03-质检标准（内部）.md", QC_DAMAGE_7D, status="internal"),
+        ]
+    )
+
+    assert len(conflicts) == 1
+    assert conflicts[0].topic == "破损报障时限"
+    assert conflicts[0].family == "time"  # 跨单位比较
+    assert {conflicts[0].left.value, conflicts[0].right.value} == {48.0, 7.0}
+
+
+def test_same_duration_across_units_is_not_a_conflict() -> None:
+    """`48 小时` 与 `2 天` 是**同一个窗口**，不许报冲突。"""
+    two_days = DAMAGE_POLICY_48H.replace("48 小时内", "2 天内")
+
+    conflicts = find_conflicts(
+        [
+            _doc("senyu/20-物流时效与运费.md", DAMAGE_POLICY_48H),
+            _doc("senyu/20-物流时效与运费-副本.md", two_days),
+        ]
+    )
+
+    assert conflicts == []
+
+
+def test_lost_parcel_7_days_does_not_collide_with_damage_48_hours() -> None:
+    """丢件 7 天 与 破损 48 小时是**两个主题**，不能配对。
+
+    ⚠️ 这正是 A4 把 `报障时限` 拆成 `破损报障时限` ＋ `丢件少件报障时限` 的原因：
+       合在一起时这类配对会盖住真正的那个错（内部稿把**破损**写成 7 天）。
+    """
+    conflicts = find_conflicts(
+        [
+            _doc("senyu/20-物流时效与运费.md", DAMAGE_POLICY_48H),
+            _doc("senyu/93-内部FAQ/03-质检标准（内部）.md", QC_LOST_7D, status="internal"),
+        ]
+    )
+
+    assert conflicts == []
+
+
+def test_warranty_one_year_vs_two_years_is_a_conflict() -> None:
+    """**保修**：话术库"全线统一 1 年" vs 政策"家具主体 2 年"。
+
+    ⚠️ 那句 `1 年` 出现了**两次**（"统一 1 年…超过 1 年"），旧逻辑按"一行多个期限"跳过 ——
+       于是内训稿里最危险的那句永远抓不到。
+    """
+    conflicts = find_conflicts(
+        [
+            _doc("senyu/40-服务/40-保修与维修.md", WARRANTY_POLICY),
+            _doc("senyu/93-内部FAQ/02-客服话术库.md", SCRIPT_ONE_YEAR, status="internal"),
+        ]
+    )
+
+    assert len(conflicts) == 1
+    assert conflicts[0].topic == "保修期限"
+    assert {conflicts[0].left.value, conflicts[0].right.value} == {1.0, 2.0}
 
 
 # ------------------------------------------------------------
