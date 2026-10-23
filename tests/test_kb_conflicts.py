@@ -308,6 +308,58 @@ def test_report_carries_denominators_and_merges_duplicates() -> None:
         assert item["left"]["doc"] and item["right"]["docs"]
 
 
+def test_report_picks_the_sentence_that_matches_the_topic() -> None:
+    """同一篇内部稿里"破损 7 天"和"丢件 7 天"值相同 —— 报告必须引用**破损**那句。
+
+    ⚠️ 随便挑一句会让报告写着"破损报障时限"、引的却是**丢件**的原句（A4 实测出现过）。
+    """
+    report = build_report(
+        [
+            _doc("senyu/20-物流时效与运费.md", DAMAGE_POLICY_48H),
+            _doc(
+                "senyu/93-内部FAQ/03-质检标准（内部）.md",
+                QC_DAMAGE_7D + "\n- **丢件**：签收日后 **7 天**内可报障。\n",
+                status="internal",
+            ),
+        ]
+    )
+
+    item = report["items"][0]
+    week = item["left"] if item["left"]["value"] == 7.0 else item["right"]
+    assert "破损" in week["sentence"]
+    assert "丢件" not in week["sentence"]
+
+
+def test_report_prefers_the_policy_document_as_representative() -> None:
+    """同一边有两篇文档写着同一个值时，代表文档选**现行政策**。
+
+    ⚠️ 这条是被生产报告打出来的：破损那一侧的 `docs` 里有"竞品对比培训材料"，
+       报告却把它当政策摆出来 —— 读者会以为竞品的说法就是我们的政策。
+    """
+    competitor = """
+# 竞品对比培训材料（内部）
+
+| 维度 | 森屿家居 | 竞品 |
+|---|---|---|
+| 破损报障 | 签收后 48 小时 | 未公开 |
+"""
+    report = build_report(
+        [
+            _doc("senyu/20-物流时效与运费.md", DAMAGE_POLICY_48H),
+            _doc("senyu/93-内部FAQ/06-竞品对比培训材料（内部）.md", competitor, status="internal"),
+            _doc("senyu/93-内部FAQ/03-质检标准（内部）.md", QC_DAMAGE_7D, status="internal"),
+        ]
+    )
+
+    assert report["conflicts"] == 1
+    item = report["items"][0]
+    policy_side = item["left"] if item["left"]["value"] == 48.0 else item["right"]
+    assert policy_side["doc"].endswith("20-物流时效与运费.md")
+    assert policy_side["status"] == "active"
+    # 两篇都记在这一侧的 `docs` 里 —— 挑代表文档不许把另一篇丢掉
+    assert len(policy_side["docs"]) == 2
+
+
 # ------------------------------------------------------------
 # 推送（v1.4 A3：定时告警）
 # ------------------------------------------------------------

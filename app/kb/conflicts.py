@@ -118,6 +118,10 @@ _NOT_A_POLICY = ("干扰-相邻概念", "站外流传")
 #: ⚠️ `draft` 未生效、`sibling_brand` 是另一门生意（Lab 政策独立），都不该和主品牌比。
 _COMPARABLE = ("active", "internal")
 
+#: 报告里"代表文档"的优先顺序：**现行政策**最能代表这一侧的说法，
+#: 内部稿 / 草案 / 存档 / 兄弟品牌依次往后（文档名只用来打破平局）。
+_STATUS_PRIORITY = {"active": 0, "internal": 1, "draft": 2, "superseded": 3, "sibling_brand": 4}
+
 #: 推送函数（注入点）：`(text) -> 是否真的发出去了`。
 #: 测试塞假实现，生产用 `app.core.alerts.push_text`。
 PushFn = Callable[[str], Awaitable[bool]]
@@ -174,10 +178,7 @@ class Conflict:
     @property
     def kind(self) -> str:
         """`internal_vs_policy`（内部稿与现行政策不一致）或 `active_vs_active`。"""
-        statuses = {self.left.status, self.right.status}
-        if "internal" in statuses or "draft" in statuses:
-            return "internal_vs_policy"
-        return "active_vs_active"
+        return _kind_of(self.left.status, self.right.status)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -188,6 +189,14 @@ class Conflict:
             "left": self.left.as_dict(),
             "right": self.right.as_dict(),
         }
+
+
+def _kind_of(left_status: str, right_status: str) -> str:
+    """这一对冲突属于哪类 —— 两边的**运维动作不同**（前者改内部稿，后者走产品决策）。"""
+    statuses = {left_status, right_status}
+    if "internal" in statuses or "draft" in statuses:
+        return "internal_vs_policy"
+    return "active_vs_active"
 
 
 def topic_of(text: str) -> str | None:
@@ -389,6 +398,47 @@ def build_report(documents: Sequence[DocumentText]) -> dict[str, Any]:
                 for side in (item["left"], item["right"]):
                     if value == side["value"] and doc not in side["docs"]:
                         side["docs"].append(doc)
+
+    # ⚠️ 合并后要**重选代表文档**：同一边可能既有"官网政策"又有"竞品对比培训材料"，
+    #    把培训材料当政策摆出来是误导（v1.4 A4 在生产报告里真出现过一次）。
+    #    `docs` 按状态排序（active 最前），代表文档跟着换成排第一的那篇 —— **原句一起换**，
+    #    否则文件名和引文对不上。
+    status_of = {document.filename: document.content_status for document in comparable}
+    fact_of: dict[tuple[str, float], list[Fact]] = {}
+    for fact in facts:
+        fact_of.setdefault((fact.doc, fact.value), []).append(fact)
+
+    def _best_sentence(candidates: Sequence[Fact], scope: str, topic: str) -> Fact:
+        """同一篇文档里可能有好几句写着**同一个值** —— 挑最能代表这条冲突的那句。
+
+        例：内部质检稿里"丢件 7 天"和"破损 7 天"都在这一篇里，值是同一个 7，
+        ⚠️ 随便挑一句会让报告写着"破损"却引用**丢件**的原句（实测出现过）。
+        所以先按**句子自己的主题**筛，再挑带得上范围的，最后才退回第一句。
+        """
+        # ⚠️ 只**排除**"自己写着另一个主题"的句子（丢件那句），不能反过来只留
+        #    "自己带主题词"的句子 —— 条目式规则（"- 德国站：30 个自然日"）往往
+        #    主题是靠章节标题继承的，句子里根本没有"退货"两个字。
+        pool = [
+            candidate for candidate in candidates if topic_of(candidate.sentence) in (None, topic)
+        ]
+        pool = pool or list(candidates)
+        if scope and scope != "全局":
+            scoped = [candidate for candidate in pool if scope in candidate.sentence]
+            if scoped:
+                pool = scoped
+        # 同等条件下取**最短**那句：短句通常是条目式规则，长句往往是说明性段落 ——
+        # 后者也写着同一个值，但引出来读着像在狡辩。
+        return min(pool, key=lambda candidate: len(candidate.sentence))
+
+    for item in merged.values():
+        for side in (item["left"], item["right"]):
+            side["docs"].sort(
+                key=lambda name: (_STATUS_PRIORITY.get(status_of.get(name, ""), 9), name)
+            )
+            candidates = fact_of.get((side["docs"][0], side["value"])) or []
+            if candidates:
+                side.update(_best_sentence(candidates, item["scope"], item["topic"]).as_dict())
+        item["kind"] = _kind_of(item["left"]["status"], item["right"]["status"])
 
     return {
         "documents": len(comparable),
