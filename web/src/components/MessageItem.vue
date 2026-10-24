@@ -138,7 +138,25 @@ function onBodyClick(event: MouseEvent): void {
       <p class="image-note__body">{{ message.imageNote }}</p>
     </details>
 
-    <section v-if="message.citations.length > 0" class="sources">
+    <!--
+      ⚠️ **拒答时不能直接叫"参考来源"。**
+
+         后端在拒答时**照样会把候选落库并返回**（`architecture.md` §9.19："数据层永远存全，
+         拒答也落 citations"）—— 这是对的，评测和归因全靠它。但原样铺出来会自相矛盾：
+         上面刚说"依据不足，我不推测"，下面却列 5 条像模像样的来源（2026-10-24 用户走查
+         就卡在这里）。正确的说法是：这些是**检索到的候选，均低于阈值、未被采用**，
+         而且默认折叠 —— 想看的人点开，不想看的人不受干扰。
+    -->
+    <section v-if="message.citations.length > 0 && message.refused" class="sources sources--refused">
+      <details>
+        <summary class="sources__title">
+          未采用的候选 · {{ message.citations.length }} 条（均低于拒答阈值，与答案无关）
+        </summary>
+        <CitationList :citations="message.citations" :active-index="activeIndex" />
+      </details>
+    </section>
+
+    <section v-else-if="message.citations.length > 0" class="sources">
       <h4 class="sources__title">参考来源 · {{ message.citations.length }} 条</h4>
       <CitationList :citations="message.citations" :active-index="activeIndex" />
     </section>
@@ -317,6 +335,12 @@ function onBodyClick(event: MouseEvent): void {
   color: var(--text-muted);
   font-size: 0.8rem;
   font-weight: 600;
+}
+
+/* 拒答时的候选：折叠 + 说明"未采用"，不再像"参考来源"那样默认铺开 */
+.sources--refused summary.sources__title {
+  cursor: pointer;
+  user-select: none;
 }
 
 /* 正文里的 [n]。⚠️ `:deep()` 同上：按钮是 `v-html` 拼出来的 */

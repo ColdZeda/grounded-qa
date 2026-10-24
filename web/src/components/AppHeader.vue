@@ -128,11 +128,19 @@ function logout(): void {
 .bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 16px;
-  height: 56px;
-  padding: 0 20px;
+  /*
+   * ⚠️ **不写死 `height`**：窗口窄 / 有浏览器缩放时一行放不下会换行，
+   * 写死高度就变成"顶栏被切掉一半、字看不全"（2026-10-24 走查在 /usage 撞到）。
+   * 用 `min-height` 让它能长高，`flex: 0 0 auto` 保证它不被内容区挤扁。
+   */
+  min-height: 56px;
+  flex: 0 0 auto;
+  padding: 6px 20px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+  row-gap: 4px;
 }
 
 .brand {
