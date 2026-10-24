@@ -33,6 +33,25 @@ const canSubmit = computed(
   () => form.value.email.includes('@') && form.value.password.length >= 8 && !creating.value,
 )
 
+/**
+ * 按钮为什么是灰的 —— **必须说出来**。
+ *
+ * ⚠️ 走查 2026-10-25 用户实测：邮箱只打了 `testmember`（没有 `@`），「创建」是灰的、
+ *    点不动，而**界面上一个字都没解释**。用户只会以为"这功能坏了"。
+ *    一个点不动的按钮不是"防呆"，是"卡住了还不知道为什么"。
+ * ⚠️ 空表单（刚进页面）不提示 —— 那时还没开始填，弹红字是噪音。
+ */
+const blockedReason = computed(() => {
+  const email = form.value.email.trim()
+  const password = form.value.password
+  if (!email && !password) return ''
+  if (email && !email.includes('@')) return '邮箱要写成 name@example.com 这样（少了 @ 后面的域名）'
+  if (password && password.length < 8) return `密码至少 8 位（现在 ${password.length} 位）`
+  if (!email) return '还没填邮箱'
+  if (!password) return '还没填密码'
+  return ''
+})
+
 async function load(): Promise<void> {
   loading.value = true
   error.value = ''
@@ -122,6 +141,8 @@ onMounted(load)
             {{ creating ? '创建中…' : '＋ 创建' }}
           </button>
         </form>
+        <!-- 点不动就要说清为什么（见 `blockedReason` 的注释） -->
+        <p v-if="blockedReason" class="form__blocked">{{ blockedReason }}</p>
         <p class="card__note">
           密码只存 bcrypt 哈希，<strong>建完就看不到明文</strong>（bcrypt 上限 72 字节，中文一个字符算 3 字节）。
         </p>
@@ -207,6 +228,13 @@ onMounted(load)
   margin: 10px 0 0;
   color: var(--text-faint);
   font-size: 0.75rem;
+}
+
+/* 「为什么点不动」—— 比普通说明更醒目一点，但不做成红色警告（还没到出错） */
+.form__blocked {
+  margin: 8px 0 0;
+  color: var(--warn);
+  font-size: 0.8rem;
 }
 
 .form {
