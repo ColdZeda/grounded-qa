@@ -56,3 +56,13 @@ class PasswordChange(BaseModel):
 
     old_password: str = Field(min_length=1, max_length=64, description="当前密码")
     new_password: str = Field(min_length=8, max_length=64, description="新密码（≥8 位）")
+
+
+class Capabilities(BaseModel):
+    """前端可用的登录方式（`GET /auth/capabilities`，无需鉴权）。
+
+    ⚠️ **不含任何密钥类信息**，只有布尔开关 —— 前端据此决定登录页要不要显示
+        「一键体验」。真正的演示账号在服务端 find-or-create，**密码压根不存在**。
+    """
+
+    demo_login: bool

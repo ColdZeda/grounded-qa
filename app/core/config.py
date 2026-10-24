@@ -258,6 +258,14 @@ class Settings(BaseSettings):
     admin_email: str = "admin@example.com"
     admin_password: str = DEFAULT_ADMIN_PASSWORD
 
+    # ---------- 演示登录（走查阶段 P0-③）----------
+    # 打开后 `POST /auth/demo-login` 会签发一个**演示成员**的 token（前端登录页出现
+    # 「一键体验」按钮）。**默认关闭**。
+    # ⚠️ 为什么做在服务端而不是前端硬编码账号：前端硬编码等于把密码打进 JS bundle，
+    #    任何人 view-source 就能拿到。这里连密码都不存在 —— 账号是 find-or-create 出来的。
+    # ⚠️ 演示账号是 `member`（不能上传/不能看评测/运维），且照常受"每人每分钟次数 / 每日 token"限制。
+    demo_login_enabled: bool = False
+
     # ---------- API ----------
     api_prefix: str = "/api/v1"
 

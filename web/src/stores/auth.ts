@@ -40,6 +40,14 @@ export async function signIn(email: string, password: string): Promise<void> {
   userLoaded.value = true
 }
 
+/** 演示登录：走的是**同一条**"换 token → 存起来 → 拉用户信息"路径（走查 P0-③）。 */
+export async function signInDemo(): Promise<void> {
+  const token = await authApi.demoLogin()
+  saveToken(token.access_token, token.expires_in)
+  user.value = await authApi.fetchMe()
+  userLoaded.value = true
+}
+
 /** 退出：清本地状态。**不需要调后端** —— JWT 是无状态的，服务端没有"会话"可注销。 */
 export function signOut(): void {
   clearToken()

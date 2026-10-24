@@ -8,11 +8,12 @@
  *    也顺带保住了 Swagger UI 的 Authorize 按钮可用。
  */
 
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { ApiError } from '@/api/client'
-import { signIn } from '@/stores/auth'
+import { fetchCapabilities } from '@/api/auth'
+import { signIn, signInDemo } from '@/stores/auth'
 
 const router = useRouter()
 const route = useRoute()
@@ -24,6 +25,37 @@ const email = ref('admin@example.com')
 const password = ref('')
 const error = ref('')
 const busy = ref(false)
+
+/**
+ * 演示登录（走查 P0-③）：**开关在服务端**（`DEMO_LOGIN_ENABLED`）。
+ * 前端只问一句"你开了吗"，不在源码里硬编码任何账号。
+ * ⚠️ 探测失败就当"没开"—— 登录页不该因为它挂掉。
+ */
+const demoAvailable = ref(false)
+const demoBusy = ref(false)
+
+onMounted(async () => {
+  try {
+    demoAvailable.value = (await fetchCapabilities()).demo_login
+  } catch {
+    demoAvailable.value = false
+  }
+})
+
+async function demoSignIn(): Promise<void> {
+  if (demoBusy.value) return
+  error.value = ''
+  demoBusy.value = true
+  try {
+    await signInDemo()
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null
+    await router.replace(redirect ?? { name: 'conversations' })
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : `演示登录失败：${(err as Error).message}`
+  } finally {
+    demoBusy.value = false
+  }
+}
 
 async function submit(): Promise<void> {
   if (busy.value) return
@@ -78,6 +110,20 @@ async function submit(): Promise<void> {
       <button class="btn submit" type="submit" :disabled="busy || !email || !password">
         {{ busy ? '登录中…' : '登录' }}
       </button>
+
+      <!-- 演示入口（服务端开关 `DEMO_LOGIN_ENABLED` 打开时才出现） -->
+      <button
+        v-if="demoAvailable"
+        class="btn btn--ghost demo"
+        type="button"
+        :disabled="demoBusy"
+        @click="demoSignIn"
+      >
+        {{ demoBusy ? '进入中…' : '一键体验（演示账号）' }}
+      </button>
+      <p v-if="demoAvailable" class="note">
+        演示账号是「成员」角色：能问答，看不到知识库 / 评测 / 运维，也不受你的配额影响。
+      </p>
 
       <p class="hint">
         开发账号由 <code>python -m app.db.seed</code> 创建；密码见 <code>.env</code> 的
@@ -136,6 +182,20 @@ h1 span {
   width: 100%;
   justify-content: center;
   margin-top: 4px;
+}
+
+/* 演示入口：做得**次于**主登录按钮 —— 它是给访客的旁路，不是主要动作 */
+.demo {
+  width: 100%;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.note {
+  margin: 8px 0 0;
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  line-height: 1.6;
 }
 
 .hint {

@@ -49,3 +49,23 @@ export async function changePassword(oldPassword: string, newPassword: string): 
     body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
   })
 }
+
+/** 这个部署开了哪些登录方式（`demo_login` 决定登录页要不要显示「一键体验」）。 */
+export interface Capabilities {
+  demo_login: boolean
+}
+
+export function fetchCapabilities(): Promise<Capabilities> {
+  return apiJson<Capabilities>('/auth/capabilities')
+}
+
+/**
+ * 演示账号一键登录（走查阶段 P0-③）。
+ *
+ * ⚠️ **前端不保存任何演示账号密码**：账号是服务端 find-or-create 的，
+ *     密码随机生成、谁也不知道。前端只拿一个 token。
+ * ⚠️ 未开启该部署时后端返回 **404** —— 调用方按"没有这个功能"处理即可。
+ */
+export function demoLogin(): Promise<TokenOut> {
+  return apiJson<TokenOut>('/auth/demo-login', { method: 'POST' })
+}

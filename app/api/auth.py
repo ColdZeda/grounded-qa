@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import secrets
 from functools import lru_cache
 from typing import Annotated
 
@@ -17,14 +18,16 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, SessionDep
+from app.core.config import get_settings
 from app.core.security import (
     PasswordTooLongError,
     create_access_token,
     hash_password,
     verify_password,
 )
-from app.db.models.user import User
-from app.schemas.auth import PasswordChange, TokenOut, UserOut
+from app.db.models.tenant import Tenant
+from app.db.models.user import User, UserRole
+from app.schemas.auth import Capabilities, PasswordChange, TokenOut, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -123,3 +126,77 @@ async def change_password(
     current_user.hashed_password = hashed
     session.add(current_user)
     await session.commit()
+
+
+# ------------------------------------------------------------
+# 演示登录（走查阶段 P0-③）
+# ------------------------------------------------------------
+
+#: 演示账号的邮箱。**只在本文件的 find-or-create 里出现**，`.env` 里没有它的密码。
+#: ⚠️ 刻意用 `demo-visitor@` 而不是 `demo@`：后者容易和"开发者自己建的本地账号"撞上，
+#:    而那类账号往往是 admin —— 演示入口必须只发 **member**。
+DEMO_EMAIL = "demo-visitor@grounded.local"
+
+
+@router.get(
+    "/capabilities",
+    response_model=Capabilities,
+    summary="前端可用的登录方式（无需鉴权）",
+)
+async def read_capabilities() -> Capabilities:
+    """告诉前端"这个部署开了哪些登录方式"。
+
+    ⚠️ 做成接口而不是前端常量：开关在**服务端**（`DEMO_LOGIN_ENABLED`），
+        前端不该硬编码"演示模式开着"—— 那会两边各说各话。
+    ⚠️ 不泄露任何账号 / 密码，只有一个布尔。
+    """
+    return Capabilities(demo_login=get_settings().demo_login_enabled)
+
+
+@router.post(
+    "/demo-login",
+    response_model=TokenOut,
+    summary="演示账号一键登录（需 DEMO_LOGIN_ENABLED）",
+)
+async def demo_login(session: SessionDep) -> TokenOut:
+    """签发**演示成员**的 token —— 面试官 / 访客点一下就进来，不用问密码。
+
+    ⚠️ 三条刻意设计：
+        ① **关闭时返回 404**（不是 403）：这个接口在未开启的部署里"不存在"，
+           别让人从错误码猜出"这里有个开关"；
+        ② **账号是 find-or-create 的、密码是随机生成的**（谁也不知道，包括我）——
+           前端硬编码账号等于把密码打进 JS bundle，`view-source` 就能拿到；
+        ③ 演示账号是 `member`（不能上传 / 不能看评测与运维），且**照常受**
+           "每分钟次数 ＋ 每日 token"两道限制 —— 演示入口不是后门。
+    """
+    settings = get_settings()
+    if not settings.demo_login_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到")
+
+    tenant = await session.scalar(select(Tenant).where(Tenant.slug == settings.default_tenant_id))
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="租户不存在或未初始化")
+
+    user = await session.scalar(select(User).where(User.email == DEMO_EMAIL))
+    if user is None:
+        hashed = await run_in_threadpool(hash_password, secrets.token_urlsafe(32))
+        user = User(
+            tenant_id=tenant.id,
+            email=DEMO_EMAIL,
+            hashed_password=hashed,
+            role=UserRole.MEMBER,
+            is_active=True,
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="演示账号已停用")
+
+    token, expires_in = create_access_token(
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        role=user.role.value,
+    )
+    return TokenOut(access_token=token, expires_in=expires_in)
