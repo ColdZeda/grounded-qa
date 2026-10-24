@@ -45,8 +45,14 @@ jobs:
         run: uv run ruff format --check .
 
       - name: pytest
-        # ⚠️ `| tee` 不会吃掉退出码：GitHub Actions 的 bash 默认带 `-o pipefail`，
-        #    所以 pytest 红了这一步照样红。留着 `pytest.log` 是为了下一步能贴出来。
+        # ⚠️⚠️ **必须显式写 `shell: bash`。**
+        #    `run:` 不写 shell 时，GitHub 用的是 `bash -e {0}` —— **没有 `pipefail`**，
+        #    所以 `pytest | tee` 拿到的是 **`tee` 的退出码（永远 0）** ⟹ **测试红了这一步照样绿**。
+        #    （以前这里的注释写着"默认带 -o pipefail"，是错的。2026-10-24 在 CI 日志里
+        #      发现 `test_vision` 一直红着、CI 一路绿 —— 又一个"静默失效"，见 AGENTS §10。）
+        #    `shell: bash` 展开成 `bash --noprofile --norc -eo pipefail {0}`，才是要的语义。
+        # 留着 `pytest.log` 是给下一步「失败时贴到 commit 评论」用的。
+        shell: bash
         run: uv run pytest -q 2>&1 | tee pytest.log
 
       - name: 失败时把 pytest 输出贴到 commit 评论

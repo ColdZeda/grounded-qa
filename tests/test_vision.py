@@ -143,16 +143,26 @@ async def test_retries_without_response_format_when_rejected() -> None:
 async def test_build_image_client_defaults_to_llm_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """三处 `image_analysis_*` 留空时**回退到 `llm_*`** —— 生产 .env 不用改。"""
+    """三处 `image_analysis_*` 留空时**回退到 `llm_*`** —— 生产 .env 不用改。
+
+    ⚠️ `llm_*` 必须**在这里自己赋上**：CI 里没有 `.env`，`llm_api_key` 是空的 →
+        `build_image_client()` 会规规矩矩返回 `None`，这条测试就变成
+        "测本机的 .env 有没有配 key" 了（2026-10-24 才在 CI 日志里发现它一直红着，
+        而且被 `| tee` 吞了退出码，CI 一路绿）。
+    """
     settings = get_settings()
     monkeypatch.setattr(settings, "image_analysis_enabled", True)
     monkeypatch.setattr(settings, "image_analysis_model", "")
     monkeypatch.setattr(settings, "image_analysis_base_url", "")
     monkeypatch.setattr(settings, "image_analysis_api_key", "")
+    monkeypatch.setattr(settings, "llm_model", "fallback-model")
+    monkeypatch.setattr(settings, "llm_base_url", "https://example.invalid/v1")
+    monkeypatch.setattr(settings, "llm_api_key", "fallback-key")
 
     client = build_image_client()
     assert client is not None
-    assert client.model == settings.llm_model
+    # 回退的是**值**，不只是"造出来了"：三处留空时模型名要跟着 `llm_model` 走
+    assert client.model == "fallback-model"
 
 
 async def test_build_image_client_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
