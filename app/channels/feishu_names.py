@@ -7,8 +7,18 @@
    全都退成 `open_id` 后 6 位。宁可显示「飞书用户 · 3a9c1f」，也不能因为查不到名字就不回话。
 
 ⚠️ 需要的两个权限（用户去开放平台加，改完**必须重新发版**才生效，`AGENTS §10` 踩过）：
-   · `im:chat:readonly`        → `GET /open-apis/im/v1/chats/{chat_id}` 读群名
-   · `contact:user.base:readonly` → `GET /open-apis/contact/v3/users/{open_id}` 读用户名
+   · `im:chat:readonly` → `GET /open-apis/im/v1/chats/{chat_id}` 读群名
+   · **`contact:contact.base:readonly`**（获取**通讯录**基本信息）→
+     `GET /open-apis/contact/v3/users/{open_id}` 读用户名
+
+   ⚠️⚠️ **别加 `contact:user.base:readonly`（获取用户基本信息）—— 那个不行。**
+   2026-10-25 真机踩过：加上它、发版、重启容器，接口仍然报
+   `99991672 Access denied. One of the following scopes is required:
+   [contact:contact.base:readonly, contact:contact:access_as_app,
+   contact:contact:readonly, contact:contact:readonly_as_app]`。
+   飞书把通讯录那套 scope 改过名，`contact:user.base:readonly` 是**旧名字**（界面上还留着，
+   点得动、也会显示"已开通"），但**不满足这个接口的校验**。
+   判据：日志里必须没有 `读用户名失败 code=99991672`。
 
 ⚠️ **只取名字**：头像 / union_id / 手机号 / 部门 / 邮箱**一律不读、不存**（用户 2026-10-24 明确）。
 """
