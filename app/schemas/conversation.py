@@ -27,5 +27,12 @@ class ConversationOut(BaseModel):
     id: uuid.UUID
     title: str
     user_id: uuid.UUID
+    #: 渠道（`web` / `feishu_p2p` / `feishu_group`）—— 界面按它分组 + 上三色标签。
+    channel: str
+    #: 飞书侧的原生 id 与真名。`web` 的三列都是 NULL。
+    #: ⚠️ 前端**只读**，别拿它做权限判断（权限只看租户 + `user_id`）。
+    external_chat_id: str | None = None
+    external_user_id: str | None = None
+    external_title: str | None = None
     created_at: datetime
     updated_at: datetime

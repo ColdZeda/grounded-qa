@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import enum
 import uuid
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -42,6 +43,21 @@ class MessageRole(enum.StrEnum):
     SYSTEM = "system"
 
 
+class Channel(enum.StrEnum):
+    """会话从哪个渠道来的（走查 P1-⑥，决策 D5）。
+
+    ⚠️ 三种值对应**三种上下文边界**，不是三种"界面皮肤"：
+        · `WEB` —— 内部坐席在网页上自己开的会话
+        · `FEISHU_P2P` —— 顾客私聊机器人：`chat_id` 天生一人一个 ⟹ 天然隔离
+        · `FEISHU_GROUP` —— 顾客在群里问：**同一个 `chat_id` 里有好几个人**
+          ⟹ 必须按 `open_id` 再分桶，否则 A 的追问会读到 B 的上下文
+    """
+
+    WEB = "web"
+    FEISHU_P2P = "feishu_p2p"
+    FEISHU_GROUP = "feishu_group"
+
+
 class Conversation(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
     """一次连续对话。
 
@@ -57,6 +73,27 @@ class Conversation(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
     )
     title: Mapped[str] = mapped_column(String(200), default="新会话", nullable=False)
 
+    # ---------- 渠道（走查 P1-⑥）----------
+    #: 从哪来。默认 `web` —— 迁移时老数据全是网页端开的会话。
+    channel: Mapped[Channel] = mapped_column(
+        pg_enum(Channel, "conversation_channel"),
+        nullable=False,
+        default=Channel.WEB,
+        server_default=Channel.WEB.value,
+    )
+    #: 飞书 `chat_id`（同一个群共用一个）。`web` 为 NULL。
+    external_chat_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: 飞书 `open_id`（**分桶键**：群里按人分）。`web` 为 NULL。
+    #: ⚠️ 只存这一个 id，**头像 / union_id / 手机号 / 部门 / 邮箱一律不存**（用户 2026-10-24 明确）。
+    external_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: 显示用的真名（群名 / 用户名）。**是缓存**，拿不到就退成 `open_id` 后 6 位。
+    external_title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: 上次解析 `external_title` 的时间 —— 隔 **7 天**再刷一次（群改名能跟上）。
+    #: ⚠️ 规格里没写这一列，但"每 7 天刷新"没有它就没法实现（`updated_at` 会被每条消息改掉，不能当依据）。
+    external_title_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     messages: Mapped[list[Message]] = relationship(
         back_populates="conversation",
         cascade="all, delete-orphan",
@@ -64,8 +101,24 @@ class Conversation(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
         lazy="raise",
     )
 
+    __table_args__ = (
+        # `channel` 用 CHECK 而不是 PG 原生 ENUM —— 加取值要 `ALTER TYPE`，见 `AGENTS §7.1` 约定 15
+        enum_check("channel", Channel, "channel"),
+        # 外部会话的**去重键**：同一租户 + 同一渠道 + 同一群 + 同一个人 = 同一个会话。
+        # ⚠️ `web` 那三列都是 NULL，而 PG 的唯一索引**认为 NULL 互不相等** ⟹ 网页端会话
+        #    不受这条约束影响（它们靠 `user_id` 分，见 `app/api/conversations.py`）。
+        Index(
+            "uq_conversations_external",
+            "tenant_id",
+            "channel",
+            "external_chat_id",
+            "external_user_id",
+            unique=True,
+        ),
+    )
+
     def __repr__(self) -> str:
-        return f"<Conversation {self.id} {self.title!r}>"
+        return f"<Conversation {self.id} {self.channel.value} {self.title!r}>"
 
 
 class Message(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):

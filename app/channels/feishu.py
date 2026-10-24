@@ -32,13 +32,15 @@ import logging
 import re
 from collections import OrderedDict
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.channels.feishu_names import NameResolver, short_id
 from app.core.config import Settings, get_settings
 from app.core.limits import LimitGuard, RateLimitedError
-from app.db.models.conversation import Conversation, Message, MessageRole
+from app.db.models.conversation import Channel, Conversation, Message, MessageRole
 from app.db.models.user import User
 from app.db.repository import TenantScopedRepository
 from app.db.session import get_session_factory
@@ -51,8 +53,12 @@ logger = logging.getLogger("grounded.feishu")
 #: 超了就按段落切开分多条发 —— **截断**是不可接受的（会把结论吃掉）。
 MAX_REPLY_CHARS = 3500
 
-#: 每个飞书会话对应库里的一个 `Conversation`，标题带 chat_id 以便**跨重启**找回。
-_CONVERSATION_TITLE = "飞书 · {chat_id}"
+#: 会话标题 / 群名的**刷新周期**：群改名、人改名都要能跟上，但没必要每条消息都问一次飞书。
+_TITLE_TTL = timedelta(days=7)
+
+#: 拿不到真名时的显示。
+_USER_FALLBACK = "飞书用户 · {tail}"
+_GROUP_FALLBACK = "飞书群 · {tail}"
 
 #: 进提示词的历史条数（和 Web 端同一口径：只取最近若干条，纯文本）。
 _HISTORY_LIMIT = 20
@@ -355,6 +361,7 @@ class FeishuChannel:
         settings: Settings | None = None,
         session_factory: async_sessionmaker[AsyncSession] | None = None,
         guard: LimitGuard | None = None,
+        names: NameResolver | None = None,
     ) -> None:
         self._sender = sender
         self._chat = chat
@@ -364,6 +371,9 @@ class FeishuChannel:
         self._session_factory = session_factory or get_session_factory()
         #: 限流 / 配额。`None` = 不限（测试用）。生产必须传。
         self._guard = guard
+        #: 真名解析（群名 / 用户名）。`None` = 不解析，直接显示 `open_id` 后 6 位。
+        #: ⚠️ 拿不到名字**永远不该**影响回答 —— 解析器的实现自己吞掉所有异常。
+        self._names = names
         self._seen: OrderedDict[str, None] = OrderedDict()
 
     # ---------- 入口 ----------
@@ -414,7 +424,7 @@ class FeishuChannel:
     async def _answer(self, event: FeishuEvent) -> str:
         async with self._session_factory() as session:
             user = await self._channel_user(session)
-            conversation = await self._conversation(session, user, event.chat_id)
+            conversation = await self._conversation(session, user, event)
             history = await self._history(session, user, conversation)
 
             # 用户消息**先落库**：就算后面生成失败，这条提问也在（和 Web 端同一口径）
@@ -477,20 +487,79 @@ class FeishuChannel:
             raise RuntimeError(f"飞书渠道账号不存在：{email}（先跑 python -m app.db.seed？）")
         return user
 
-    async def _conversation(self, session: AsyncSession, user: User, chat_id: str) -> Conversation:
-        """一个飞书会话 ↔ 库里的一个 `Conversation`。**跨重启**靠标题里的 chat_id 找回。"""
-        repo = TenantScopedRepository(session, tenant_id=user.tenant_id, model=Conversation)
-        title = _CONVERSATION_TITLE.format(chat_id=chat_id)
-        existing = await session.scalar(
-            repo.select().where(Conversation.user_id == user.id, Conversation.title == title)
-        )
-        if existing is not None:
-            return existing
+    async def _conversation(
+        self, session: AsyncSession, user: User, event: FeishuEvent
+    ) -> Conversation:
+        """一条飞书消息 → 库里的一个 `Conversation`。
 
-        conversation = repo.build(user_id=user.id, title=title)
-        await repo.add(conversation)
+        ⚠️ **分桶键是 `(channel, chat_id, open_id)`**，不是 `chat_id`：
+            · 私聊：`chat_id` 本来就是一人一个，按谁分都一样；
+            · **群聊：同一个 `chat_id` 里好几个人** —— 不按 `open_id` 分会话，
+              A 的追问会读到 B 的上下文，把别人的单号 / 地址串进回答里。
+              这是这个功能存在的全部理由（决策 D5 的另一半）。
+        ⚠️ 靠**列**找回，不靠标题（老实现把 chat_id 编进标题，群聊就没法按人分）。
+        """
+        channel = Channel.FEISHU_GROUP if event.is_group else Channel.FEISHU_P2P
+        repo = TenantScopedRepository(session, tenant_id=user.tenant_id, model=Conversation)
+        existing = await session.scalar(
+            repo.select().where(
+                Conversation.channel == channel,
+                Conversation.external_chat_id == event.chat_id,
+                Conversation.external_user_id == event.open_id,
+            )
+        )
+        if existing is None:
+            conversation = repo.build(
+                user_id=user.id,
+                #: 先用 id 后 6 位兜底（万一解析很慢 / 失败，也有个能认的标题）
+                title=_USER_FALLBACK.format(tail=short_id(event.open_id)),
+                channel=channel,
+                external_chat_id=event.chat_id,
+                external_user_id=event.open_id,
+            )
+            await repo.add(conversation)
+            await session.commit()
+            await self._apply_names(session, conversation)
+            return conversation
+
+        await self._maybe_refresh_names(session, existing)
+        return existing
+
+    async def _maybe_refresh_names(self, session: AsyncSession, conversation: Conversation) -> None:
+        """群名 / 用户名：**首次解析，之后每 7 天刷一次**（群改名、人改名都能跟上）。
+
+        ⚠️ 为什么不是每条消息都问：这两次都是**同步 HTTP**（飞书开放平台），
+           每条消息多两趟网络往返，为了一个基本不变的名字不划算。
+        """
+        seen = conversation.external_title_at
+        if seen is not None and datetime.now(UTC) - seen < _TITLE_TTL:
+            return
+        await self._apply_names(session, conversation)
+
+    async def _apply_names(self, session: AsyncSession, conversation: Conversation) -> None:
+        """查一次真名，落到 `title`（**这个人**）/ `external_title`（**群名**或这个人）。
+
+        ⚠️ 查不到就退成 `open_id` / `chat_id` 的**后 6 位** —— 显示"飞书用户 · 3a9c1f"
+           也比显示一串 `ou_...` 强，更比"因为查不到名字就不回话"强得多。
+        ⚠️ **无论成功失败都写 `external_title_at`**：不然解析一直失败时，每条消息都会
+           重试一次（等于给每轮回答都加两趟注定失败的 HTTP）。
+        """
+        person: str | None = None
+        group: str | None = None
+        if self._names is not None:
+            person = await self._names.user_name(conversation.external_user_id or "")
+            if conversation.channel is Channel.FEISHU_GROUP:
+                group = await self._names.chat_name(conversation.external_chat_id or "")
+
+        tail = short_id(conversation.external_user_id)
+        conversation.title = (person or _USER_FALLBACK.format(tail=tail))[:200]
+        if conversation.channel is Channel.FEISHU_GROUP:
+            group_tail = short_id(conversation.external_chat_id)
+            conversation.external_title = (group or _GROUP_FALLBACK.format(tail=group_tail))[:200]
+        else:
+            conversation.external_title = (person or _USER_FALLBACK.format(tail=tail))[:200]
+        conversation.external_title_at = datetime.now(UTC)
         await session.commit()
-        return conversation
 
     async def _history(
         self, session: AsyncSession, user: User, conversation: Conversation

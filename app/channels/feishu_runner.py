@@ -31,6 +31,7 @@ import threading
 from typing import Any
 
 from app.channels.feishu import FeishuChannel
+from app.channels.feishu_names import LarkNameResolver
 from app.core.config import Settings, get_settings
 from app.core.limits import LimitGuard
 from app.rag.pipeline import build_clients
@@ -171,6 +172,9 @@ def _serve(settings: Settings) -> None:
         # ⚠️ 飞书来的问题也要计入限流/配额 —— **渠道不是免费的旁路**（Web 端那两把尺子
         #    按 user_id 记，飞书消息都记在渠道账号上，所以天然共享同一份额度）
         guard=LimitGuard(_redis_client(), settings),
+        # 群名 / 用户名。⚠️ 需要 `im:chat:readonly` ＋ `contact:user.base:readonly`；
+        #    没加权限或不在通讯录可见范围时它自己会降级成 id 后 6 位（不挡回答）。
+        names=LarkNameResolver(settings),
     )
 
     def on_message(data: P2ImMessageReceiveV1) -> None:

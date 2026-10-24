@@ -38,10 +38,20 @@ export interface UserOut {
 /** `app/db/models/conversation.py` 的 `MessageRole`。`system` 目前不落库。 */
 export type MessageRole = 'user' | 'assistant' | 'system'
 
+/** 会话从哪来（`app/db/models/conversation.py::Channel`）。 */
+export type Channel = 'web' | 'feishu_p2p' | 'feishu_group'
+
 export interface ConversationOut {
   id: string
   title: string
   user_id: string
+  /** 渠道 —— 列表按它分组，并上三色标签（**同时带文字**，不只靠颜色）。 */
+  channel: Channel
+  /** 飞书侧的原生 id 与真名。`web` 的三列都是 `null`。 */
+  external_chat_id: string | null
+  external_user_id: string | null
+  /** 群聊 = 群名；私聊 = 那个人的名字。 */
+  external_title: string | null
   created_at: string
   updated_at: string
 }
