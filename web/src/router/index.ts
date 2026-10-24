@@ -58,6 +58,14 @@ const router = createRouter({
       component: () => import('@/views/DocumentsView.vue'),
     },
     {
+      // 成员管理（走查阶段 P0-①）：**唯一的"加人"入口**，没有开放注册。
+      // ⚠️ 只有管理员能进；后端 `POST /admin/users` 也拦（`require_admin`）。
+      path: '/members',
+      name: 'members',
+      component: () => import('@/views/MembersView.vue'),
+      meta: { adminOnly: true },
+    },
+    {
       path: '/reports',
       name: 'reports',
       component: () => import('@/views/ReportsView.vue'),
