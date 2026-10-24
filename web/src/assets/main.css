@@ -176,3 +176,16 @@ textarea {
   font-size: 0.75rem;
   line-height: 1.7;
 }
+
+/*
+ * 「已合并上一轮检索」——**动作**类标签，和"分数 / 耗时"这种**读数**不一样：
+ * 它说的是"我们对你的问题做了一件事"，所以给它一点颜色（青色，和渠道标签里私聊同色系），
+ * 但保持小、不抢眼 —— 它仍然是详细档才出现的东西。
+ */
+.chip--merged {
+  border-color: color-mix(in srgb, #0e9384 35%, var(--border));
+  background: color-mix(in srgb, #0e9384 8%, var(--surface));
+  color: #0e9384;
+  font-family: inherit;
+  cursor: help;
+}

@@ -32,6 +32,7 @@ from app.db.models.image import Image
 from app.db.models.user import User, UserRole
 from app.db.repository import TenantScopedRepository
 from app.orders import order_snapshot, render_order_facts, resolve_orders
+from app.rag import followup as followup_module
 from app.rag.pipeline import Answer, Delta, RagPipeline, Sources, build_clients
 from app.rag.providers import ChatClient, EmbeddingClient, ModelAPIError, RerankClient
 from app.rag.vision import ImageAnalysisClient, build_image_client
@@ -325,6 +326,18 @@ async def ask(
 
     history = await _load_history(session, conversation.id)
 
+    # ⑤ 追问改写（v1.4 C1'）：这次检索会不会并进"上一轮有实质内容的问句"。
+    #    ⚠️ 落两处，各有各的用途：
+    #       · **用户消息的 `meta`**（这里）—— 界面靠它显示 chip「已合并上一轮检索」，
+    #         而且**刷新页面后还在**（用户"想看出有没有生效"往往正是事后看的）；
+    #       · **`Answer.extra["followup_query"]`**（pipeline 里）—— 给 badcase 归因。
+    #    ⚠️ 算两遍不是浪费：同一个**纯函数**、同一份历史 ⟹ 结论必然一致
+    #       （这一点由 `followup.previous_question` 的单元测试钉住）。
+    followup_prev = followup_module.previous_question(question, history)
+    if followup_prev:
+        user_message.meta = {**(user_message.meta or {}), "followup_prev": followup_prev}
+        await session.commit()
+
     return StreamingResponse(
         _stream(
             session,
@@ -335,6 +348,7 @@ async def ask(
             guard,
             current_user.id,
             image_context=image_context,
+            followup_prev=followup_prev,
         ),
         media_type="text/event-stream",
         headers={
@@ -402,6 +416,7 @@ async def _stream(
     user_id: uuid.UUID,
     *,
     image_context: ImageContext | None = None,
+    followup_prev: str = "",
 ) -> AsyncIterator[str]:
     """把 pipeline 的领域事件翻译成 SSE 帧，并负责助手消息落库。
 
@@ -428,6 +443,11 @@ async def _stream(
                         "note": image_context.note or None,
                         "error": image_context.error or None,
                     }
+                # ⚠️ 追问改写（v1.4 C1'）：**说清楚"检索并进了哪一句"**。
+                #    不说的话，用户看到「德国呢」被回答成德国政策，只会觉得"它怎么知道"；
+                #    反过来，答偏了也无从判断是不是改写惹的祸（详细档才显示）。
+                if followup_prev:
+                    payload["followup_prev"] = followup_prev
                 yield _sse("sources", payload)
             elif isinstance(event, Delta):
                 yield _sse("delta", {"text": event.text})

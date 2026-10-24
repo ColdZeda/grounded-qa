@@ -84,6 +84,20 @@ function onBodyClick(event: MouseEvent): void {
       >
         置信度 {{ message.confidence.toFixed(3) }}
       </span>
+      <!--
+        短追问改写（v1.4 C1'）：这条提问的**检索**并进了上一轮问句。
+        ⚠️ 挂在**用户**这条上，因为被改写的是"这一问的检索"，不是回答本身。
+        ⚠️ 只在**详细**档显示：终端用户只打了一句「德国呢」，告诉他"合并了上一轮"
+           反而会困惑 —— 这是"我们内部怎么检索的"，和置信度、精排分同一类。
+        ⚠️ `isDetailed()` 必须是**函数调用**（见 prefs.ts 与 `architecture.md` §9.20）。
+      -->
+      <span
+        v-if="message.followupPrev && isUser && isDetailed()"
+        class="chip chip--merged"
+        :title="`检索时并进了上一轮的问句：「${message.followupPrev}」。只影响召回，回答仍是按你这一问生成的。`"
+      >
+        已合并上一轮检索
+      </span>
     </div>
 
     <!--

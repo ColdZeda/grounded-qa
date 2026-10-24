@@ -253,6 +253,8 @@ function toUi(message: MessageOut): UiMessage {
     confidence: message.confidence,
     // 图也一样：`meta.image_id` 落库了，刷新后缩略图还在（不需要额外请求列表）。
     imageId: message.meta?.image_id ?? null,
+    // 短追问改写：刷新页面后 chip 也要在（这是"事后看得出有没有生效"的那条路）
+    followupPrev: message.meta?.followup_prev ?? null,
     createdAt: message.created_at,
   }
 }
@@ -364,7 +366,10 @@ async function send(): Promise<void> {
   }
   attach.value = null
 
-  messages.value.push({
+  // ⚠️ 用户这条也要 `reactive()`：检索结束后要往它身上补 `followupPrev`
+  //    （chip「已合并上一轮检索」）。攥着 push 进去的**原始对象**改是改不动的 ——
+  //    原因见下面 `pending` 那段（`architecture.md` §9.13）。
+  const mine = reactive<UiMessage>({
     id: nextLocalId(),
     role: 'user',
     content: question,
@@ -375,6 +380,7 @@ async function send(): Promise<void> {
     imageId: image?.imageId ?? null,
     createdAt: new Date().toISOString(),
   })
+  messages.value.push(mine)
 
   // ⚠️⚠️ **必须 `reactive()` 包一层。**
   //     `ref([])` 的深层响应式是**读取时**才把元素换成 Proxy 的；
@@ -426,6 +432,8 @@ async function send(): Promise<void> {
             pending.imageNote = event.image.note
             pending.imageError = event.image.error
           }
+          // 短追问改写：挂到**用户那条**上（详细档才显示）。
+          if (event.followup_prev) mine.followupPrev = event.followup_prev
           // 拒答是**直接给结论**的：后端不会再调模型，所以不会再有 delta。
           // 把它当成"生成中"会让界面一直转圈。
           phase.value = event.refused ? 'idle' : 'generating'

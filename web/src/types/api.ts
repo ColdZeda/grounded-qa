@@ -97,6 +97,11 @@ export interface MessageMeta {
   image_note?: string | null
   /** 读图失败时的一句话。**非空 = 我们其实没看图**，界面必须说出来。 */
   image_error?: string | null
+  /**
+   * 这次提问的**检索**并进了上一轮的哪句问句（短追问改写，`app/rag/followup.py`）。
+   * ⚠️ 只影响检索，`content` 永远是用户原话。
+   */
+  followup_prev?: string | null
   orders?: OrderSnapshot[]
 }
 
@@ -338,6 +343,11 @@ export interface SourcesEvent {
   refused: boolean
   /** ⚠️ **只在带了图时出现**。没带图的请求没有这个字段（不是 `null`）。 */
   image?: ImageInfo
+  /**
+   * 只在**做了短追问改写**时出现：这次检索并进了上一轮的那句问句。
+   * ⚠️ 它要显示在**用户消息**上（chip「已合并上一轮检索」），不是助手消息。
+   */
+  followup_prev?: string
 }
 
 export interface DeltaEvent {

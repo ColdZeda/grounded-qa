@@ -1,0 +1,852 @@
+{
+  "kind": "generation",
+  "mode": "random",
+  "generated_at": "20261024T155723Z",
+  "kb": "senyu",
+  "questions": "generation.yaml",
+  "llm_model": "deepseek-flash",
+  "results": [
+    {
+      "id": "gen-01",
+      "question": "退货有多少天？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "93-干扰-内部FAQ/06-竞品对比培训材料（内部）.md",
+        "40-服务/40-保修与维修.md",
+        "10-退换货/10-退换货总则.md",
+        "",
+        "93-干扰-内部FAQ/06-竞品对比培训材料（内部）.md"
+      ],
+      "points": [
+        {
+          "point": "总则 7 天（自签收起算）",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "美国 30 天",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "德国 14 天法定撤回权",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "日本 8 天",
+          "hit": false,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "退货寄出期限是 **7 天**，德国站为 **14 天**：审核通过并生成退货面单后，顾客需在期限内把商品交给承运方，逾期视为放弃[3]。\n\n另外：客服在 **48 小时内**审核（工作日），仓库签收后 **3 个工作日内**完成质检[3]。"
+    },
+    {
+      "id": "gen-02",
+      "question": "德国客户买了刻字商品，能撤回吗？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "",
+        "",
+        "90-干扰-历史版本/04-2023版退款时效（已废止）.md",
+        "40-服务/40-保修与维修.md",
+        "91-干扰-森屿Lab/03-森屿Lab保修政策.md"
+      ],
+      "points": [
+        {
+          "point": "能，14 天法定撤回权",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "定制排除条款不适用于德国",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "顾客承担退回运费，且不得收附加手续费",
+          "hit": false,
+          "weak": true
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "现有资料不足以回答这个问题。\n\n- 资料中没有涉及\"刻字/定制商品\"的撤回、退货或取消规则。\n- 资料中也没有涉及德国或欧盟消费者的撤回权（Widerrufsrecht）相关规定。\n- 现有资料只涵盖：退款时效的起算方式（交寄运输、仓库质检 3 个工作日、支付渠道到账）、保修范围内的处理顺序（先维修、再换新、最后按原价折旧退款），以及森屿 Lab 统一 6 个月的保修期。这些均不构成对\"刻字商品能否撤回\"的判断依据。\n\n建议补充定制类商品的撤回/退货政策条款后再作判断。"
+    },
+    {
+      "id": "gen-03",
+      "question": "从签收到退款到账，我多久能拿到钱？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "93-干扰-内部FAQ/07-培训稿版本与免责声明.md",
+        "90-干扰-历史版本/04-2023版退款时效（已废止）.md",
+        "20-物流与税费/20-物流时效与运费.md",
+        "94-干扰-相邻概念/04-什么算定制商品.md",
+        "20-物流与税费/21-关税与清关.md"
+      ],
+      "points": [
+        {
+          "point": "先走审核 48 小时 + 仓库质检 3 个工作日",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "信用卡/PayPal 3~5 个工作日",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "本地钱包与银行转账 7~15 个工作日",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [
+        "7~10 个工作日"
+      ],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "**从签收到到账的总时长：现有资料无法给出完整答案。**\n\n资料只覆盖了“退款发起后到账”这一段，缺少“签收后到退款发起”之间的处理时长，所以无法给出从签收到到账的完整时间。\n\n**退款发起后的到账时间（旧版记录，按支付方式区分）**\n- 信用卡或借记卡：7~10 个工作日 [2]\n- PayPal：7~10 个工作日 [2]\n- 本地钱包（日本便利店支付、东南亚电子钱包）：7~15 个工作日 [2]\n- 银行转账（企业客户）：7~15 个工作日 [2]\n- 以上工作日不含法定节假日与周末，遇长假按实际工作日顺延 [2]\n\n**使用这组数字前需要注意两点：**\n- 这些具体天数可能已经作废。官网在 2026-01-01 做过整体改版，退换货、保修、报障时限、会员权益四组条款都有调整，部分期限与比例已变；而这组数字来自更早的版本，凡涉及“几天”“百分之几”“多少钱”的内容都应以官网现行条款为准 [1]。\n- 给顾客报时，要先按付款方式到官网核对一遍，再说具体天数 [1]。\n\n**要给顾客完整答复，还需要补充：** 退货签收后的验收或审核处理时限（现有资料未涉及）。"
+    },
+    {
+      "id": "gen-04",
+      "question": "保修期各部件分别多久？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "",
+        "91-干扰-森屿Lab/01-森屿Lab品牌介绍.md",
+        "",
+        "90-干扰-历史版本/02-2023版保修条款（已废止）.md",
+        "93-干扰-内部FAQ/03-质检与报障判定标准（内部）.md"
+      ],
+      "points": [
+        {
+          "point": "家具主体 2 年",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "电子件 1 年",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "布艺与填充件 6 个月",
+          "hit": true,
+          "weak": false
+        },
+        {
+          "point": "五金件 6 个月",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "根据存档的 2023 年版保修条款，保修期限自签收日起算，并按部件类别分别计算 [4]：\n\n- **家具主体**（床架、书桌、餐边柜、衣帽架的架体及五金连接件）：**1 年** [4]\n- **电子件**（电动升降桌的电机与控制盒、带灯镜的电源模块）：**1 年** [4]\n- **布艺与填充件**（四件套、抱枕芯、遮光帘布面）：**6 个月** [4]\n- **五金配件与小件**（螺丝、脚垫、拉手）：**6 个月** [4]\n\n同一订单中不同部件的保修期各自独立计算，不会因为家具主体返修而顺延 [4]。"
+    },
+    {
+      "id": "gen-05",
+      "question": "保修期内坏了能直接退款吗？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "",
+        "94-干扰-相邻概念/01-保修与退换货的区别.md",
+        "92-干扰-其他地区/03-澳大利亚与新西兰站点规划（未生效草案）.md",
+        "90-干扰-历史版本/02-2023版保修条款（已废止）.md",
+        "91-干扰-森屿Lab/01-森屿Lab品牌介绍.md"
+      ],
+      "points": [
+        {
+          "point": "不能，退款是最后手段",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "顺序：先维修 → 无法维修换新 → 无同款才退款",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "使用超过 1 年的按每年 20% 折旧后退款",
+          "hit": true,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "不能。\n\n- 保修不承诺退款；只有在维修与换新都不可行时才会退款，并且使用超过 1 年的按每年 20% 折旧 [2]。\n- 保修的结果是维修或换新，而不是退款；另外，如果购买已超过 30 天，就只能走保修，不能按退换货处理 [2]。\n- 保修期按部件类别分别计算，自签收日起算：家具主体、电子件为 1 年；布艺与填充件、五金配件与小件为 6 个月；同一订单中不同部件的保修期各自独立计算 [4]。\n\n如果希望退货退款，需要先确认是否仍在 30 天退换货期内，并确认是否属于无理由退货的排除项（定制、已安装大件、贴身卫生类、清仓特卖），同时还需满足“不影响二次销售”的判定标准 [2]。"
+    },
+    {
+      "id": "gen-06",
+      "question": "哪些情况不保修？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "90-干扰-历史版本/04-2023版退款时效（已废止）.md",
+        "91-干扰-森屿Lab/01-森屿Lab品牌介绍.md",
+        "40-服务/41-安装服务与客服SLA.md",
+        "",
+        ""
+      ],
+      "points": [
+        {
+          "point": "人为损坏",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "自然耗损",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "非官方渠道购买（保修随订单不随商品）",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "自行拆装或改装",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "跨境运输损坏不算人为，走破损报障",
+          "hit": false,
+          "weak": true
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "现有资料中没有关于保修范围或免责情形的具体说明，无法回答\"哪些情况不保修\"。\n\n资料中仅提到森屿 Lab 有自己独立的售后政策与售后流程（一线客服 → 售后主管 → 争议处理），但未列出任何保修条款或不保修的具体情形 [2][3]。\n\n建议补充以下任一项后再查询：\n- 森屿 Lab 的正式保修/售后政策文件；\n- 具体产品页面的保修说明；\n- 或直接向售后主管确认（争议性质量认定需由其审批）[3]。"
+    },
+    {
+      "id": "gen-07",
+      "question": "外箱破了，我该在多久内报？要准备什么？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "91-干扰-森屿Lab/02-森屿Lab退换货政策.md",
+        "93-干扰-内部FAQ/03-质检与报障判定标准（内部）.md",
+        "91-干扰-森屿Lab/03-森屿Lab保修政策.md",
+        "",
+        "20-物流与税费/21-关税与清关.md"
+      ],
+      "points": [
+        {
+          "point": "签收后 48 小时内",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "外箱六面照片 + 商品照片",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "开箱视频 ≥15 秒",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "不要自行丢弃破损件",
+          "hit": false,
+          "weak": true
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "**关于报障时限**\n\n- 现有信息里没有规定“外箱破损必须在几天内报”的单独时限。\n- 可参照的期限是保修期：森屿 Lab 统一为 6 个月，自签收之日起算，不分部件、不分品类 [3]。超出这一范围的时限要求，建议直接跟客服确认。\n\n**报障要准备的照片（共 4 组，缺一张会被退回补拍）** [2]\n\n1. **外箱外观**：至少拍两面，其中一面必须带面单，且能看清面单上的单号 [2]。\n2. **内包装与缓冲材**：拍商品在箱内的原始摆放状态，不能先掏出来再摆回去 [2]。\n3. **破损部位特写**：一张近景，一张带参照物（硬币、尺子或手掌），便于判断实际尺寸 [2]。\n4. **全景**：商品与包装同框，能看出是同一件东西 [2]。\n\n**几点提醒**\n\n- 照片模糊、只有局部、看不到面单的，一律退回补拍；同一次报障最多补拍一次，之后由客服自己判断，不会再让你跑一趟 [2]。\n- 如果是商品本身的质量问题：Lab 的退回运费一律由你承担（与主品牌相反），建议先联系客服描述故障，能补件就先补件，整单寄回并不划算 [1]。"
+    },
+    {
+      "id": "gen-08",
+      "question": "关税谁付？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "94-干扰-相邻概念/04-什么算定制商品.md",
+        "",
+        "91-干扰-森屿Lab/02-森屿Lab退换货政策.md",
+        "91-干扰-森屿Lab/03-森屿Lab保修政策.md",
+        "94-干扰-相邻概念/02-无理由与质量问题的区别.md"
+      ],
+      "points": [
+        {
+          "point": "美国、德国 DDP，顾客收件不再付费",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "日本、新加坡、马来西亚 DDU，顾客缴税",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "税费归属按收货地址判定",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "实际税额以海关核定为准，多不退少不补",
+          "hit": false,
+          "weak": true
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "资料不足：现有资料中没有关于关税（海关税费）承担方的任何说明，无法就此作答。建议向客服或查阅专门的跨境物流/清关条款确认。"
+    },
+    {
+      "id": "gen-09",
+      "question": "包邮门槛是多少？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "40-服务/41-安装服务与客服SLA.md",
+        "90-干扰-历史版本/05-2023版会员规则（已废止）.md",
+        "",
+        "",
+        "40-服务/40-保修与维修.md"
+      ],
+      "points": [
+        {
+          "point": "美国 $59 / 德国 €69 / 日本 ¥8000 / 新马 S$80",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "按扣除优惠券与积分后的实付金额判定",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "包邮仅指标准配送，加急差价自付",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "大件家具一律不包邮",
+          "hit": false,
+          "weak": true
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "现有资料中没有关于包邮门槛的信息，因此无法回答该问题。建议咨询在线客服或查看店铺的配送与运费说明以获取准确标准。"
+    },
+    {
+      "id": "gen-10",
+      "question": "各站点配送要多久？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "93-干扰-内部FAQ/03-质检与报障判定标准（内部）.md",
+        "",
+        "91-干扰-森屿Lab/04-森屿Lab运费与包邮.md",
+        "",
+        "30-会员与营销/31-优惠券与促销.md"
+      ],
+      "points": [
+        {
+          "point": "美国 7~12 天",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "德国 10~18 天",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "日本 5~9 天",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "新马 4~8 天",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "旺季（11/20–12/25）顺延 3~5 天不算超时",
+          "hit": false,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "关于配送时长，现有资料没有给出任何说明，因此无法回答各站点的具体配送时间。\n\n目前能确认的配送范围信息只有：\n\n- Lab 只向美国和德国发货[3]。\n- 日本、新加坡、马来西亚不在配送范围内；即使主品牌在当地有站点、仓库、客服，Lab 订单也无法下单、无法转运、无法寄往当地地址，用日本站地址下单会被取消并原路退款[3]。\n- 英国、加拿大、澳大利亚、新西兰同样未开通[3]。\n\n如需配送时效，建议向客服确认或查阅对应站点的配送说明页面。"
+    },
+    {
+      "id": "gen-11",
+      "question": "会员等级怎么算，积分有什么用？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "93-干扰-内部FAQ/02-客服话术库·高频问题.md",
+        "91-干扰-森屿Lab/01-森屿Lab品牌介绍.md",
+        "92-干扰-其他地区/04-站外流传的假政策澄清.md",
+        "",
+        "00-我是谁与能干什么.md"
+      ],
+      "points": [
+        {
+          "point": "银卡年累计实付 ≥$500，金卡 ≥$1500",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "积分比例 1% / 3% / 5%",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "单笔最多抵扣 20%",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "积分有效期 12 个月",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "积分不可提现、不可转让",
+          "hit": false,
+          "weak": true
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "现有资料里没有关于会员等级计算方式和积分用途的内容，无法回答这个问题。\n\n相关资料只涉及：物流催单话术、品牌介绍、各地区无理由退货期限与包邮门槛、以及自动应答助手身份的说明。\n\n建议转人工客服确认会员与积分规则。"
+    },
+    {
+      "id": "gen-12",
+      "question": "退款时积分怎么处理？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "91-干扰-森屿Lab/03-森屿Lab保修政策.md",
+        "",
+        "91-干扰-森屿Lab/01-森屿Lab品牌介绍.md",
+        "30-会员与营销/30-会员与积分.md",
+        ""
+      ],
+      "points": [
+        {
+          "point": "先退回本次使用的积分（延长 30 天）",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "再退现金部分",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "该订单新增的积分一并扣回",
+          "hit": false,
+          "weak": true
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "关于退款时积分的处理，现有资料只能确认以下几点，**完整规则资料不足**：\n\n- 会员等级按滚动 12 个月的累计实付金额计算，**退款订单的金额会扣回**，因此退款会影响累计实付金额，并可能影响后续等级重算 [4]。\n- 降级在滚动 12 个月窗口结束后按新累计金额重算，**降级不追回已发放积分** [4]。\n\n需要说明的是：**退款时已发放的积分本身是否扣回、如何扣回，资料中没有明确规定**，无法据此给出结论，建议以结算页或客服口径为准。\n\n另需注意，森屿 Lab 与主品牌是两套独立政策（例如森屿 Lab 无理由退货为 30 天、质量问题退换 60 天、保修统一 6 个月），不要互相套用 [3]。"
+    },
+    {
+      "id": "gen-13",
+      "question": "优惠券有哪些限制？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "90-干扰-历史版本/04-2023版退款时效（已废止）.md",
+        "",
+        "94-干扰-相邻概念/03-DDP与DDU的区别.md",
+        "",
+        "90-干扰-历史版本/03-2023版运费与包邮（已废止）.md"
+      ],
+      "points": [
+        {
+          "point": "不可叠加（金额券/折扣券/免邮券互斥）",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "不与会员价同享",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "过期不退不补",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "退款不退券，缺货全额退款例外",
+          "hit": false,
+          "weak": true
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "资料不足，无法回答。现有资料未涉及优惠券的使用限制（如适用范围、有效期、叠加规则等），建议补充优惠券相关的政策说明后再查询。"
+    },
+    {
+      "id": "gen-14",
+      "question": "安装服务覆盖哪里，收多少钱？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "",
+        "",
+        "90-干扰-历史版本/05-2023版会员规则（已废止）.md",
+        "20-物流与税费/21-关税与清关.md",
+        "10-退换货/10-退换货总则.md"
+      ],
+      "points": [
+        {
+          "point": "共 32 个城市，结算页按地址校验",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "99 / 199 / 299 元三档（有电梯单件 / 无电梯 / 多件或拆旧）",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "拆旧清运、墙体打孔加固、非标改装另收",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "改期需提前 48 小时，48 小时内改期收 50 元空跑费",
+          "hit": false,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "现有资料中没有关于安装服务的任何信息，无法回答安装服务的覆盖范围与收费情况。\n\n建议确认该信息是否属于本知识库收录范围，或提供包含安装服务说明的资料后再查询。"
+    },
+    {
+      "id": "gen-15",
+      "question": "客服多久回复我？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "94-干扰-相邻概念/04-什么算定制商品.md",
+        "",
+        "",
+        "",
+        "10-退换货/10-退换货总则.md"
+      ],
+      "points": [
+        {
+          "point": "在线客服工作日 09:00–21:00、周末 10:00–18:00",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "首次响应 2 小时；邮箱 48 小时；紧急队列 30 分钟",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "节假日可能延长至 24 小时",
+          "hit": false,
+          "weak": false
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "现有资料中没有关于客服响应时效的说明，无法回答这个问题。建议直接通过客服渠道咨询确认。\n\n补充：如果你问的是退货申请的处理时限，资料里只涉及顾客侧的申请期限（7 天无理由、美国站 30 天、德国站 14 天法定撤回权）[5][1]，同样没有客服回复时限的说明。"
+    },
+    {
+      "id": "gen-16",
+      "question": "我对客服结论不满意，能往上投诉吗？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "92-干扰-其他地区/01-英国站上线预览（未生效草案）.md",
+        "",
+        "94-干扰-相邻概念/02-无理由与质量问题的区别.md",
+        "91-干扰-森屿Lab/05-森屿Lab常见问题.md",
+        ""
+      ],
+      "points": [
+        {
+          "point": "三级：一线客服 → 售后主管 → 争议处理",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "争议流程 7 个工作日内给书面结论",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "超时报障只能由售后主管审批，一线无权放行",
+          "hit": false,
+          "weak": true
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "关于“对客服结论不满意能否向上投诉”这一问题，现有资料中没有相关内容，无法给出可执行的答复。建议你通过官方渠道另行确认投诉升级流程。"
+    },
+    {
+      "id": "gen-17",
+      "question": "你们服务哪些国家？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "",
+        "91-干扰-森屿Lab/01-森屿Lab品牌介绍.md",
+        "",
+        "90-干扰-历史版本/06-版本变更公告.md",
+        ""
+      ],
+      "points": [
+        {
+          "point": "美国、德国、日本、新加坡、马来西亚",
+          "hit": true,
+          "weak": true
+        },
+        {
+          "point": "英国、加拿大、澳大利亚、新西兰未开通",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "未开通地区没有生效政策，站外流传的是早期预览稿",
+          "hit": false,
+          "weak": true
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "主品牌服务以下国家：美国、德国、日本、新加坡、马来西亚 [2]。\n\n森屿 Lab 只做工具与配件，服务地区与主品牌不同；具体服务哪些国家，现有资料未列明 [2]。"
+    },
+    {
+      "id": "gen-18",
+      "question": "退货运费到底谁出？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "",
+        "93-干扰-内部FAQ/05-会员权益答疑（内部）.md",
+        "93-干扰-内部FAQ/03-质检与报障判定标准（内部）.md",
+        "",
+        ""
+      ],
+      "points": [
+        {
+          "point": "质量问题/错发：商家承担",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "无理由：顾客承担",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "金卡每年前 3 次无理由退回运费补贴",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "美国订单 ≥$59 无理由退回运费由商家承担",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "德国法定撤回：顾客承担，但不得收附加手续费",
+          "hit": false,
+          "weak": true
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "现有资料不足以回答这个问题，也没有关于退货运费承担方（商家、顾客或承运方）的规则说明。建议补充退换货运费相关政策后再查询。"
+    },
+    {
+      "id": "gen-19",
+      "question": "为什么我下单时付了运费，收件还要交税？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "90-干扰-历史版本/03-2023版运费与包邮（已废止）.md",
+        "94-干扰-相邻概念/01-保修与退换货的区别.md",
+        "90-干扰-历史版本/04-2023版退款时效（已废止）.md",
+        "40-服务/40-保修与维修.md",
+        "90-干扰-历史版本/05-2023版会员规则（已废止）.md"
+      ],
+      "points": [
+        {
+          "point": "运费与关税是两件事",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "该站点为 DDU，报价不含关税",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "用积分抵扣也不改变税费归属",
+          "hit": false,
+          "weak": true
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "关于这个问题，现有资料不足以回答。\n\n资料中与\"税费、关税\"相关的内容是：配送时效为自然日，自订单出库次日起算，**不含清关滞留时间** `[1]`。但这只说明清关时间不计入配送时效，并未说明收件时税费由谁承担、为何收取、如何计算。\n\n现有资料仅涵盖运费与包邮政策、配送时效 `[1]`、退换货与保修的运费承担规则 `[2]`、退款到账时效 `[3]`、保修处理顺序 `[4]` 以及积分与退款顺序 `[5]`，均未涉及税费/关税的收取规则。建议直接咨询客服确认该笔税费的性质与承担方。"
+    },
+    {
+      "id": "gen-20",
+      "question": "质量问题的退换窗口和保修期是一回事吗？",
+      "passed": false,
+      "refused": false,
+      "confidence": null,
+      "llm_calls": 1,
+      "cited": [
+        "90-干扰-历史版本/04-2023版退款时效（已废止）.md",
+        "91-干扰-森屿Lab/04-森屿Lab运费与包邮.md",
+        "91-干扰-森屿Lab/01-森屿Lab品牌介绍.md",
+        "92-干扰-其他地区/02-加拿大站上线预览（未生效草案）.md",
+        ""
+      ],
+      "points": [
+        {
+          "point": "不是一回事",
+          "hit": false,
+          "weak": true
+        },
+        {
+          "point": "质量问题退换 30 天内",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "超过 30 天转保修（最长 2 年／电子件 1 年）",
+          "hit": false,
+          "weak": false
+        },
+        {
+          "point": "保修结果不是退款，是维修或换新",
+          "hit": false,
+          "weak": true
+        }
+      ],
+      "forbidden_hit": [],
+      "cite_ok": null,
+      "must_say_ok": null,
+      "ok": null,
+      "expect_refuse": null,
+      "text": "现有资料不足，无法回答这个问题。\n\n关于退换与保修，资料中只涉及以下内容，且均不足以说明“质量问题的退换窗口”与“保修期”是否相同：\n\n- 有一份尚未生效的加拿大站草案，其中提到“无理由退货”拟为 21 个自然日，并明确说明该数值只是计划值、尚未确认；这属于无理由退货，并非质量问题退换 [4]。\n- 另有一份 2023 年存档，其中只说明退款到账时效及跨境延迟、信息有误、部分退款、多笔退款等情形，不涉及退换窗口或保修期 [1]。\n\n资料中没有关于“质量问题退换窗口”的规则，也没有任何关于“保修期”的说明，因此无法判断二者是否为同一概念。建议直接向客服确认，或查阅退换货政策与保修条款的正式文件。"
+    }
+  ]
+}

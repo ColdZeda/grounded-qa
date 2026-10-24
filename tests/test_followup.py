@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from app.rag.followup import MAX_FOLLOWUP_CHARS, is_followup, retrieval_query
+from app.rag.followup import MAX_FOLLOWUP_CHARS, is_followup, previous_question, retrieval_query
 
 HISTORY = [
     {"role": "user", "content": "退货运费谁出"},
@@ -80,3 +80,47 @@ def test_is_followup_matches_what_retrieval_query_does() -> None:
     assert is_followup("德国呢", HISTORY) is True
     assert is_followup("保修多久", HISTORY) is False
     assert is_followup("德国呢", ()) is False
+
+
+# ---------------------------------------------------------------- 连续短句累积（P1-⑧）
+
+
+def test_chain_of_followups_keeps_looking_back() -> None:
+    """连着追问时**继续往前找**那句真正带话题的问句。
+
+    📌 只拼紧邻那一句会怎样：「退货运费谁出」→「德国呢」→「那法国呢」，
+       第三句的检索 query 就成了「德国呢 那法国呢」—— 里面**一个政策词都没有**，
+       等于没拼（而用户看到的仍是一条"看起来正常"的回答）。
+    """
+    history = [
+        {"role": "user", "content": "退货运费谁出"},
+        {"role": "assistant", "content": "无理由退货由顾客承担原价运费。"},
+        {"role": "user", "content": "德国呢"},
+        {"role": "assistant", "content": "德国站同样由顾客承担。"},
+    ]
+    assert retrieval_query("那法国呢", history) == "退货运费谁出 那法国呢"
+
+
+def test_short_but_self_contained_previous_question_is_not_skipped() -> None:
+    """短 ≠ 空。「能退款吗」虽然只有 5 个字，但**自己能独立成意**，
+    跳过它会把检索引到更早、已经跑偏的话题上。"""
+    history = [{"role": "user", "content": "能退款吗"}]
+    assert retrieval_query("这个呢", history) == "能退款吗 这个呢"
+
+
+def test_previous_question_is_empty_when_nothing_is_merged() -> None:
+    """界面靠它决定 chip 亮不亮 —— 不该拼的时候必须是空串。"""
+    assert previous_question("保修多久", HISTORY) == ""
+    assert previous_question("德国呢", ()) == ""
+    assert previous_question("德国呢", HISTORY) == "退货运费谁出"
+
+
+def test_previous_question_and_retrieval_query_never_disagree() -> None:
+    """⚠️ chip 亮 ⟺ 检索真的被改写过。
+
+    两者共用同一个判断（`previous_question` 是 `retrieval_query` 的上游）——
+    这条测试就是钉住这件事：哪天有人只改了一处，这里会立刻红。
+    """
+    for question in ("德国呢", "保修多久", "这个能退吗", "那法国呢", "它坏了怎么办"):
+        merged = previous_question(question, HISTORY)
+        assert bool(merged) is (retrieval_query(question, HISTORY) != question)

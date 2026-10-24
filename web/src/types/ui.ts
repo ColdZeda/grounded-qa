@@ -42,4 +42,11 @@ export interface UiMessage {
    * ⚠️ 这个**任何档位都要显示**：不说的话，用户会以为我们看过这张图了。
    */
   imageError?: string | null
+  /**
+   * 用户消息：这一问的**检索**并进了上一轮的哪句问句（`sources.followup_prev` /
+   * `meta.followup_prev`）。空 = 没合并。
+   * ⚠️ 只在**详细**档显示 —— 它是"我们内部怎么检索的"，终端用户看到只会困惑
+   *    （他明明只打了一句「德国呢」）。
+   */
+  followupPrev?: string | null
 }

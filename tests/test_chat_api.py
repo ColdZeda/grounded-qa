@@ -519,3 +519,47 @@ async def test_overlong_question_is_rejected(
         await response.aread()
 
     assert response.status_code == 422
+
+
+# ------------------------------------------------------------
+# 短追问改写（v1.4 C1' / 走查 P1-⑧）
+# ------------------------------------------------------------
+
+
+async def test_short_followup_says_what_it_merged(
+    client: AsyncClient, app: Any, make_account, login
+) -> None:
+    """短追问要**说清楚并入了哪一句**，两处都要：
+
+    · `sources` 事件（`followup_prev`）—— 刚问完就能在界面上看到 chip；
+    · **用户消息的 `meta`** —— 刷新页面后还在（用户"想看出有没有生效"往往在事后）。
+
+    ⚠️ 用空知识库就够：`sources` 事件在拒答时也照发，而 `meta` 在检索之前就写好了。
+    """
+    app.dependency_overrides[get_clients] = lambda: (FakeChat(), None, None)
+    account = await make_account()
+    token = await login(account.email, account.password)
+    conversation = await _new_conversation(client, token)
+
+    # ① 先问一句有实质内容的话（它自己不该被改写）
+    status, first = await _ask(client, token, conversation["id"], "退货运费谁出")
+    assert status == 200
+    assert "followup_prev" not in events_of(first, "sources")[0]
+
+    # ② 再追一句「德国呢」—— 它自己检索不到东西，必须并入上一轮
+    _status, second = await _ask(client, token, conversation["id"], "德国呢")
+    assert events_of(second, "sources")[0]["followup_prev"] == "退货运费谁出"
+
+    # ③ 刷新（重新拉消息）后 chip 的依据还在 = 落库了
+    resp = await client.get(
+        f"{PREFIX}/conversations/{conversation['id']}/messages",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    users = [m for m in resp.json() if m["role"] == "user"]
+    assert users[-1]["content"] == "德国呢"
+    assert users[-1]["meta"]["followup_prev"] == "退货运费谁出"
+    # ⚠️ 落库的 `content` 永远是**用户原话** —— 改写只进检索，不许混进这条
+    assert "退货运费谁出 德国呢" not in users[-1]["content"]
+    # 第一句没有被改写 → 它的 meta 里没有这个键（不是 `None`，是压根没有）
+    assert "followup_prev" not in (users[0]["meta"] or {})
