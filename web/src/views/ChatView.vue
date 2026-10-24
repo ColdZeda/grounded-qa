@@ -18,6 +18,18 @@ import { createConversation, getConversation, listMessages } from '@/api/convers
 import { IMAGE_ACCEPT, describeImageProblem, primeImageUrl, uploadImage } from '@/api/images'
 import type { MessageOut } from '@/types/api'
 import type { UiMessage } from '@/types/ui'
+import { detailLevel, setDetailLevel } from '@/stores/prefs'
+
+/**
+ * 详细程度两档（设计理由 `architecture.md` §9.19）。
+ *
+ * ⚠️ 别把"简洁"理解成"给客户看所以藏来源" —— **藏的是分数，不是来源**。
+ *    「这条来自《退款政策》」是建立信任的东西；「精排分 0.466」才是实现细节。
+ */
+const DETAIL_LEVELS = [
+  { value: 'detailed', label: '详细', hint: '显示分数与口径 —— 给开发、评测、面试演示' },
+  { value: 'concise', label: '简洁', hint: '隐藏分数，只留来源 —— 给终端用户' },
+] as const
 
 const props = defineProps<{ id?: string }>()
 const router = useRouter()
@@ -414,6 +426,25 @@ onBeforeUnmount(() => {
       <button class="btn btn--ghost btn--sm" type="button" @click="router.push({ name: 'chat-new' })">
         ＋ 新会话
       </button>
+      <!--
+        详细程度开关**只属于会话页**（2026-10-24 走查结论）：
+        它只影响三样东西 —— 消息里的置信度、来源卡片的精排分、读图结果，
+        放在全局顶栏属于位置错配（在别的页面点它，什么都不会变）。
+      -->
+      <div class="detail" role="group" aria-label="详细程度">
+        <button
+          v-for="level in DETAIL_LEVELS"
+          :key="level.value"
+          type="button"
+          class="detail__btn"
+          :class="{ 'detail__btn--on': detailLevel === level.value }"
+          :title="level.hint"
+          :aria-pressed="detailLevel === level.value"
+          @click="setDetailLevel(level.value)"
+        >
+          {{ level.label }}
+        </button>
+      </div>
     </AppHeader>
 
     <main ref="scroller" class="stream" @scroll.passive="onScroll">
@@ -521,6 +552,30 @@ onBeforeUnmount(() => {
   font-size: 0.9rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 详细程度：两格分段开关。刻意做得不显眼 —— 它是设置，不是主操作。
+   ⚠️ 只出现在会话页：它只影响消息里的置信度 / 来源精排分 / 读图结果。 */
+.detail {
+  display: flex;
+  flex-shrink: 0;
+  margin-left: auto;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.detail__btn {
+  padding: 4px 10px;
+  border: none;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.detail__btn--on {
+  background: var(--primary);
+  color: #fff;
 }
 
 .stream {

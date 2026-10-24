@@ -45,6 +45,15 @@ function kindHint(kind: string): string {
 
 <template>
   <div class="citations">
+    <!--
+      「简洁」档藏的是分数（不是来源），但**必须说出来** —— 否则用户点了开关
+      会觉得"什么也没变"（2026-10-24 走查的原话）。
+      ⚠️ `isDetailed()` 必须是**函数调用**（裸标识符会被编译器常量折叠）。
+    -->
+    <p v-if="!isDetailed()" class="citations__hint">
+      分数已隐藏（切到「详细」可看精排分与口径）
+    </p>
+
     <div v-for="cite in citations" :key="cite.chunk_id" class="cite" :class="{ 'cite--active': cite.index === activeIndex }">
       <div class="cite__head">
         <span class="cite__index">[{{ cite.index }}]</span>
@@ -68,6 +77,12 @@ function kindHint(kind: string): string {
   display: grid;
   gap: 8px;
   margin-top: 10px;
+}
+
+.citations__hint {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 0.75rem;
 }
 
 .cite {
