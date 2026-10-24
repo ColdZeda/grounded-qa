@@ -17,9 +17,14 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, SessionDep
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.security import (
+    PasswordTooLongError,
+    create_access_token,
+    hash_password,
+    verify_password,
+)
 from app.db.models.user import User
-from app.schemas.auth import TokenOut, UserOut
+from app.schemas.auth import PasswordChange, TokenOut, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -79,3 +84,42 @@ async def read_me(current_user: CurrentUser) -> User:
         页面加载时调一次，401 就去登录页，200 就拿到 `role` 决定显示不显示管理入口。
     """
     return current_user
+
+
+@router.post(
+    "/change-password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="改自己的密码（需验旧密码）",
+)
+async def change_password(
+    payload: PasswordChange,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> None:
+    """改密码（走查阶段 P0-②）。
+
+    ⚠️ **必须验旧密码**：token 泄露时，攻击者不该能直接把密码换掉把主人锁在门外。
+    ⚠️ 旧密码错 → **400**，不是 401：401 会被前端的"token 过期"钩子接走、直接踢去登录页，
+       而这里真正的问题是"你填的旧密码不对"，用户应该留在原地重填。
+    ⚠️ 改完**不吊销已发出的 token**（JWT 无状态，要吊销得维护名单，属另一件事）——
+       这是已知限制，写在这里免得被当成 bug。
+    """
+    verified = await run_in_threadpool(
+        verify_password, payload.old_password, current_user.hashed_password
+    )
+    if not verified:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="原密码不正确")
+
+    if payload.old_password == payload.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能与旧密码相同"
+        )
+
+    try:
+        hashed = await run_in_threadpool(hash_password, payload.new_password)
+    except PasswordTooLongError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    current_user.hashed_password = hashed
+    session.add(current_user)
+    await session.commit()

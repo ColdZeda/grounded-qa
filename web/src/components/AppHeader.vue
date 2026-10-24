@@ -91,7 +91,10 @@ function logout(): void {
     </div>
 
     <div class="who">
-      <span class="email" :title="email">{{ email }}</span>
+      <!-- 点邮箱进「个人信息」：那里能看身份、改密码（走查 P0-②） -->
+      <RouterLink class="email" :title="`${email} · 个人信息`" :to="{ name: 'profile' }">
+        {{ email }}
+      </RouterLink>
       <span class="role">{{ roleLabel }}</span>
       <button class="btn btn--ghost btn--sm" type="button" @click="logout">退出</button>
     </div>
@@ -200,6 +203,12 @@ function logout(): void {
   font-size: 0.875rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-decoration: none;
+}
+
+.email:hover {
+  color: var(--primary);
+  text-decoration: underline;
 }
 
 .role {

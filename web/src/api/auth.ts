@@ -1,6 +1,6 @@
 /** 鉴权接口（对应 `app/api/auth.py`）。 */
 
-import { apiJson } from './client'
+import { apiFetch, apiJson } from './client'
 import type { TokenOut, UserOut } from '@/types/api'
 
 /**
@@ -30,4 +30,22 @@ export async function login(email: string, password: string): Promise<TokenOut> 
  */
 export function fetchMe(): Promise<UserOut> {
   return apiJson<UserOut>('/auth/me')
+}
+
+/**
+ * 改自己的密码（走查阶段 P0-②）。成功返回 **204**（无 body）。
+ *
+ * ⚠️ 旧密码错是 **400** 不是 401 —— 401 会被全局钩子接走、把人踢去登录页，
+ *     而用户只是这一栏填错了。
+ * ⚠️ 改完**不会**让已发出的 token 失效（JWT 无状态），所以当前会话还能继续用。
+ */
+export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
+  // ⚠️ 用 `apiFetch` 而不是 `apiJson`：成功是 **204 无 body**，
+  //    `resp.json()` 会直接抛 SyntaxError（"Unexpected end of JSON input"）。
+  //    `apiFetch` 已经统一处理了非 2xx（抛 ApiError），这里只需要"不解析响应体"。
+  await apiFetch('/auth/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+  })
 }

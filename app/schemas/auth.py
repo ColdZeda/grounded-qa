@@ -44,3 +44,15 @@ class UserOut(BaseModel):
     email: str
     role: UserRole
     tenant_id: uuid.UUID
+
+
+class PasswordChange(BaseModel):
+    """改自己的密码（走查阶段 P0-②）。
+
+    ⚠️ 长度校验的取舍与 `LoginRequest` 一致：`max_length` 用**字符数**兜底，
+       真正的上限是 **bcrypt 的 72 字节** —— 由 `hash_password` 明确拒绝，
+       绝不静默截断（截断等于"后半段密码不参与校验"）。
+    """
+
+    old_password: str = Field(min_length=1, max_length=64, description="当前密码")
+    new_password: str = Field(min_length=8, max_length=64, description="新密码（≥8 位）")

@@ -66,6 +66,12 @@ const router = createRouter({
       meta: { adminOnly: true },
     },
     {
+      // 个人信息 ＋ 改密码（走查阶段 P0-②）。任何登录用户都能进 —— 它只动自己。
+      path: '/profile',
+      name: 'profile',
+      component: () => import('@/views/ProfileView.vue'),
+    },
+    {
       path: '/reports',
       name: 'reports',
       component: () => import('@/views/ReportsView.vue'),
