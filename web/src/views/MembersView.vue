@@ -30,7 +30,7 @@ const form = ref<{ email: string; password: string; role: UserRole }>({
 
 /** 密码 <8 位前端先拦一次（后端 pydantic 也会 422，但别让用户白等一轮）。 */
 const canSubmit = computed(
-  () => form.value.email.includes('@') && form.value.password.length >= 8 && !creating.value,
+  () => form.value.email.trim().length > 0 && form.value.password.length >= 8 && !creating.value,
 )
 
 /**
@@ -40,14 +40,16 @@ const canSubmit = computed(
  *    点不动，而**界面上一个字都没解释**。用户只会以为"这功能坏了"。
  *    一个点不动的按钮不是"防呆"，是"卡住了还不知道为什么"。
  * ⚠️ 空表单（刚进页面）不提示 —— 那时还没开始填，弹红字是噪音。
+ * ⚠️ **2026-10-25 起不再要求邮箱**（用户定：内部工具不需要真邮箱，`zhangsan` 就该能建）。
+ *    唯一性仍然要，登录框填的就是它。
  */
 const blockedReason = computed(() => {
   const email = form.value.email.trim()
   const password = form.value.password
   if (!email && !password) return ''
-  if (email && !email.includes('@')) return '邮箱要写成 name@example.com 这样（少了 @ 后面的域名）'
+  if (email && /\s/.test(email)) return '账号里不能有空格'
   if (password && password.length < 8) return `密码至少 8 位（现在 ${password.length} 位）`
-  if (!email) return '还没填邮箱'
+  if (!email) return '还没填账号'
   if (!password) return '还没填密码'
   return ''
 })
@@ -109,12 +111,12 @@ onMounted(load)
         <h3 class="card__title">新建成员</h3>
         <form class="form" @submit.prevent="submit">
           <label class="form__field">
-            <span>邮箱</span>
+            <span>账号</span>
             <input
               v-model="form.email"
               class="field"
-              type="email"
-              placeholder="someone@company.com"
+              type="text"
+              placeholder="zhangsan 或 zhangsan@company.com"
               autocomplete="off"
               :disabled="creating"
             />

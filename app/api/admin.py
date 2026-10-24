@@ -24,9 +24,12 @@ from app.schemas.user import UserCreate, UserSummary
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-#: 极简邮箱校验。⚠️ 刻意不引 `email-validator`（多一个依赖）——
-#: 这里挡的是"明显不是邮箱"的输入（前端表单会先拦），**真正的唯一性判据是数据库约束**。
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+#: 账号只做"最松"的校验：**非空、不含空白、≤255**。
+#: ⚠️ 2026-10-25 走查用户定：内部工具不需要真实邮箱，`zhangsan` 就该能建。
+#:    以前这里按邮箱正则挡（`xxx@yyy.zzz`），前端按钮也因为"没 @ 就置灰"而点不动 ——
+#:    看起来像功能坏了。**要邮箱 / 手机号是以后的事**（候选池 W5）。
+#: ⚠️ 放宽的是"形状"，不是"必须唯一" —— 唯一性仍然由下面的查重 + 数据库约束兜底。
+_HAS_SPACE = re.compile(r"\s")
 
 
 @router.get("/tenant", response_model=TenantOut, summary="当前租户信息（仅管理员）")
@@ -81,15 +84,20 @@ async def create_user(
     ⚠️ bcrypt 是 CPU 密集的（cost=12 时几十~上百毫秒），**必须丢进线程池**，
         否则会卡住事件循环 —— 登录接口就是这么做的（`auth.py`）。
     """
+    #: 账号（可以是邮箱，也可以就是个用户名）。**统一小写**，和登录侧同一口径。
     email = payload.email.strip().lower()
-    if not _EMAIL_RE.match(email):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱格式不正确")
+    if not email or _HAS_SPACE.search(email):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="账号不能为空，也不能含空格"
+        )
+    if len(email) > 255:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="账号太长（≤255 字符）")
 
     # ⚠️ 用**裸 select** 查重、而不是仓储层：`email` 是全局唯一，
     #    用仓储层会被注入 `tenant_id` 条件 → 查不出"别的租户已占用同一个邮箱"，
     #    最后撞在数据库唯一约束上变成 500。这里只查"是否已被谁占用"，不返回任何用户数据。
     if await session.scalar(select(User.id).where(User.email == email)) is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该邮箱已被使用")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该账号已被使用")
 
     try:
         hashed = await run_in_threadpool(hash_password, payload.password)

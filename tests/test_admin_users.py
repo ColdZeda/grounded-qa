@@ -128,21 +128,49 @@ async def test_password_over_bcrypt_limit_is_400(
     assert "72" in resp.text
 
 
-async def test_malformed_email_is_400(
+async def test_plain_username_is_accepted(
+    client: AsyncClient,
+    make_account,
+    login,
+    session: AsyncSession,
+) -> None:
+    """**普通用户名也能建成员**（不必是邮箱）。
+
+    ⚠️ 走查 2026-10-25 用户定的：内部工具不需要真实邮箱，`zhangsan` 就该能建。
+        以前这里会 400（"邮箱格式不正确"），而前端按钮又是灰的 —— 看起来像功能坏了。
+    """
+    admin = await make_account(role=UserRole.ADMIN, label="adm")
+    token = await login(admin.email, admin.password)
+    username = f"zhangsan{_unique_email().split('@')[0][-6:]}"
+
+    resp = await client.post(
+        f"{PREFIX}/admin/users",
+        json={"email": username, "password": NEW_PASSWORD},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["email"] == username
+    # 建完就能用它登录（登录框那个字段是同一个）
+    assert await login(username, NEW_PASSWORD)
+    await _cleanup(session, username)
+
+
+async def test_blank_account_is_400(
     client: AsyncClient,
     make_account,
     login,
 ) -> None:
+    """空白 / 带空格的账号仍然要挡掉 —— 放宽的是"形状"，不是"必须非空"。"""
     admin = await make_account(role=UserRole.ADMIN, label="adm")
     token = await login(admin.email, admin.password)
 
-    resp = await client.post(
-        f"{PREFIX}/admin/users",
-        json={"email": "not-an-email", "password": NEW_PASSWORD},
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    assert resp.status_code == 400
+    for bad in ("   ", "zhang san"):
+        resp = await client.post(
+            f"{PREFIX}/admin/users",
+            json={"email": bad, "password": NEW_PASSWORD},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code in (400, 422), (bad, resp.text)
 
 
 async def test_short_password_is_rejected_by_schema(

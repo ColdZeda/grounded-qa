@@ -36,6 +36,8 @@ class UserCreate(BaseModel):
        在这里用 `max_length` 反而会算错 —— 让 `PasswordTooLongError` 兜底。
     """
 
-    email: str = Field(min_length=3, max_length=255, description="登录邮箱，全局唯一")
+    email: str = Field(
+        min_length=1, max_length=255, description="登录账号（邮箱或用户名都行），全局唯一"
+    )
     password: str = Field(min_length=8, description="明文密码（≥8 位；服务端只存哈希）")
     role: UserRole = Field(default=UserRole.MEMBER, description="member（默认）/ admin")
