@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import io
+import os
 import uuid
 from pathlib import Path
 
@@ -52,6 +53,17 @@ def _png(width: int = 64, height: int = 48, color: str = "white") -> bytes:
 def _jpeg(width: int = 3200, height: int = 2400) -> bytes:
     buffer = io.BytesIO()
     PILImage.new("RGB", (width, height), "gray").save(buffer, format="JPEG", quality=90)
+    return buffer.getvalue()
+
+
+def _noisy_png(size: int = 1500) -> bytes:
+    """一张**压不小**的图：随机噪声连 PNG 都压不动（1500² ≈ 6.7 MB）。
+
+    ⚠️ 必须用噪声：纯色图不管多大，PNG 都能压到几 KB，"3~8 MB 之间能不能过"就测不到。
+    """
+    raw = os.urandom(size * size * 3)
+    buffer = io.BytesIO()
+    PILImage.frombytes("RGB", (size, size), raw).save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -127,6 +139,32 @@ async def test_upload_enforces_size_limit(
 
     resp = await _upload(client, account, token, data=_png(200, 200))
     assert resp.status_code == 413, resp.text
+
+
+def test_image_limit_default_is_8mb() -> None:
+    """上限默认 **8 MB**（走查 P1-⑦ 从 3 MB 抬上来）。
+
+    ⚠️ 前端 `web/src/api/images.ts` 的 `IMAGE_MAX_BYTES` 必须和它一致；
+        两边都是 8 MB 时，用户看到的第一句话才是准的。
+    """
+    assert get_settings().image_max_bytes == 8 * 1024 * 1024
+
+
+async def test_upload_accepts_image_above_old_3mb_limit(
+    client: AsyncClient, make_account: object, login: object
+) -> None:
+    """3~8 MB 的图**现在收得下**（以前会被 413 挡回去）。"""
+    raw = _noisy_png()
+    assert 3 * 1024 * 1024 < len(raw) <= 8 * 1024 * 1024, (
+        f"这张测试图 {len(raw)} 字节不在新旧上限之间，测不到想测的东西"
+    )
+
+    account: Account = await make_account(label="six")  # type: ignore[operator]
+    token = await login(account.email, account.password)  # type: ignore[operator]
+
+    resp = await _upload(client, account, token, data=raw)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["bytes"] == len(raw)
 
 
 async def test_get_image_roundtrip(

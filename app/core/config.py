@@ -176,13 +176,17 @@ class Settings(BaseSettings):
     max_chunks_per_document: int = 400
 
     # ---------- 提问带图（query 侧多模态）----------
-    # 单张图上限 **3 MB**。
-    # ⚠️ 必须小于 nginx 的 `client_max_body_size`（`deploy/nginx/grounded-qa.conf` 是 4m）——
+    # 单张图上限 **8 MB**（2026-10-24 走查 P1-⑦ 从 3 MB 抬上来）。
+    # ⚠️ 正常路径根本到不了这个数：前端会先 canvas 压到**长边 ≤1600 / JPEG 0.85**，
+    #    一张 6 MB 的手机截图传上来通常只有几百 KB。8 MB 是给"前端压不动"留的口子
+    #    （HEIC、超大拼接图、canvas 失败）—— 与其让用户自己去缩图，不如收下来。
+    # ⚠️ 必须小于 nginx 的 `client_max_body_size`（`deploy/nginx/grounded-qa.conf` 现在 12m）——
     #    超了会被 nginx 挡下并返回一个 **HTML 错误页**，前端解析不了，
     #    症状是"本地传得上去、部署后传不上"。这是我们刻意留的余量。
-    image_max_bytes: int = 3 * 1024 * 1024
+    # ⚠️ **改这个数必须同步改 nginx 那一行**（它是打进 nginx 镜像的，改完要 push 才会生效）。
+    image_max_bytes: int = 8 * 1024 * 1024
     #: 送给读图模型的那份副本：长边上限 / JPEG 质量 / 体积上限。
-    #: ⚠️ 为什么要缩：3 MB 的图 base64 之后约 4 MB 请求体 —— 慢，且视觉 token 按像素涨。
+    #: ⚠️ 为什么要缩：原图最大 8 MB，base64 之后请求体更大 —— 慢，且视觉 token 按像素涨。
     #: ⚠️ 为什么**不无脑转 JPEG**：截图 / 单据上的**细笔画文字**在 JPEG 里会出现振铃，
     #:    "1/7""8/B" 容易糊。所以 PNG 一律保留 PNG（无损），只有照片类才转 JPEG。
     image_model_max_edge: int = 1600
@@ -342,6 +346,19 @@ class Settings(BaseSettings):
     #: 搬运工的轮询周期（秒）。比抓取周期长：告警状态本来以分钟计。
     alert_poll_interval_s: int = 60
 
+    #: ⚠️ **回环主机名统一换成字面量 `127.0.0.1`。**
+    #: Windows 上 `localhost` **先解析成 `::1`**，而 Docker 只把端口发布在 IPv4
+    #: （`127.0.0.1:55432`）上 —— asyncpg 去连 `::1` 时 SYN 没人应答，连接就停在 `SynSent`
+    #: 好几轮重传（**看起来就是 `pytest` 跑着跑着不动了，一行报错都没有**）。
+    #: 换成字面量还能顺手省掉一次 DNS。
+    @classmethod
+    def _dsn_host(cls, host: str) -> str:
+        # ⚠️ 集合写成局部量而不是类属性：pydantic v2 会把以 `_` 开头的**无注解**类属性
+        #    转成 `ModelPrivateAttr`，`in cls._X` 会直接 `TypeError`（这里踩过一次）。
+        if host.strip().lower() in {"localhost", "::1", "[::1]"}:
+            return "127.0.0.1"
+        return host
+
     @property
     def postgres_effective_port(self) -> int:
         """实际该连哪个端口：**容器内 5432，宿主机 55432**。
@@ -360,13 +377,13 @@ class Settings(BaseSettings):
         """SQLAlchemy 异步连接串（asyncpg 驱动）。"""
         return (
             f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_effective_port}/{self.postgres_db}"
+            f"@{self._dsn_host(self.postgres_host)}:{self.postgres_effective_port}/{self.postgres_db}"
         )
 
     @property
     def redis_url(self) -> str:
         """Redis 连接串。"""
-        return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
+        return f"redis://{self._dsn_host(self.redis_host)}:{self.redis_port}/{self.redis_db}"
 
 
 @lru_cache(maxsize=1)

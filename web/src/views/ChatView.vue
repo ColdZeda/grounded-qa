@@ -15,7 +15,13 @@ import MessageItem from '@/components/MessageItem.vue'
 import { ApiError } from '@/api/client'
 import { streamAnswer } from '@/api/chat'
 import { createConversation, getConversation, listMessages } from '@/api/conversations'
-import { IMAGE_ACCEPT, describeImageProblem, primeImageUrl, uploadImage } from '@/api/images'
+import {
+  IMAGE_ACCEPT,
+  describeImageProblem,
+  primeImageUrl,
+  squeezeForUpload,
+  uploadImage,
+} from '@/api/images'
 import type { MessageOut } from '@/types/api'
 import type { UiMessage } from '@/types/ui'
 import { detailLevel, setDetailLevel } from '@/stores/prefs'
@@ -55,18 +61,27 @@ const stick = ref(true)
  * 待发送的那张图。
  *
  * ⚠️ **选好就先本地预览**（`URL.createObjectURL(file)`），不等上传 ——
- *    上传 3 MB 在弱网要几秒，用户需要立刻看到"我选的就是这张"。
+ *    上传在弱网要几秒，用户需要立刻看到"我选的就是这张"。
  * ⚠️ 上传是**先落库**再提问的（两步）：图要能长期留着（刷新还得看得见），
  *    所以它天然属于"先存好、再引用"，不能等发消息时才一并塞过去。
+ * ⚠️ `source` 和 `file` 是**两个**东西：前端会先压一遍（`squeezeForUpload`），
+ *    `file` 是压完要上传的那个。重试必须从 `source` 重来 —— 在压过的 JPEG 上
+ *    再压一次只会越压越糊，而且没有任何收益。
  */
 interface Attachment {
+  /** 用户最初选的那个文件。 */
+  source: File
+  /** 真正要上传的字节（压成功就是 JPEG，没压等于 `source`）。 */
   file: File
   /** 本地预览 URL。上传成功后也用它当缩略图，省一次"下载自己刚传的图"。 */
   previewUrl: string
   /** 上传成功后的 id。`null` = 还不能发。 */
   imageId: string | null
-  status: 'uploading' | 'ready' | 'error'
+  /** `preparing` = 正在压缩（还没开始传）。 */
+  status: 'preparing' | 'uploading' | 'ready' | 'error'
   error: string
+  /** 压缩结果的一行说明（"3.2 MB → 410 KB"）。没压就是空串。 */
+  note: string
 }
 
 const attach = ref<Attachment | null>(null)
@@ -74,7 +89,18 @@ const attach = ref<Attachment | null>(null)
 const attachNotice = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 
-const uploading = computed(() => attach.value?.status === 'uploading')
+/**
+ * 给每次附件操作发一个递增号。
+ *
+ * ⚠️ 压缩 ＋ 上传加起来可能有几秒，这期间用户完全可能**移除**这张图或**换一张**。
+ *    用号牌判"我还是不是当前那次"，比拿 `previewUrl` 互相比更稳 ——
+ *    压缩会把 `previewUrl` 换掉，旧的比对方式在这一步之后就失效了。
+ */
+let attachToken = 0
+
+const uploading = computed(
+  () => attach.value?.status === 'preparing' || attach.value?.status === 'uploading',
+)
 const canSend = computed(() => draft.value.trim().length > 0 && !uploading.value)
 
 const phaseLabel = computed(() => {
@@ -99,7 +125,7 @@ function onFileChange(event: Event): void {
   if (file) void attachFile(file)
 }
 
-/** 本地预检 + 上传。任意一步失败都留在界面上，不静默吞掉。 */
+/** 本地预检 + 压缩 + 上传。任意一步失败都留在界面上，不静默吞掉。 */
 async function attachFile(file: File): Promise<void> {
   attachNotice.value = ''
 
@@ -109,27 +135,69 @@ async function attachFile(file: File): Promise<void> {
     return
   }
 
-  const previewUrl = URL.createObjectURL(file)
-  attach.value = { file, previewUrl, imageId: null, status: 'uploading', error: '' }
+  const token = (attachToken += 1)
+  const originalUrl = URL.createObjectURL(file)
 
+  /**
+   * ⚠️ 一律**换一个新对象**，不原地改字段。
+   *    `ref({...})` 读出来的是内部 Proxy，但手里若留着当初那个普通对象去 `.status = …`，
+   *    界面一个字都不会动、也不报错（`architecture.md` §9.13 那个坑）。
+   */
+  const patch = (next: Partial<Attachment>): void => {
+    if (!attach.value) return
+    attach.value = { ...attach.value, ...next }
+  }
+
+  attach.value = {
+    source: file,
+    file,
+    previewUrl: originalUrl,
+    imageId: null,
+    status: 'preparing',
+    error: '',
+    note: '',
+  }
+
+  // ① 压缩。⚠️ 压不动就**照原图传**：让后端给出权威的报错（"格式不支持"这种话
+  //    只有它知道得最准），而不是在这里编一句"压缩失败，无法发送"。
+  let toSend = file
   try {
-    const image = await uploadImage(file)
-    // ⚠️ 等上传的这段时间里用户可能已经移除了这张图、或换了一张 ——
-    //    那就别把结果挂到别的东西上（否则缩略图会对不上）。
-    if (attach.value?.previewUrl !== previewUrl) return
-    attach.value.imageId = image.id
-    attach.value.status = 'ready'
+    const squeezed = await squeezeForUpload(file)
+    if (token !== attachToken) return
+    if (squeezed) {
+      toSend = squeezed.file
+      const squeezedUrl = URL.createObjectURL(squeezed.file)
+      patch({ file: squeezed.file, previewUrl: squeezedUrl, note: squeezed.note })
+      // ⚠️ 先换 `src` 再回收旧 URL：反过来的话，`<img>` 还挂着已经死掉的 blob，
+      //    会闪一下碎图标（虽然只有一个微任务，但很难看）。
+      URL.revokeObjectURL(originalUrl)
+    }
+  } catch {
+    // 解不开 / canvas 不给 —— 保持原图
+  }
+
+  if (token !== attachToken) return
+  patch({ status: 'uploading' })
+
+  // ② 上传
+  try {
+    const image = await uploadImage(toSend)
+    if (token !== attachToken) return
+    patch({ imageId: image.id, status: 'ready' })
     // 让消息里的缩略图直接用这张本地预览：图就在眼前，没必要再下一遍。
-    primeImageUrl(image.id, previewUrl)
+    if (attach.value) primeImageUrl(image.id, attach.value.previewUrl)
   } catch (err) {
-    if (attach.value?.previewUrl !== previewUrl) return
-    attach.value.status = 'error'
-    attach.value.error =
-      err instanceof ApiError ? err.message : `上传失败：${(err as Error).message}`
+    if (token !== attachToken) return
+    patch({
+      status: 'error',
+      error: err instanceof ApiError ? err.message : `上传失败：${(err as Error).message}`,
+    })
   }
 }
 
 function removeAttach(): void {
+  // ⚠️ 号牌要进位：不然还在压/还在传的那次回来时会把结果挂到"下一张图"上
+  attachToken += 1
   attach.value = null
   attachNotice.value = ''
 }
@@ -137,7 +205,8 @@ function removeAttach(): void {
 /** 上传失败（限流 / 网络抖一下）后重试，不用让用户重新选一遍图。 */
 function retryAttach(): void {
   const current = attach.value
-  if (current) void attachFile(current.file)
+  // ⚠️ 从 `source` 重来，不传压过的 `file`
+  if (current) void attachFile(current.source)
 }
 
 /**
@@ -486,14 +555,27 @@ onBeforeUnmount(() => {
         @change="onFileChange"
       />
 
-      <p v-if="attachNotice" class="alert alert--warn attach-notice">{{ attachNotice }}</p>
+      <p v-if="attachNotice" class="alert alert--warn attach-notice">
+        <span class="attach-notice__text">{{ attachNotice }}</span>
+        <button
+          class="attach-notice__close"
+          type="button"
+          title="关掉这条提示"
+          aria-label="关掉这条提示"
+          @click="attachNotice = ''"
+        >
+          ×
+        </button>
+      </p>
 
       <div v-if="attach" class="attach">
         <img class="attach__thumb" :src="attach.previewUrl" alt="待发送的图片" />
         <span class="attach__state">
-          <template v-if="attach.status === 'uploading'">上传中…</template>
+          <template v-if="attach.status === 'preparing'">正在压缩图片…</template>
+          <template v-else-if="attach.status === 'uploading'">上传中…</template>
           <template v-else-if="attach.status === 'ready'">已就绪，发送时一起提交</template>
           <template v-else>{{ attach.error }}</template>
+          <span v-if="attach.note" class="attach__note">（{{ attach.note }}）</span>
         </span>
         <button
           v-if="attach.status === 'error'"
@@ -630,9 +712,34 @@ onBeforeUnmount(() => {
   display: none;
 }
 
+/* 提示条自己带 × ：这类"格式/大小不对"的说明看一遍就够了，
+   但以前它只能等下一次选图才消失，占着地方。 */
 .attach-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   max-width: 820px;
   margin: 0 auto 8px;
+}
+
+.attach-notice__text {
+  flex: 1;
+}
+
+.attach-notice__close {
+  flex-shrink: 0;
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  opacity: 0.65;
+  cursor: pointer;
+}
+
+.attach-notice__close:hover {
+  opacity: 1;
 }
 
 /* 待发送的图：一条细带，不抢输入框的位置 */
@@ -661,6 +768,12 @@ onBeforeUnmount(() => {
   color: var(--text-muted);
   font-size: 0.8rem;
   word-break: break-word;
+}
+
+/* 压缩结果（"3.2 MB → 410 KB"）：让人看得出"这么大也能发了"是压过的功劳 */
+.attach__note {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
 }
 
 .composer__row {

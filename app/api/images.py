@@ -38,7 +38,7 @@ router = APIRouter(prefix="/images", tags=["images"])
     summary="上传一张图（提问时用）",
 )
 async def upload_image(
-    file: Annotated[UploadFile, File(description="PNG / JPEG / WEBP，≤ 3 MB")],
+    file: Annotated[UploadFile, File(description="PNG / JPEG / WEBP，≤ 8 MB")],
     session: SessionDep,
     current_user: CurrentUser,
     redis: LimitsRedisDep,
@@ -47,7 +47,7 @@ async def upload_image(
 
     ⚠️ **限流复用上传那把尺子**（5 次/分钟/用户）：图片和文档一样是"要落盘的东西"，
         再开一个旋钮只会让配置越来越难说清楚。被限流时返回 429 + 剩余秒数。
-    ⚠️ **先限流再读字节**：读 3 MB 的 body 也不便宜，被限流的请求不该让我们先把它读完。
+    ⚠️ **先限流再读字节**：读 8 MB 的 body 也不便宜，被限流的请求不该让我们先把它读完。
     """
     settings = get_settings()
     guard = LimitGuard(redis, settings)
