@@ -59,16 +59,19 @@ async def find_order(
     session: AsyncSession,
     *,
     tenant_id: uuid.UUID,
-    user_id: uuid.UUID,
     order_no: str,
 ) -> Order | None:
-    """按单号查**属于这个用户的**订单。查不到 / 不是本人的 → `None`。
+    """按单号查**本租户内的**订单。查不到 / 不在本租户 → `None`。
 
-    ⚠️ **两道过滤缺一不可**：`tenant_id`（仓储层焊进去的）＋ `user_id`（这里显式加的）。
-        知识库是租户共有的，订单是用户私有的 —— 隔离级别不同，不能照抄。
+    ⚠️ **2026-10-24 决策 D5 改了这里：从"租户 ＋ 用户"放宽到"只按租户"。**
+        原因：Web 端被定为**内部坐席工作台**（顾客侧走飞书）——
+        坐席接电话时手里只有顾客报的单号，让他"只查得到自己的单"等于这个功能没有。
+        📌 所以现在的隔离线是 **租户**：同租户的同事能查同一张单（内部工具，可接受），
+        **跨租户仍然查不到**（`TenantScopedRepository` 把 `WHERE tenant_id = ?` 焊死）。
+        → `..\\plan\\PROJECT-PLAN.md` §12.1；改动影响见 `tests/test_orders.py`。
     """
     repo = TenantScopedRepository(session, tenant_id=tenant_id, model=Order)
-    stmt = repo.select().where(Order.user_id == user_id, Order.order_no == order_no.upper())
+    stmt = repo.select().where(Order.order_no == order_no.upper())
     return await session.scalar(stmt)
 
 
@@ -76,19 +79,20 @@ async def resolve_orders(
     session: AsyncSession,
     *,
     tenant_id: uuid.UUID,
-    user_id: uuid.UUID,
     text: str,
 ) -> list[Order]:
     """从一段文字里捞出能对上的订单（可能 0 条、可能多条）。
 
     用途：① 带图提问时从 `transcription` 里捞 ② 追问时从用户原话里捞。
     两种都便宜 —— **一次数据库查询，不花钱**（贵的是模型调用，不是它）。
+
+    ⚠️ 过滤口径与 `find_order` 一致（**只按租户**，见上面那段说明）。
     """
     candidates = extract_order_candidates(text)
     if not candidates:
         return []
     repo = TenantScopedRepository(session, tenant_id=tenant_id, model=Order)
-    stmt = repo.select().where(Order.user_id == user_id, Order.order_no.in_(candidates))
+    stmt = repo.select().where(Order.order_no.in_(candidates))
     rows = (await session.scalars(stmt)).all()
     # 保持候选顺序，别让数据库的返回顺序影响提示词（那会让同样的输入产生不同的 prompt）。
     by_no = {row.order_no: row for row in rows}

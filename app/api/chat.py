@@ -180,7 +180,9 @@ async def _order_context(
         **当年生效的条款**为准。订单只能在这里查（要 `user_id`），pipeline 只有
         `tenant_id` —— 所以把结果传下去，而不是让 pipeline 自己去查。
     """
-    orders = await resolve_orders(session, tenant_id=user.tenant_id, user_id=user.id, text=text)
+    # ⚠️ 过滤口径：**只按租户**（决策 D5）—— 坐席能查本租户任意单号，
+    #    跨租户仍然查不到。见 `app/orders.py::find_order` 的说明。
+    orders = await resolve_orders(session, tenant_id=user.tenant_id, text=text)
     now = datetime.now(UTC)
     snapshots = [order_snapshot(order, now=now) for order in orders]
     return snapshots, render_order_facts(snapshots), [order.placed_at for order in orders]

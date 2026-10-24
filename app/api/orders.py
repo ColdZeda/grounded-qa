@@ -1,10 +1,11 @@
-"""订单查询 —— **只读、仅本人**。
+"""订单查询 —— **只读、租户内可查**（决策 D5，2026-10-24）。
 
-⚠️ **为什么没有鉴权分级**：订单是用户私有数据，谁登录就看自己的那几单。
-    没有"管理员看全租户订单"这种接口 —— 那属于运营面，本产品不做（`architecture.md` §10）。
+⚠️ **口径变了**：从"只看得到自己的单"放宽到"**本租户内任意单号**"。
+    Web 端定为**内部坐席工作台**（顾客侧走飞书），坐席手里只有顾客报的单号 ——
+    让他只能查自己的单，这个功能就没有意义。→ `..\\plan\\PROJECT-PLAN.md` §12.1。
 
-⚠️ **查不到和不是本人的，返回同一个 404**（`AGENTS.md` §7.1 约定 14）：
-    403 等于告诉对方"这个单号存在，只是不属于你" —— 那就是一个单号枚举器。
+⚠️ **隔离线仍然是租户**：跨租户查不到，且**返回 404 而不是 403**
+    （`AGENTS.md` §7.1 约定 14）—— 403 等于告诉对方"这个单号存在"，那就是枚举器。
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 @router.get(
     "/{order_no}",
     response_model=OrderOut,
-    summary="按单号查订单（只读，仅本人）",
+    summary="按单号查订单（只读，租户内可查）",
 )
 async def get_order(
     order_no: str,
@@ -37,7 +38,6 @@ async def get_order(
     order = await find_order(
         session,
         tenant_id=current_user.tenant_id,
-        user_id=current_user.id,
         order_no=order_no,
     )
     if order is None:

@@ -1,10 +1,11 @@
-"""订单通道：**租户内按用户隔离** ＋ 单号抽取 ＋ 事实卡片。
+"""订单通道：**租户内可查** ＋ 单号抽取 ＋ 事实卡片。
 
 为什么这些用例值得单独写：
 
-    订单是本项目**第一条"用户私有"**的业务数据（知识库是租户共有的）。
-    它一旦漏掉 `user_id` 过滤，症状是"同租户的同事能看到你的单号"——
-    **接口照样 200、页面照样好看**，没有任何报错。这类"静默的越权"只能靠断言钉住。
+    订单是本项目里**唯一带"谁的数据"味道**的业务表。它的隔离口径在 2026-10-24
+    因决策 D5 改过一次（"用户私有" → "租户内可查"，Web 端是内部坐席工作台）。
+    这类口径最容易在重构中**悄悄回退**，而且回退时**接口照样 200、页面照样好看** ——
+    所以两条线都用断言钉住：① 同租户同事能查（坐席视角）② **跨租户必须 404**。
 
 另外两条与模型行为有关的口径也在这里钉：
     ① 单号抽取**只按形态捞**，真伪交给数据库（不是靠正则猜格式）
@@ -21,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from conftest import TEST_BCRYPT_ROUNDS, TEST_PASSWORD, Account
 from httpx import AsyncClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -106,12 +107,15 @@ async def test_order_no_is_case_insensitive(
     assert resp.status_code == 200, resp.text
 
 
-async def test_same_tenant_other_user_gets_404(
+async def test_same_tenant_colleague_can_read_order(
     client: AsyncClient, session: AsyncSession, login: Callable[[str, str], Awaitable[str]]
 ) -> None:
-    """⚠️ **核心越权用例**：同一个租户、同一张订单，换个用户必须 404。
+    """同租户的另一位坐席**能**查到这张单 —— 这是决策 D5 的结果，不是漏了过滤。
 
-    只做租户隔离的话这条会返回 200 —— 那正是"同事能看到你的单号"。
+    ⚠️ 2026-10-24 之前这条是 `assert 404`（"订单是用户私有"）。Web 端定为
+       **内部坐席工作台**之后，口径变成"**租户内可查**"：坐席手里只有顾客报的单号，
+       只能查自己的单等于这个功能没有。
+       真正的隔离线是**租户**（下一条用例钉的就是它）。
     """
     tenant = Tenant(slug=f"share-{uuid.uuid4().hex[:8]}", name="共享租户")
     session.add(tenant)
@@ -127,19 +131,21 @@ async def test_same_tenant_other_user_gets_404(
                 is_active=True,
             )
 
-        owner, intruder = _mk("owner"), _mk("intruder")
-        session.add_all([owner, intruder])
+        owner, colleague = _mk("owner"), _mk("colleague")
+        session.add_all([owner, colleague])
         await session.commit()
 
         await _add_order(session, tenant_id=tenant.id, user_id=owner.id, order_no="SF91001")
 
-        token = await login(intruder.email, TEST_PASSWORD)
+        # 同事（不是下单人）也能查到 —— 内部坐席视角
+        token = await login(colleague.email, TEST_PASSWORD)
         resp = await client.get(
             f"{PREFIX}/orders/SF91001", headers={"Authorization": f"Bearer {token}"}
         )
-        assert resp.status_code == 404, resp.text
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["order_no"] == "SF91001"
 
-        # 反过来：主人自己看得到（证明 404 不是"表里没有"）
+        # 下单人自己当然也看得到
         owner_token = await login(owner.email, TEST_PASSWORD)
         ok = await client.get(
             f"{PREFIX}/orders/SF91001", headers={"Authorization": f"Bearer {owner_token}"}
@@ -282,21 +288,21 @@ async def test_resolve_orders_keeps_candidate_order(session: AsyncSession) -> No
         found = await resolve_orders(
             session,
             tenant_id=tenant.id,
-            user_id=user.id,
             text="先看 SF93001，再看 SF93002",
         )
         assert [row.order_no for row in found] == ["SF93001", "SF93002"]
 
-        # 别人的单号捞不到（同一句文字、换个人）
-        other = await session.scalar(select(User).where(User.tenant_id == tenant.id))
-        assert other is not None
+        # 换一个租户就捞不到（隔离线是租户，不是"是不是下单人"）
+        other_tenant = Tenant(slug=f"oth-{uuid.uuid4().hex[:8]}", name="另一个租户")
+        session.add(other_tenant)
+        await session.commit()
         empty = await resolve_orders(
             session,
-            tenant_id=tenant.id,
-            user_id=uuid.uuid4(),
+            tenant_id=other_tenant.id,
             text="先看 SF93001，再看 SF93002",
         )
         assert empty == []
+        await session.execute(delete(Tenant).where(Tenant.id == other_tenant.id))
     finally:
         await session.execute(delete(Tenant).where(Tenant.id == tenant.id))
         await session.commit()
