@@ -130,15 +130,13 @@ onMounted(load)
 
 <template>
   <div class="shell">
-    <AppHeader>
+    <AppHeader title="运维看板" hint="只读 · 数据来自 Prometheus" tone="slate">
       <button class="btn btn--ghost btn--sm" type="button" :disabled="loading" @click="load">
         刷新
       </button>
     </AppHeader>
 
     <main class="body">
-      <h2 class="title">运维看板 <span class="count">只读 · 数据来自 Prometheus</span></h2>
-
       <p class="hint">
         这一屏是<b>打开页面那一刻</b>去问 Prometheus 的结果，不会自动刷新（点右上角「刷新」）。
         Prometheus 每 30 秒抓一次指标，所以最细的颗粒就是 30 秒 —— 它不是实时监控。
@@ -207,17 +205,6 @@ onMounted(load)
   max-width: 1080px;
   margin: 0 auto;
   padding: 28px 20px 60px;
-}
-
-.title {
-  margin: 0 0 8px;
-  font-size: 1.1rem;
-}
-
-.count {
-  color: var(--text-faint);
-  font-size: 0.8rem;
-  font-weight: 400;
 }
 
 .hint {

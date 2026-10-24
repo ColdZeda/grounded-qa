@@ -498,8 +498,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="shell">
-    <AppHeader>
-      <span class="conv-title" :title="conversationTitle">{{ conversationTitle || '新会话' }}</span>
+    <!--
+      标题就是会话标题（新会话时是「新会话」）：页面动作条只回答"这一页是什么"，
+      会话本身的名字放在这里最省地方 —— 左边侧栏已经在说"你在会话这一分区"。
+    -->
+    <AppHeader :title="conversationTitle || '新会话'" tone="blue">
       <button class="btn btn--ghost btn--sm" type="button" @click="router.push({ name: 'chat-new' })">
         ＋ 新会话
       </button>
@@ -636,20 +639,11 @@ onBeforeUnmount(() => {
   height: 100%;
 }
 
-.conv-title {
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 0.9rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* 详细程度：两格分段开关。刻意做得不显眼 —— 它是设置，不是主操作。
    ⚠️ 只出现在会话页：它只影响消息里的置信度 / 来源精排分 / 读图结果。 */
 .detail {
   display: flex;
   flex-shrink: 0;
-  margin-left: auto;
   overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);

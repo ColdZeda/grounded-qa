@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -44,6 +43,7 @@ from app.db.models.conversation import Channel, Conversation, Message, MessageRo
 from app.db.models.user import User
 from app.db.repository import TenantScopedRepository
 from app.db.session import get_session_factory
+from app.rag import mdtext
 from app.rag.pipeline import Answer, RagPipeline, Sources
 from app.rag.providers import ChatClient, EmbeddingClient, RerankClient
 
@@ -191,97 +191,22 @@ def split_reply(text: str, limit: int = MAX_REPLY_CHARS) -> list[str]:
     return chunks
 
 
-#: 表格的**分隔行**（`|---|---|` / `|:--:|--|`）：只由 `|` `-` `:` 和空格组成。
-_TABLE_SEP = re.compile(r"^[\s|:\-]+$")
-
-#: `---` / `***` / `___` 独立成行 = 分割线。`lark_md` 不认，会原样露出。
-_HRULE = re.compile(r"^ {0,3}([-*_])\s*(?:\1\s*){2,}$")
-
-#: `## 标题`：卡片里没有标题语法，降级成整行加粗。
-_HEADING = re.compile(r"^ {0,3}#{1,6}\s+(.*?)\s*#*$")
-
-#: 整行只有一个引用标记 `[3]`。
-_LONE_MARKER = re.compile(r"^\s*\[(\d{1,2})\]\s*$")
-
-
-def _table_rows_to_lines(rows: list[list[str]], *, has_sep: bool) -> list[str]:
-    """`| a | b |` 的表格 → 列表行。飞书卡片**不支持表格**，只能降级。
-
-    两列是最常见的形状（`部件类别 | 保修期限`），直接写成 `- key：value`；
-    多列就把表头带上，写成 `- key1：v1｜key2：v2`。
-    ⚠️ **一条信息都不许丢**：宁可难看，也不能把某列静默删掉。
-    """
-    if has_sep and len(rows) >= 2:
-        header, body = rows[0], rows[1:]
-    else:  # 没有分隔行 ⇒ 认不出哪行是表头，全部当数据（别拿第一行冒险）
-        header, body = [], rows
-
-    lines: list[str] = []
-    for row in body:
-        if len(header) == 2 and len(row) >= 2:
-            lines.append(f"- {row[0]}：{row[1]}")
-        elif header:
-            cells = [f"{header[i]}：{row[i]}" for i in range(min(len(header), len(row))) if row[i]]
-            lines.append("- " + "｜".join(cells))
-        else:
-            lines.append("- " + "｜".join(cell for cell in row if cell))
-    return lines
-
-
 def to_feishu_markdown(text: str) -> str:
     """把模型输出的 markdown **降级**成飞书卡片认得的 `lark_md`。
 
     `lark_md` 认：粗体 / 斜体 / 删除线 / 链接 / 有序无序列表 / 代码块 / 图片。
     **不认**这三样 —— **表格**、`#` **标题**、`---` **分割线** —— 不处理就会原样
     露出 `|---|---|`，用户在群里看到的是源码（2026-10-22 真机联调实测踩中）。
+
+    ⚠️ 规则本体在 `app/rag/mdtext.py`，**Web 引用摘要用的是同一份**（那边只要最朴素的
+       三件事、不要 `- ` 和加粗）。要改洗法改那里，别在这里另写一遍。
     """
-    out: list[str] = []
-    table: list[list[str]] = []
-    has_sep = False
-
-    def flush() -> None:
-        nonlocal has_sep
-        if table:
-            out.extend(_table_rows_to_lines(table, has_sep=has_sep))
-            table.clear()
-        has_sep = False
-
-    for raw in text.splitlines():
-        line = raw.rstrip()
-        stripped = line.strip()
-
-        # 表格：连续的 `|` 行收集起来**整块**转换（表头只在第一行）
-        if stripped.startswith("|") and stripped.count("|") >= 2:
-            if _TABLE_SEP.match(stripped):
-                has_sep = True
-            else:
-                table.append([cell.strip() for cell in stripped.strip("|").split("|")])
-            continue
-        flush()
-
-        if not stripped:
-            out.append("")
-            continue
-        if _HRULE.match(line):
-            out.append("")  # 换成空行：卡片里一句 "---" 没有信息量
-            continue
-        heading = _HEADING.match(line)
-        if heading:
-            title = heading.group(1)
-            out.append(f"**{title}**" if title else "")
-            continue
-        marker = _LONE_MARKER.match(line)
-        if marker:
-            # 模型常把 `[3]` 单独甩一行（前面还空了一行）；并回上一行才是"这段的依据在 3"
-            while out and not out[-1].strip():
-                out.pop()
-            if out:
-                out[-1] = f"{out[-1].rstrip()} [{marker.group(1)}]"
-                continue
-        out.append(line)
-
-    flush()
-    return "\n".join(out).strip()
+    return mdtext.downgrade(
+        text,
+        bold_headings=True,  # 卡片没有标题语法 → 整行加粗
+        list_tables=True,  # 表格降级成列表行更好读
+        merge_lone_citations=True,  # 飞书里点不了 `[3]`，得说明"依据在这句"
+    )
 
 
 def render_reply(answer: Answer, *, show_sources: bool) -> str:
@@ -330,18 +255,15 @@ def citation_hint(answer: Answer) -> str | None:
 
 
 def _snippet(text: str, limit: int = 60) -> str:
-    """来源摘要的**单行化 ＋ 洗表格**。
+    """来源摘要的**单行化 ＋ 洗表格**（实现在 `app/rag/mdtext.py::snippet`）。
 
     ⚠️ 摘要直接取自 chunk 原文，标题和表格行常常一起被带出来
        （`部件类别 | 期限 | 起算点 | |------|------| | 家具主体…`）。
        卡片不渲染表格 ⟹ **只降级正文是不够的**，来源区照样会露源码。
+    ⚠️ 2026-10-25 起这段洗法**和 Web 引用卡共用一份**：同一个 chunk 在两个渠道
+       必须长得一样，否则"群里是对的、网页上是乱的"，排查时先怀疑自己眼花。
     """
-    flat = " ".join(text.split())
-    # 分隔行（`|------|` / `|:--:|`）整段换成占位符，再统一成全角竖线
-    flat = re.sub(r"\|?\s*:?-{2,}:?\s*\|?", "｜", flat)
-    flat = flat.replace("|", "｜")
-    flat = re.sub(r"(?:｜\s*)+", "｜", flat)  # `｜ ｜` 挤在一起 → 一个
-    return " ".join(flat.split()).strip("｜ ")[:limit]
+    return mdtext.snippet(text, limit=limit)
 
 
 class FeishuChannel:

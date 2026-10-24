@@ -1,64 +1,46 @@
 <script setup lang="ts">
-/** 顶栏：品牌 + 当前用户 + 退出。中间留一个插槽给页面放自己的东西。 */
+/**
+ * 页面动作条（**不是**全局顶栏）。
+ *
+ * 2026-10-25 的 P2 之前，这里承担了品牌 / 导航 / 用户 / 退出 —— 那是"应用顶栏"的角色。
+ * 现在那些都在 `AppSidebar.vue` 里，这一条只剩**这一页自己的东西**：
+ *   左：色块 ＋ 页面标题 ＋ 一句口径（"只读 · 按北京时间自然日"这类）
+ *   右：本页的动作按钮（插槽）＋ 环境角标
+ *
+ * ⚠️ 环境角标（`本地` / `生产`）**故意留在这里、而且永远带文字**：
+ *    用户 2026-10-22 在两套环境之间反复搞混，为"密码为什么错"白排查了半小时。
+ *    它不是装饰，是"我现在动的是哪套数据"的唯一常驻提示 —— 不能只在悬停里。
+ */
 
-import { computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-
-import { currentUser, signOut } from '@/stores/auth'
 import { runtimeEnv } from '@/stores/env'
 
-const router = useRouter()
-const route = useRoute()
-
 /**
- * 「会话」这一格在**聊天页也要亮**。
- *
- * ⚠️ 只靠 `router-link-active` 做不到：`/conversations/:id` 在路由表里是一条
- * **独立的记录**（`chat`），不是 `conversations` 的子路由 —— vue-router 的
- * active class 按**记录嵌套**算，不按 URL 前缀算。所以这里自己判。
- *
- * ⚠️ 写成**普通函数**而不是 `computed`：模板里要用 `inChat()` 这种**调用形式**
- * （AGENTS §10 那个坑：裸标识符当整个条件时会被编译器常量折叠）。
- * `route` 本身是响应式的，函数式写法照样跟着路由变。
+ * `tone` = 页头分区色。
+ * 走查里"整页全白、看不出自己在哪"是条真意见：每个分区一个色，
+ * 换页时**只靠颜色也能认出来**，但颜色很淡（4% 混底），不至于变花。
  */
-function inChat(): boolean {
-  return ['conversations', 'chat', 'chat-new'].includes(String(route.name ?? ''))
-}
+type Tone = 'blue' | 'teal' | 'violet' | 'amber' | 'green' | 'slate'
 
-const email = computed(() => currentUser.value?.email ?? '')
-const roleLabel = computed(() => (currentUser.value?.role === 'admin' ? '管理员' : '成员'))
-
-/**
- * 运维看板**只给管理员**（它暴露流量、成本、错误分布，属于运维面）。
- *
- * ⚠️ 写成函数调用 `isAdmin()` 而不是裸标识符 —— AGENTS §10 那个坑：
- *    裸标识符当整个条件时会被编译器常量折叠，`v-if` 整段从产物里消失。
- */
-function isAdmin(): boolean {
-  return currentUser.value?.role === 'admin'
-}
-
-function logout(): void {
-  // ⚠️ 不调后端 —— JWT 是无状态的，服务端没有会话可注销。
-  //    真要做"立即失效"得维护一张吊销表，那是另一个话题（不在 v1.0 范围）。
-  signOut()
-  void router.push({ name: 'login' })
-}
+withDefaults(defineProps<{ title: string; hint?: string; tone?: Tone }>(), {
+  hint: '',
+  tone: 'blue',
+})
 </script>
 
 <template>
-  <header class="bar">
-    <RouterLink class="brand" :to="{ name: 'conversations' }">
-      grounded<span>·</span>qa
-    </RouterLink>
+  <header class="head" :class="`head--${tone}`">
+    <span class="head__dot" aria-hidden="true"></span>
+    <h1 class="head__title" :title="title">{{ title }}</h1>
+    <span v-if="hint" class="head__hint">{{ hint }}</span>
+
+    <div class="head__actions">
+      <slot />
+    </div>
 
     <!--
-      环境角标：`本地` / `生产`。
-      ⚠️ 两套环境的界面**长得一模一样**，右上角都是同一个 `admin@example.com` ——
-         用户 2026-10-22 就在两者之间反复搞混，为"密码为什么错"白排查了半小时。
-      ⚠️ `unknown` 时不显示：宁可没有，也不要标错（`stores/env.ts` 里失败即 unknown）。
       ⚠️ 条件写在**表达式**里（`runtimeEnv === 'dev'`），不是裸标识符 ——
-         `AGENTS §10` 那个编译期常量折叠的坑，裸标识符当整个条件时 `v-if` 会整段消失。
+         `AGENTS §10` 的编译期常量折叠：裸标识符当整个条件时 `v-if` 会整段消失。
+      ⚠️ `unknown` 时不显示：宁可没有，也不要标错。
     -->
     <span
       v-if="runtimeEnv === 'dev'"
@@ -74,62 +56,85 @@ function logout(): void {
     >
       生产
     </span>
-
-    <nav class="nav">
-      <RouterLink :to="{ name: 'conversations' }" :class="{ 'is-active': inChat() }">
-        会话
-      </RouterLink>
-      <RouterLink :to="{ name: 'documents' }">知识库</RouterLink>
-      <RouterLink v-if="isAdmin()" :to="{ name: 'members' }">成员</RouterLink>
-      <RouterLink :to="{ name: 'reports' }">评测报告</RouterLink>
-      <RouterLink :to="{ name: 'usage' }">配额</RouterLink>
-      <RouterLink v-if="isAdmin()" :to="{ name: 'monitoring' }">运维</RouterLink>
-    </nav>
-
-    <div class="mid">
-      <slot />
-    </div>
-
-    <div class="who">
-      <!-- 点邮箱进「个人信息」：那里能看身份、改密码（走查 P0-②） -->
-      <RouterLink class="email" :title="`${email} · 个人信息`" :to="{ name: 'profile' }">
-        {{ email }}
-      </RouterLink>
-      <span class="role">{{ roleLabel }}</span>
-      <button class="btn btn--ghost btn--sm" type="button" @click="logout">退出</button>
-    </div>
   </header>
 </template>
 
 <style scoped>
-.bar {
+.head {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 16px;
+  gap: 10px;
   /*
-   * ⚠️ **不写死 `height`**：窗口窄 / 有浏览器缩放时一行放不下会换行，
-   * 写死高度就变成"顶栏被切掉一半、字看不全"（2026-10-24 走查在 /usage 撞到）。
-   * 用 `min-height` 让它能长高，`flex: 0 0 auto` 保证它不被内容区挤扁。
+   * ⚠️ **不写死 `height`**：窗口窄 / 有浏览器缩放时内容会长高，
+   *    写死高度就变成"这一条被切掉一半、字看不全"（2026-10-24 走查在 /usage 撞到）。
    */
   min-height: 56px;
+  padding: 8px 20px;
+  border-bottom: 1px solid color-mix(in srgb, var(--tone) 22%, var(--border));
+  background: color-mix(in srgb, var(--tone) 4%, var(--surface));
+}
+
+/* 分区色。一边一个变量名，换配色只改这一处 */
+.head--blue {
+  --tone: #2563eb;
+}
+
+.head--teal {
+  --tone: #0e9384;
+}
+
+.head--violet {
+  --tone: #7a5af8;
+}
+
+.head--amber {
+  --tone: #b54708;
+}
+
+.head--green {
+  --tone: #067647;
+}
+
+.head--slate {
+  --tone: #475467;
+}
+
+.head__dot {
   flex: 0 0 auto;
-  padding: 6px 20px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-  row-gap: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--tone);
 }
 
-.brand {
-  color: var(--text);
-  font-size: 1rem;
+.head__title {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 1.02rem;
   font-weight: 600;
-  letter-spacing: 0.01em;
-  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.brand span {
-  color: var(--primary);
+.head__hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.head__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  /* 动作按钮靠右：标题和按钮之间永远有一条弹性空隙 */
+  margin-left: auto;
 }
 
 /* 环境角标：小、但不是装饰 —— 它回答"我现在动的是哪套数据" */
@@ -152,70 +157,5 @@ function logout(): void {
   border: 1px solid var(--ok);
   background: #ecfdf3;
   color: var(--ok);
-}
-
-/* 主导航。`router-link-active` 由 vue-router 自动加 —— 不用自己算当前页 */
-.nav {
-  display: flex;
-  flex-shrink: 0;
-  gap: 2px;
-}
-
-.nav a {
-  padding: 4px 10px;
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  text-decoration: none;
-}
-
-.nav a:hover {
-  color: var(--text);
-}
-
-.nav a.router-link-active,
-.nav a.is-active {
-  background: var(--primary-soft);
-  color: var(--primary);
-}
-
-.mid {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-/* ⚠️ 「详细程度」开关已上移到会话页（`ChatView`）：它只影响会话里的分数展示，
-   放在全局顶栏会让别的页面出现"点了没反应"的按钮（走查 2026-10-24）。 */
-
-.who {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.email {
-  max-width: 220px;
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 0.875rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-decoration: none;
-}
-
-.email:hover {
-  color: var(--primary);
-  text-decoration: underline;
-}
-
-.role {
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--primary-soft);
-  color: var(--primary);
-  font-size: 0.75rem;
 }
 </style>

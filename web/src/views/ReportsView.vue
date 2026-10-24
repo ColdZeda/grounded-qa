@@ -147,15 +147,13 @@ onMounted(load)
 
 <template>
   <div class="shell">
-    <AppHeader>
+    <AppHeader title="评测报告" hint="只读快照" tone="amber">
       <button class="btn btn--ghost btn--sm" type="button" :disabled="refreshing" @click="load">
         刷新
       </button>
     </AppHeader>
 
     <main class="body">
-      <h2 class="title">评测报告 <span class="count">只读快照</span></h2>
-
       <p class="hint">
         数字来自开发机上跑的 <code>evals/run.py</code>，产物是结果 JSON；这个页面<strong>只读</strong>它。
         每张卡片都标了<strong>生成时间</strong>与<strong>那次的配置</strong> ——
@@ -172,7 +170,11 @@ onMounted(load)
           </p>
         </header>
 
-        <p v-if="conflictsLoading" class="muted">体检中…</p>
+        <!-- 骨架屏：体检要现算（几秒），比别的加载态更长 —— 更不能只留一句"体检中…" -->
+        <div v-if="conflictsLoading" class="sk-stack" aria-busy="true" aria-label="体检中">
+          <div class="sk sk--line" style="width: 55%"></div>
+          <div class="sk sk--block"></div>
+        </div>
         <p v-else-if="conflictsNote" class="muted">{{ conflictsNote }}</p>
 
         <template v-else-if="conflicts">
@@ -223,7 +225,11 @@ onMounted(load)
       <h3 class="all__title">评测快照</h3>
 
       <p v-if="error" class="alert alert--danger">{{ error }}</p>
-      <p v-if="snapshotsLoading" class="muted">加载中…</p>
+
+      <!-- 骨架屏：快照是 3 张卡片 -->
+      <div v-if="snapshotsLoading" class="cards" aria-busy="true" aria-label="加载中">
+        <div v-for="n in 3" :key="n" class="sk sk--block" style="height: 132px"></div>
+      </div>
 
       <template v-else>
         <p v-if="note" class="note">{{ note }}</p>
@@ -298,11 +304,6 @@ onMounted(load)
   max-width: 960px;
   margin: 0 auto;
   padding: 28px 20px 60px;
-}
-
-.title {
-  margin: 0 0 8px;
-  font-size: 1.1rem;
 }
 
 .count {
@@ -490,20 +491,13 @@ onMounted(load)
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
-.card {
-  padding: 16px 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-
+/* 卡片/表格的边框与密度统一走全局（`main.css`），这里只留本页差异 */
 .card__head {
   margin-bottom: 12px;
 }
 
 .card__title {
   margin: 0 0 4px;
-  font-size: 0.95rem;
 }
 
 /* 生成时间必须显眼到"不能忽略"—— 它是数字可信度的一部分 */
@@ -574,24 +568,7 @@ onMounted(load)
   line-height: 1.6;
 }
 
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.8rem;
-}
-
-.table th,
-.table td {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
-  text-align: left;
-}
-
-.table th {
-  color: var(--text-faint);
-  font-weight: 500;
-}
-
+/* 表格密度统一走全局 `.table`（`main.css`） */
 .nowrap {
   white-space: nowrap;
 }

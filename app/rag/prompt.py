@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from app.rag import mdtext
 from app.rag.reftime import RefTime, RefTimeSource
 from app.rag.retrieval import RetrievedChunk
 
@@ -220,6 +221,9 @@ def make_snippet(text: str, *, limit: int = 160) -> str:
 
     ⚠️ 只截断、不做"智能摘要" —— 引用卡片的用途是**让人能核对原文**，
         任何再加工都可能引入与原文不符的表述，那就本末倒置了。
+
+    ⚠️ 但**必须洗掉 markdown 源码**（2026-10-25 走查 W6）：知识库里的订单表就是
+       markdown 表格，不洗就会在「参考来源」里露出 `|站点|---|`。
+       洗法与飞书卡片共用 `app/rag/mdtext.py`，**别在这里另写一套**。
     """
-    stripped = " ".join(text.split())
-    return stripped if len(stripped) <= limit else stripped[:limit] + "…"
+    return mdtext.snippet(text, limit=limit)

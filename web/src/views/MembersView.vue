@@ -90,15 +90,13 @@ onMounted(load)
 
 <template>
   <div class="shell">
-    <AppHeader>
+    <AppHeader title="成员" :hint="`本租户 ${items.length} 人`" tone="violet">
       <button class="btn btn--ghost btn--sm" type="button" :disabled="loading" @click="load">
         刷新
       </button>
     </AppHeader>
 
-    <main class="body" data-accent="chat">
-      <h2 class="title">成员 <span class="count">本租户 {{ items.length }} 人</span></h2>
-
+    <main class="body">
       <p class="hint">
         企业内部的账号由管理员在这里发放，<strong>没有开放注册</strong> —— 陌生人不该能自己进来问你家政策。
         新建的成员立刻可以登录，默认是「成员」（只能问答，看不到知识库 / 评测 / 运维）。
@@ -195,17 +193,6 @@ onMounted(load)
   padding: 28px 20px 60px;
 }
 
-.title {
-  margin: 0 0 8px;
-  font-size: 1.1rem;
-}
-
-.count {
-  color: var(--text-faint);
-  font-size: 0.8rem;
-  font-weight: 400;
-}
-
 .hint {
   margin: 0 0 16px;
   color: var(--text-muted);
@@ -213,17 +200,13 @@ onMounted(load)
   line-height: 1.7;
 }
 
+/* 边框/圆角/底色/阴影统一走全局 `.card`（`main.css`），这里只说"下面要留空" */
 .card {
-  margin: 0 0 20px;
-  padding: 16px 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  margin: 0 0 18px;
 }
 
 .card__title {
   margin: 0 0 12px;
-  font-size: 0.95rem;
 }
 
 .card__note {
@@ -258,25 +241,7 @@ onMounted(load)
   flex: 0 1 220px;
 }
 
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-}
-
-.table th,
-.table td {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-  text-align: left;
-}
-
-.table th {
-  color: var(--text-muted);
-  font-weight: 500;
-  font-size: 0.8rem;
-}
-
+/* 表格密度统一走全局 `.table`（`main.css`）；这里只留「账号列用等宽」这一处差异 */
 .table__email {
   font-family: var(--mono);
   font-size: 0.82rem;

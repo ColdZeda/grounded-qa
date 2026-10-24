@@ -83,17 +83,20 @@ onMounted(load)
 
 <template>
   <div class="shell">
-    <AppHeader>
+    <AppHeader title="配额与成本" hint="只读 · 按北京时间自然日" tone="green">
       <button class="btn btn--ghost btn--sm" type="button" :disabled="loading" @click="load">
         刷新
       </button>
     </AppHeader>
 
     <main class="body">
-      <h2 class="title">配额与成本 <span class="count">只读 · 按北京时间自然日</span></h2>
-
       <p v-if="error" class="alert alert--danger">{{ error }}</p>
-      <p v-if="loading" class="muted">加载中…</p>
+
+      <!-- 骨架屏：一张用量卡 + 一张成员表 -->
+      <div v-if="loading" class="sk-stack" aria-busy="true" aria-label="加载中">
+        <div class="sk sk--block" style="height: 150px"></div>
+        <div class="sk sk--block" style="height: 120px"></div>
+      </div>
 
       <template v-else-if="usage">
         <p class="note">
@@ -200,17 +203,6 @@ onMounted(load)
   padding: 28px 20px 60px;
 }
 
-.title {
-  margin: 0 0 8px;
-  font-size: 1.1rem;
-}
-
-.count {
-  color: var(--text-faint);
-  font-size: 0.8rem;
-  font-weight: 400;
-}
-
 .note {
   margin: 0 0 18px;
   padding: 10px 12px;
@@ -219,29 +211,6 @@ onMounted(load)
   color: var(--text-muted);
   font-size: 0.78rem;
   line-height: 1.7;
-}
-
-.muted {
-  color: var(--text-muted);
-}
-
-.card {
-  padding: 18px 20px 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-
-.card__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.card__title {
-  margin: 0;
-  font-size: 0.95rem;
 }
 
 .stamp {
@@ -340,24 +309,7 @@ onMounted(load)
   font-size: 0.9rem;
 }
 
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.8rem;
-}
-
-.table th,
-.table td {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
-  text-align: left;
-}
-
-.table th {
-  color: var(--text-faint);
-  font-weight: 500;
-}
-
+/* 表格密度统一走全局 `.table`（`main.css`） */
 .right {
   text-align: right;
 }

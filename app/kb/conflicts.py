@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.knowledge import Chunk, Document
 from app.db.repository import TenantScopedRepository
+from app.rag import mdtext
 
 #: 主题词表：**标题或句子**命中关键词即归到该主题。顺序有意义（先命中先返回）。
 #: ⚠️ **刻意不收"退换货"**这个伞形词：语料里"质量问题退换"也含它，
@@ -156,7 +157,11 @@ class Fact:
             "scope": self.scope,
             "value": self.value,
             "unit_family": self.family,
-            "sentence": self.sentence[:120],
+            # ⚠️ 原句要洗掉 markdown 源码再给出去（2026-10-25，和 W6 同一类问题）：
+            #    很多事实是从 markdown 表格里抽出来的，原句就是 `| 家具主体 | 2 年 | 签收日 |`。
+            #    页面上是**纯文本**渲染，不洗就会把表格源码怼到人脸上 —— 而它是"证据"，
+            #    少一列也等于改了证据，所以只换形状（`｜` 分隔），一个字都不删。
+            "sentence": mdtext.snippet(self.sentence, limit=120),
         }
 
 

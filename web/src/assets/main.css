@@ -39,6 +39,22 @@
 
   --font: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
   --mono: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+
+  /*
+   * 侧栏宽度 —— **三档断点里唯一需要跨文件共享的数字**，所以放在 `:root`。
+   *
+   * ⚠️ 组件里的折叠/抽屉是 **JS 判定**（`matchMedia`），而宽度是 **CSS 判定**；
+   *    两边必须用同一组断点，否则会出现"图标已经没了、宽度还是 240"这种错位。
+   *    改动时**两处一起改**：这里 ＋ `AppSidebar.vue` 的两个 query。
+   */
+  --sidebar-w: 240px;
+}
+
+/* 1100–1439：侧栏只留图标。⚠️ 用 `.98` 把 1440 整点留给展开档 */
+@media (max-width: 1439.98px) {
+  :root {
+    --sidebar-w: 68px;
+  }
 }
 
 * {
@@ -188,4 +204,133 @@ textarea {
   color: #0e9384;
   font-family: inherit;
   cursor: help;
+}
+
+/* ============================================================
+   应用骨架：左侧栏 ＋ 内容区
+   ------------------------------------------------------------
+   ⚠️ 2026-10-25 之前这里是"顶栏 + 换行"布局。换行本身就是丑的来源：
+      窗口一窄，导航就折成两行、顶栏忽高忽低。改成侧栏之后
+      **导航不再参与换行**（侧栏只有一列，宽度由断点决定）。
+   ============================================================ */
+
+.app {
+  display: flex;
+  height: 100%;
+  /*
+   * ⚠️ 这里**只锁纵向**：横向留给"内容区最小宽度 560"兜底 ——
+   *    视口真的窄到 628px 以下时，出现横向滚动条，而不是把内容压扁。
+   */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.app__main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  /*
+   * 内容区最小宽度：低于它布局就"挤成一团"，不如让它横向滚。
+   * 侧栏 68 + 560 = 628 ⟹ 1000 宽那种走查口径完全够用。
+   */
+  min-width: 560px;
+  height: 100%;
+}
+
+/* ---------- 卡片与表格：统一密度 ----------
+   各页面以前各写一份 `.card` / `.table`（padding 8/9/10px、字号 0.8/0.875 混着来）。
+   统一到下面这套，页面里只留自己**额外**的差异（比如成员页的 margin）。 */
+
+.card {
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.card__title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.table th,
+.table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.table th {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table tbody tr:hover {
+  background: var(--surface-sunken);
+}
+
+/* ---------- 骨架屏 ----------
+   以前加载态只有一句"加载中…"，页面在这几百毫秒里是**全白**的 ——
+   看起来像"没内容"而不是"正在取"。骨架屏把"马上就有东西"画出来。 */
+
+.sk {
+  border-radius: 6px;
+  /* ⚠️ 别调得比背景还浅：第一版用 #eef1f5，在 #f6f7f9 的页面上几乎看不见，
+     看起来像"渲染坏了"而不是"正在加载"。 */
+  background: linear-gradient(90deg, #e4e9f0 25%, #f2f5f9 37%, #e4e9f0 63%);
+  background-size: 400% 100%;
+  animation: sk-shimmer 1.3s ease-in-out infinite;
+}
+
+.sk--line {
+  height: 14px;
+}
+
+.sk--block {
+  height: 64px;
+}
+
+.sk-stack {
+  display: grid;
+  gap: 10px;
+}
+
+@keyframes sk-shimmer {
+  from {
+    background-position: 100% 50%;
+  }
+
+  to {
+    background-position: 0 50%;
+  }
+}
+
+/* 动效敏感的用户：骨架屏照样能看，只是不闪 */
+@media (prefers-reduced-motion: reduce) {
+  .sk {
+    animation: none;
+  }
 }

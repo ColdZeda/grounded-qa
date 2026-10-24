@@ -144,7 +144,7 @@ onMounted(load)
 
 <template>
   <div class="shell">
-    <AppHeader>
+    <AppHeader title="知识库" :hint="`共 ${total} 份`" tone="teal">
       <button
         v-if="isAdmin"
         class="btn btn--sm"
@@ -174,8 +174,6 @@ onMounted(load)
     </AppHeader>
 
     <main class="body">
-      <h2 class="title">知识库 <span class="count">共 {{ total }} 份</span></h2>
-
       <p class="hint">
         只收 <code>.md</code> / <code>.txt</code>。上传后走队列异步入库（解析 → 切分 →
         向量化），下面能看到每一步的状态。
@@ -185,7 +183,10 @@ onMounted(load)
       <p v-if="error" class="alert alert--danger">{{ error }}</p>
       <p v-if="notice" class="alert alert--info">{{ notice }}</p>
 
-      <p v-if="loading && items.length === 0" class="muted">加载中…</p>
+      <!-- 骨架屏：3 行，形状对齐下面的 `.row`（文件名 + 元信息 + 状态徽章） -->
+      <div v-if="loading && items.length === 0" class="sk-stack" aria-busy="true" aria-label="加载中">
+        <div v-for="n in 3" :key="n" class="sk sk--block"></div>
+      </div>
 
       <p v-else-if="items.length === 0" class="empty">
         还没有文档。{{ isAdmin ? '点右上角「＋ 上传文档」开始。' : '' }}
@@ -223,17 +224,6 @@ onMounted(load)
   padding: 28px 20px 60px;
 }
 
-.title {
-  margin: 0 0 8px;
-  font-size: 1.1rem;
-}
-
-.count {
-  color: var(--text-faint);
-  font-size: 0.8rem;
-  font-weight: 400;
-}
-
 .hint {
   margin: 0 0 18px;
   color: var(--text-muted);
@@ -251,10 +241,6 @@ onMounted(load)
 /* 文件选择框藏起来（真正的入口是上面那个按钮） */
 .picker {
   display: none;
-}
-
-.muted {
-  color: var(--text-muted);
 }
 
 .empty {

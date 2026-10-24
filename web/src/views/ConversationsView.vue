@@ -107,7 +107,7 @@ onMounted(load)
 
 <template>
   <div class="shell">
-    <AppHeader>
+    <AppHeader title="会话" hint="内部坐席工作台 · Web 与飞书的问答都在这里" tone="blue">
       <button class="btn btn--sm" type="button" @click="router.push({ name: 'chat-new' })">
         ＋ 新建会话
       </button>
@@ -117,11 +117,16 @@ onMounted(load)
     </AppHeader>
 
     <main class="body">
-      <h2 class="title">会话</h2>
-
       <p v-if="error" class="alert alert--danger">{{ error }}</p>
 
-      <p v-if="loading" class="muted">加载中…</p>
+      <!--
+        加载态是**骨架屏**，不是一句"加载中…"。
+        理由：白屏那几百毫秒里，用户分不清"没内容"和"还没来"；
+        占位块的形状和真实会话行一致，内容出现时不会跳一下。
+      -->
+      <div v-if="loading" class="sk-stack" aria-busy="true" aria-label="加载中">
+        <div v-for="n in 3" :key="n" class="sk sk--block"></div>
+      </div>
 
       <p v-else-if="items.length === 0" class="empty">
         还没有会话。点右上角「＋ 新建会话」开始提问。
@@ -162,15 +167,6 @@ onMounted(load)
   max-width: 820px;
   margin: 0 auto;
   padding: 28px 20px 60px;
-}
-
-.title {
-  margin: 0 0 16px;
-  font-size: 1.1rem;
-}
-
-.muted {
-  color: var(--text-muted);
 }
 
 .empty {

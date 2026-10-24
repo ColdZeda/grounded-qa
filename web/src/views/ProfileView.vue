@@ -60,15 +60,14 @@ async function submit(): Promise<void> {
 
 <template>
   <div class="shell">
-    <AppHeader />
+    <AppHeader title="个人信息" hint="账号与密码" tone="slate" />
 
-    <main class="body" data-accent="chat">
-      <h2 class="title">个人信息</h2>
-
+    <main class="body">
       <section class="card">
         <h3 class="card__title">账号</h3>
         <dl class="kv">
-          <dt>邮箱</dt>
+          <!-- ⚠️ 标签是「账号」不是「邮箱」：2026-10-25 起建成员可以只填用户名 -->
+          <dt>账号</dt>
           <dd class="kv__mono">{{ currentUser?.email }}</dd>
           <dt>角色</dt>
           <dd>{{ roleLabel }}<span class="kv__hint">（管理员能管知识库 / 评测 / 运维；成员只能问答）</span></dd>
@@ -76,7 +75,8 @@ async function submit(): Promise<void> {
           <dd class="kv__mono">{{ currentUser?.tenant_id?.slice(0, 8) }}</dd>
         </dl>
         <p class="card__note">
-          邮箱是全局唯一的账号标识，改邮箱等于换账号 —— 需要管理员在「成员」里重新建人。
+          账号（邮箱或用户名都行）是全局唯一的登录标识，改它等于换账号 ——
+          需要管理员在「成员」里重新建人。
         </p>
       </section>
 
@@ -148,22 +148,13 @@ async function submit(): Promise<void> {
   padding: 28px 20px 60px;
 }
 
-.title {
-  margin: 0 0 16px;
-  font-size: 1.1rem;
-}
-
+/* 边框/圆角/底色统一走全局 `.card`（`main.css`），这里只说"下面要留空" */
 .card {
-  margin: 0 0 20px;
-  padding: 16px 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  margin: 0 0 18px;
 }
 
 .card__title {
   margin: 0 0 12px;
-  font-size: 0.95rem;
 }
 
 .card__note {
