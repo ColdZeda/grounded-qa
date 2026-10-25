@@ -1,10 +1,14 @@
-"""评测报告页的聚合逻辑 —— **纯单元测试**（造 payload，不读真文件、不连库）。
+"""评测报告页 —— 聚合逻辑**纯单元测试**（造 payload，不读真文件、不连库）＋ 末尾一条**权限集成测试**。
 
 ⚠️ 这里守的是那句"**不许裸数字**"：
     每条指标都要带分母，每份快照都要带生成时间；缺值要显示成 `—` 而不是 0。
+⚠️ 末尾那条权限测试要真库（`pytest.mark.integration`）：连不上库时会 SKIP，不是失败。
 """
 
 from __future__ import annotations
+
+import pytest
+from sqlalchemy import select
 
 from app.api.reports import (
     _display_time,
@@ -13,6 +17,11 @@ from app.api.reports import (
     _summarize_answer_layer,
     _summarize_retrieval,
 )
+from app.core.config import get_settings
+from app.db.models.tenant import Tenant
+from app.db.models.user import UserRole
+
+PREFIX = get_settings().api_prefix
 
 
 def test_display_time_formats_stamp() -> None:
@@ -107,3 +116,32 @@ def test_summarize_generation_counts_forbidden_phrases() -> None:
     # 只统计"真的检查过"的那些题，没检查的不该被算成错
     assert by_name["引用正确"] == "1/1"
     assert by_name["出现禁语"] == "1/2"
+
+
+# ------------------------------------------------------------
+# 权限（集成测试，要真库）—— 2026-10-25 收紧
+# ------------------------------------------------------------
+@pytest.mark.integration
+async def test_reports_list_is_admin_only(client, login, make_account, session) -> None:
+    """评测快照**只给管理员**。
+
+    ⚠️ 以前只要求"登录"，而登录页有「一键演示账号」（演示账号是 member）⟹
+        打开演示登录就等于把"判分口径 / 禁语清单 / 哪几题没通过"公开给任何访客。
+        前端导航对成员隐藏这一页，但直接打 API 是拿得到的 —— 所以权限必须在这一层收紧。
+    """
+    admin = await make_account(role=UserRole.ADMIN, label="reports-admin")
+    tenant = await session.scalar(select(Tenant).where(Tenant.id == admin.tenant_id))
+    assert tenant is not None
+    member = await make_account(role=UserRole.MEMBER, label="reports-member", tenant=tenant)
+
+    admin_token = await login(admin.email, admin.password)
+    member_token = await login(member.email, member.password)
+
+    # 管理员：200（目录存不存在都 200 —— 没有结果时返回空列表 + 一句说明）
+    ok = await client.get(f"{PREFIX}/reports", headers=admin.auth(admin_token))
+    assert ok.status_code == 200
+    assert isinstance(ok.json()["snapshots"], list)
+
+    # 普通成员：403（"已登录但角色不够"用 403；404 是留给"越权看别人的东西"的）
+    denied = await client.get(f"{PREFIX}/reports", headers=member.auth(member_token))
+    assert denied.status_code == 403

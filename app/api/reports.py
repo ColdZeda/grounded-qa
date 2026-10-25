@@ -23,7 +23,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from app.api.deps import AdminUser, CurrentUser, SessionDep
+from app.api.deps import AdminUser, SessionDep
 from app.core.config import get_settings
 from app.schemas.report import ReportListOut, ReportMetric, ReportSnapshot
 
@@ -226,14 +226,15 @@ def _load(path: Path) -> ReportSnapshot | None:
 
 
 @router.get("", response_model=ReportListOut, summary="评测报告快照（只读）")
-async def list_reports(current_user: CurrentUser) -> ReportListOut:
+async def list_reports(current_admin: AdminUser) -> ReportListOut:
     """列出所有评测快照，**新的在前**。
 
-    ⚠️ 需要登录才能看（不是公开接口）：这些是项目的过程数据，
-        而且里面有"禁语清单"这类自曝弱点的东西。
+    ⚠️ **只给管理员**（2026-10-25 收紧）：这些是项目的过程数据，里面有"禁语清单"这类自曝弱点的
+        东西。以前只要求登录，可是登录页有「一键演示账号」—— 演示访客是 member，
+        一开演示登录就等于把评测口径公开给任何人（前端导航对他隐藏，直接打 API 却能拿到）。
     ⚠️ **不在请求里跑评测** —— 只读已经存在的文件。
     """
-    _ = current_user  # 只为鉴权；报告是全局的，不按租户分
+    _ = current_admin  # 只为鉴权；报告是全局的，不按租户分
     directory = results_dir()
     if not directory.is_dir():
         return ReportListOut(
