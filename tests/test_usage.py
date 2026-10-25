@@ -14,7 +14,7 @@ import pytest
 
 from app.api.usage import _cost, _reset_at
 from app.core.config import get_settings
-from app.core.limits import SHANGHAI, _quota_key, add_tokens, peek_quota, peek_rate
+from app.core.limits import SHANGHAI, add_tokens, peek_quota, peek_rate
 from app.db.models.user import UserRole
 from tests.fakeredis import FakeRedis
 
@@ -127,32 +127,6 @@ async def test_my_usage_splits_tokens_by_channel(client, login, make_account, li
     # 颜色之外一定有文字；顺序固定（前端按顺序渲染，不自己排）
     assert [item["label"] for item in body["channels"]] == ["内部 Web", "飞书私聊", "飞书群聊"]
     assert sum(by_channel.values()) == body["tokens_used"] == 1000
-    assert body["tokens_unattributed"] == 0
-
-
-@pytest.mark.integration
-async def test_unattributed_tokens_are_shown_not_hidden(
-    client, login, make_account, limits_redis
-) -> None:
-    """加渠道维度**之前**记的账：总量 > 分项之和。
-
-    ⚠️ 这种差额**必须显式显示**（"另有 N 未标注渠道"），不能悄悄丢掉 ——
-       否则页面看起来"分项加起来对不上总量"，而人只会怀疑数字在瞎编。
-       真实的这类数据只会存在一天（Redis 每天清零）。
-    """
-    account = await make_account(label="usage-legacy")
-    subject = str(account.user_id)
-    await add_tokens(limits_redis, subject=subject, tokens=300, channel="web")
-    # 直接往配额键里加分项没记的那部分（模拟上线前的流量）
-    key, _ = _quota_key(subject, datetime.now(SHANGHAI))
-    await limits_redis.incrby(key, 500)
-    token = await login(account.email, account.password)
-
-    body = (await client.get(f"{PREFIX}/usage/me", headers=account.auth(token))).json()
-
-    assert body["tokens_used"] == 800
-    assert sum(item["tokens_used"] for item in body["channels"]) == 300
-    assert body["tokens_unattributed"] == 500
 
 
 @pytest.mark.integration

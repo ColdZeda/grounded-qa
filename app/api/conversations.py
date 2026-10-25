@@ -16,13 +16,18 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import Select, delete
+from sqlalchemy import Select, delete, func
 
 from app.api.deps import CurrentUser, SessionDep
-from app.db.models.conversation import Conversation
+from app.db.models.conversation import Channel, Conversation
 from app.db.models.user import User, UserRole
 from app.db.repository import TenantScopedRepository
-from app.schemas.conversation import ConversationCreate, ConversationOut
+from app.schemas.conversation import (
+    ConversationCreate,
+    ConversationGroupOut,
+    ConversationOut,
+    ConversationSummaryOut,
+)
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -44,16 +49,79 @@ async def list_conversations(
     current_user: CurrentUser,
     limit: Annotated[int, Query(ge=1, le=200, description="每页条数")] = 50,
     offset: Annotated[int, Query(ge=0, description="偏移量")] = 0,
+    channel: Annotated[Channel | None, Query(description="只看这个渠道")] = None,
+    chat_id: Annotated[str | None, Query(description="只看这个飞书群")] = None,
 ) -> list[Conversation]:
-    """列出当前用户可见的会话，按最近更新倒序。"""
+    """列出当前用户可见的会话，按最近更新倒序。
+
+    ⚠️ `channel` / `chat_id` 是给**前端按组翻页**用的（2026-10-25）：一次拉全局 50 条
+        会让一个组吃光配额，别的组一条都不出现。加了过滤之后，每组各自 `limit/offset`。
+    """
+    repo = TenantScopedRepository(session, tenant_id=current_user.tenant_id, model=Conversation)
+    stmt = _visible_to(repo.select(), current_user)
+    if channel is not None:
+        stmt = stmt.where(Conversation.channel == channel)
+    if chat_id is not None:
+        stmt = stmt.where(Conversation.external_chat_id == chat_id)
+    stmt = stmt.order_by(Conversation.updated_at.desc()).limit(limit).offset(offset)
+    return list((await session.scalars(stmt)).all())
+
+
+@router.get(
+    "/summary",
+    response_model=ConversationSummaryOut,
+    summary="会话分组摘要（每组多少条）",
+)
+async def conversation_summary(
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> ConversationSummaryOut:
+    """每组会话**一共有多少条** —— 前端靠它画组头「共 N 条 / 还有 N 条」。
+
+    ⚠️ 为什么不让前端自己数：本页的数据是**按组翻页**的，手里只有"已加载的那几条"，
+        数出来的永远是"这一页有多少"，说不出"一共多少"。
+    ⚠️ 一次 `group by` 拿全，不做 N 次 count。
+    """
     repo = TenantScopedRepository(session, tenant_id=current_user.tenant_id, model=Conversation)
     stmt = (
         _visible_to(repo.select(), current_user)
-        .order_by(Conversation.updated_at.desc())
-        .limit(limit)
-        .offset(offset)
+        .with_only_columns(
+            Conversation.channel,
+            Conversation.external_chat_id,
+            Conversation.external_title,
+            func.count().label("count"),
+            func.max(Conversation.updated_at).label("latest_at"),
+        )
+        .group_by(Conversation.channel, Conversation.external_chat_id, Conversation.external_title)
     )
-    return list((await session.scalars(stmt)).all())
+    rows = (await session.execute(stmt)).all()
+
+    groups: list[ConversationGroupOut] = []
+    total = 0
+    for row in rows:
+        channel = Channel(row.channel)
+        total += int(row.count)
+        if channel is Channel.FEISHU_GROUP:
+            key = f"grp:{row.external_chat_id or 'unknown'}"
+        elif channel is Channel.FEISHU_P2P:
+            key = "p2p"
+        else:
+            key = "web"
+        groups.append(
+            ConversationGroupOut(
+                key=key,
+                channel=channel.value,
+                external_chat_id=row.external_chat_id,
+                external_title=row.external_title,
+                count=int(row.count),
+                latest_at=row.latest_at,
+            )
+        )
+
+    # 固定顺序：内部 → 私聊 → 群（群之间按最近活动）
+    order = {Channel.WEB.value: 0, Channel.FEISHU_P2P.value: 1, Channel.FEISHU_GROUP.value: 2}
+    groups.sort(key=lambda item: (order[item.channel], -item.latest_at.timestamp()))
+    return ConversationSummaryOut(total=total, groups=groups)
 
 
 @router.get("/{conversation_id}", response_model=ConversationOut, summary="会话详情")

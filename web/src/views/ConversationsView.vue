@@ -5,11 +5,20 @@
  * ⚠️ "新建会话"**不在这里调后端** —— 它只是跳到 `/conversations/new`。
  *    会话在用户**发出第一条提问**时才真正创建（见 `ChatView` 的 `send`），
  *    这样列表里显示的就是提问本身，而不是一排"新会话"。
- *    顺带好处：点进去又退出来不会留下一堆空会话。
  *
- * ⚠️ **按渠道分组是必需的，不是装饰**（走查 P1-⑥）：
- *    群聊按 `open_id` 分桶后，**群里 10 个人问过就有 10 条会话**。
- *    不分组的话，列表很快就被"飞书用户 · 3a9c1f"淹没，坐席找不到自己要的那条。
+ * ## 为什么是「按组翻页」（2026-10-25 改）
+ *
+ * 以前是**全局** `limit=50` 再在前端分组。那样有一个致命缺陷：
+ * **内部会话多的时候，一个组会把配额吃光** —— 飞书组一条都不出现，
+ * 分组做了等于白做。
+ *
+ * 现在：
+ *   · `GET /conversations/summary` 一次拿到**每组一共多少条**；
+ *   · 每组**各自**拉第一页（10 条），组头写「共 N 条」，组内「加载更多」只加这一组。
+ *   · 于是 5000 条会话的首屏也只有 ~30 条请求量。
+ *
+ * ⚠️ 群聊按 `open_id` 分桶，群里 10 个人问过就有 10 条 ⟹ 群数 × 人数会涨得很快。
+ *    所以**折叠**是必需的（不是美化）。
  */
 
 import { computed, onMounted, ref } from 'vue'
@@ -17,14 +26,46 @@ import { useRouter } from 'vue-router'
 
 import AppHeader from '@/components/AppHeader.vue'
 import { ApiError } from '@/api/client'
-import { deleteConversation, listConversations } from '@/api/conversations'
-import type { Channel, ConversationOut } from '@/types/api'
+import {
+  deleteConversation,
+  getConversationSummary,
+  listConversations,
+} from '@/api/conversations'
+import type { Channel, ConversationOut, ConversationSummary } from '@/types/api'
 
 const router = useRouter()
 
-const items = ref<ConversationOut[]>([])
+/** 每组第一页拉几条；点一次「加载更多」再加这么多。 */
+const PAGE = 10
+
+/**
+ * 首屏**最多自动加载**几个组。
+ * ⚠️ 群多的时候（20 个群 = 20 个请求）不能全发；超出的组先只显示组头，
+ *    点开才加载 —— 这条是"按组翻页"的必要配套，否则请求数反而爆了。
+ */
+const AUTO_LOAD_GROUPS = 8
+
+interface GroupState {
+  /** `web` / `p2p` / `grp:{chat_id}` */
+  key: string
+  channel: Channel
+  chatId: string | null
+  /** 组头显示的名字（重名时会带 `#abcd`） */
+  label: string
+  /** 一共多少条（来自 summary） */
+  total: number
+  items: ConversationOut[]
+  loading: boolean
+  /** 用户是否展开（折叠的组不发请求） */
+  open: boolean
+  /** 是否已经拉过第一页（配合 AUTO_LOAD_GROUPS） */
+  loaded: boolean
+}
+
+const groups = ref<GroupState[]>([])
 const loading = ref(true)
 const error = ref('')
+const filter = ref<'all' | 'web' | 'feishu'>('all')
 
 /** 渠道 → 三色标签。⚠️ **同时带文字**：只靠颜色的话，色弱用户和打印稿都读不出来。 */
 const CHANNEL_LABEL: Record<Channel, string> = {
@@ -33,63 +74,123 @@ const CHANNEL_LABEL: Record<Channel, string> = {
   feishu_group: '群聊',
 }
 
-interface Group {
-  key: string
-  kind: Channel
-  /** 分组标题。群聊是「群名（N 人）」。 */
-  label: string
-  items: ConversationOut[]
+const FILTERS = [
+  { value: 'all' as const, label: '全部' },
+  { value: 'web' as const, label: '内部' },
+  { value: 'feishu' as const, label: '飞书' },
+]
+
+const visibleGroups = computed(() => {
+  if (filter.value === 'web') return groups.value.filter((item) => item.channel === 'web')
+  if (filter.value === 'feishu') return groups.value.filter((item) => item.channel !== 'web')
+  return groups.value
+})
+
+const totalCount = computed(() => groups.value.reduce((sum, item) => sum + item.total, 0))
+
+const loadedCount = computed(() =>
+  visibleGroups.value.reduce((sum, item) => sum + item.items.length, 0),
+)
+
+function setFilter(next: 'all' | 'web' | 'feishu'): void {
+  filter.value = next
 }
 
-/**
- * 三级分组：**内部（Web）／飞书私聊／飞书群聊 · 群名（N 人）**。
- *
- * ⚠️ 群聊的分组键是 `external_chat_id`（同一个群），**不是** `external_title`：
- *    群名是缓存的、可能重名，而 chat_id 不会。标题只用来显示。
- */
-const groups = computed<Group[]>(() => {
-  const out: Group[] = []
-  const web = filtered.value.filter((item) => item.channel === 'web')
-  const p2p = filtered.value.filter((item) => item.channel === 'feishu_p2p')
-  if (web.length) out.push({ key: 'web', kind: 'web', label: '内部（Web）', items: web })
-  if (p2p.length) out.push({ key: 'p2p', kind: 'feishu_p2p', label: '飞书私聊', items: p2p })
+function groupLabel(key: string, channel: Channel, title: string | null, dup: boolean): string {
+  if (channel === 'web') return '内部（Web）'
+  if (channel === 'feishu_p2p') return '飞书私聊'
+  // 群聊：拿不到群名就退成 id 后 6 位；重名的加 `#` + id 后 4 位
+  const chatId = key.replace(/^grp:/, '')
+  const name = title ?? `飞书群 · ${chatId.slice(-6)}`
+  return dup ? `${name} #${chatId.slice(-4)}` : name
+}
 
-  const byChat = new Map<string, ConversationOut[]>()
-  for (const item of filtered.value.filter((one) => one.channel === 'feishu_group')) {
-    const key = item.external_chat_id ?? 'unknown'
-    const bucket = byChat.get(key)
-    if (bucket) bucket.push(item)
-    else byChat.set(key, [item])
-  }
-  /*
-   * ⚠️ **群名可能重名**（2026-10-25）：两个群都叫「客服测试群」时，两段长得一模一样，
-   *    坐席会点错。**重名的才**加 `#` ＋ `chat_id` 后 4 位 —— 不重名就不加，
-   *    别给每一段都挂一串噪声。所以要先把名字数一遍，再拼标题。
-   */
+/** 从 summary 建出组头（**不发列表请求**）；重名群在这里判断。 */
+function buildGroups(summary: ConversationSummary): GroupState[] {
   const nameCount = new Map<string, number>()
-  for (const [chatId, list] of byChat) {
-    const name = groupName(chatId, list)
+  for (const item of summary.groups) {
+    if (item.channel !== 'feishu_group') continue
+    const name = item.external_title ?? `飞书群 · ${(item.external_chat_id ?? '').slice(-6)}`
     nameCount.set(name, (nameCount.get(name) ?? 0) + 1)
   }
 
-  for (const [chatId, list] of byChat) {
-    const name = groupName(chatId, list)
-    const suffix = (nameCount.get(name) ?? 0) > 1 ? ` #${chatId.slice(-4)}` : ''
-    out.push({
-      key: `grp:${chatId}`,
-      kind: 'feishu_group',
-      // ⚠️「N 位顾客」不是「N 人」：这个数字是**问过的人数**，不是群成员数
-      //    （多群之后尤其容易混 —— 用户 2026-10-25 就误解过）
-      label: `${name}${suffix}（${list.length} 位顾客）`,
-      items: list,
-    })
-  }
-  return out
-})
+  return summary.groups.map((item) => {
+    const chatId = item.external_chat_id
+    const name = item.external_title ?? `飞书群 · ${(chatId ?? '').slice(-6)}`
+    const dup = item.channel === 'feishu_group' && (nameCount.get(name) ?? 0) > 1
+    return {
+      key: item.key,
+      channel: item.channel,
+      chatId: item.channel === 'feishu_group' ? chatId : null,
+      label: groupLabel(item.key, item.channel, item.external_title, dup),
+      total: item.count,
+      items: [],
+      loading: false,
+      open: true,
+      loaded: false,
+    }
+  })
+}
 
-/** 群名（拿不到就退成 `chat_id` 后 6 位）。同一个群的所有会话该值是同一个。 */
-function groupName(chatId: string, list: ConversationOut[]): string {
-  return list[0]?.external_title ?? `飞书群 · ${chatId.slice(-6)}`
+/** 拉某个组的第一页（或"加载更多"后的前 N 条）。 */
+async function loadGroup(group: GroupState, limit = PAGE): Promise<void> {
+  group.loading = true
+  try {
+    group.items = await listConversations({
+      limit,
+      channel: group.channel,
+      chatId: group.chatId ?? undefined,
+    })
+    group.loaded = true
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : `加载失败：${(err as Error).message}`
+  } finally {
+    group.loading = false
+  }
+}
+
+async function loadMore(group: GroupState): Promise<void> {
+  await loadGroup(group, group.items.length + PAGE)
+}
+
+/** 展开/收起。**第一次展开才请求**（见 `AUTO_LOAD_GROUPS`）。 */
+function toggleGroup(group: GroupState): void {
+  group.open = !group.open
+  if (group.open && !group.loaded) void loadGroup(group)
+}
+
+async function load(): Promise<void> {
+  loading.value = true
+  error.value = ''
+  try {
+    const summary = await getConversationSummary()
+    groups.value = buildGroups(summary)
+    // 前若干个组自动加载；其余等用户点开
+    const eager = groups.value.slice(0, AUTO_LOAD_GROUPS)
+    await Promise.all(eager.map((group) => loadGroup(group)))
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : `加载失败：${(err as Error).message}`
+  } finally {
+    loading.value = false
+  }
+}
+
+/** 删除会话（连带消息，**不可恢复**）。确认框写清后果。 */
+async function remove(group: GroupState, item: ConversationOut): Promise<void> {
+  const ok = window.confirm(
+    `确定删除「${item.title}」吗？\n\n这个会话里的消息会一起删除，且**无法恢复**。`,
+  )
+  if (!ok) return
+  error.value = ''
+  try {
+    await deleteConversation(item.id)
+    // 本地先摘掉（"点了删除但列表没变"是最难受的反馈），再对齐真实总数
+    group.items = group.items.filter((one) => one.id !== item.id)
+    group.total = Math.max(0, group.total - 1)
+    await load()
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : `删除失败：${(err as Error).message}`
+  }
 }
 
 /** 相对时间。列表按"最近更新"排序，所以相对时间比绝对时间好读。 */
@@ -102,81 +203,6 @@ function relative(iso: string): string {
   if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} 小时前`
   if (diffSec < 86400 * 7) return `${Math.floor(diffSec / 86400)} 天前`
   return new Date(iso).toLocaleDateString('zh-CN')
-}
-
-/**
- * 会话变多之后的三件事（2026-10-25 走查）：
- *  ① **筛选**（全部 / 内部 / 飞书）—— 群聊按人分桶后，飞书会把列表淹没
- *  ② **群段可收起** —— 10 个群 × 每个群几个人，平铺就是几十行
- *  ③ **删除** —— 以前只能传不能删
- */
-const filter = ref<'all' | 'web' | 'feishu'>('all')
-const collapsed = ref<Set<string>>(new Set())
-
-/** 筛选项。⚠️ 文案带数字没意义（要动态算），所以只给名字。 */
-const FILTERS = [
-  { value: 'all' as const, label: '全部' },
-  { value: 'web' as const, label: '内部' },
-  { value: 'feishu' as const, label: '飞书' },
-]
-
-/** 每页步长。⚠️ 没有 `total`（后端返回的是纯数组），所以用"返回条数 == limit"判断还有没有更多。 */
-const PAGE = 50
-const limit = ref(PAGE)
-
-const filtered = computed(() => {
-  if (filter.value === 'web') return items.value.filter((item) => item.channel === 'web')
-  if (filter.value === 'feishu') return items.value.filter((item) => item.channel !== 'web')
-  return items.value
-})
-
-const hasMore = computed(() => items.value.length >= limit.value && limit.value < 200)
-
-function setFilter(next: 'all' | 'web' | 'feishu'): void {
-  filter.value = next
-}
-
-function toggleGroup(key: string): void {
-  const next = new Set(collapsed.value)
-  if (next.has(key)) next.delete(key)
-  else next.add(key)
-  collapsed.value = next
-}
-
-function isCollapsed(key: string): boolean {
-  return collapsed.value.has(key)
-}
-
-async function loadMore(): Promise<void> {
-  limit.value = Math.min(limit.value + PAGE, 200)
-  await load()
-}
-
-/** 删除会话（连带消息，**不可恢复**）。确认框写清"几条消息会没"。 */
-async function remove(item: ConversationOut): Promise<void> {
-  const ok = window.confirm(`确定删除「${item.title}」吗？\n\n这个会话里的消息会一起删除，且**无法恢复**。`)
-  if (!ok) return
-  error.value = ''
-  try {
-    await deleteConversation(item.id)
-    // 本地先摘掉再重拉，避免"点了删除但列表没变"那种最难受的反馈
-    items.value = items.value.filter((one) => one.id !== item.id)
-    await load()
-  } catch (err) {
-    error.value = err instanceof ApiError ? err.message : `删除失败：${(err as Error).message}`
-  }
-}
-
-async function load(): Promise<void> {
-  loading.value = true
-  error.value = ''
-  try {
-    items.value = await listConversations(limit.value)
-  } catch (err) {
-    error.value = err instanceof ApiError ? err.message : `加载失败：${(err as Error).message}`
-  } finally {
-    loading.value = false
-  }
 }
 
 function open(item: ConversationOut): void {
@@ -209,15 +235,12 @@ onMounted(load)
         <div v-for="n in 3" :key="n" class="sk sk--block"></div>
       </div>
 
-      <p v-else-if="items.length === 0" class="empty">
+      <p v-else-if="groups.length === 0" class="empty">
         还没有会话。点右上角「＋ 新建会话」开始提问。
       </p>
 
       <template v-else>
-        <!--
-          筛选（2026-10-25）：群聊按人分桶之后，飞书会把内部会话淹掉。
-          ⚠️ 筛选是**纯前端**的（数据已经在手上），所以切换是瞬时的、也不多发请求。
-        -->
+        <!-- 筛选：纯前端（数据按组拿着），切换是瞬时的、不多发请求 -->
         <div class="filters" role="group" aria-label="按渠道筛选">
           <button
             v-for="option in FILTERS"
@@ -231,53 +254,70 @@ onMounted(load)
             {{ option.label }}
           </button>
           <span class="filters__count">
-            已加载 {{ items.length }} 条{{ hasMore ? '（还有更多）' : '' }}
+            共 {{ totalCount }} 条 · 已显示 {{ loadedCount }} 条
           </span>
         </div>
 
-        <p v-if="filtered.length === 0" class="empty">这个筛选下没有会话。</p>
+        <p v-if="visibleGroups.length === 0" class="empty">这个筛选下没有会话。</p>
 
-        <section v-for="group in groups" :key="group.key" class="group">
+        <section v-for="group in visibleGroups" :key="group.key" class="group">
           <h3 class="group__head">
             <button
               class="group__toggle"
               type="button"
-              :aria-expanded="!isCollapsed(group.key)"
-              :title="isCollapsed(group.key) ? '展开' : '收起'"
-              @click="toggleGroup(group.key)"
+              :aria-expanded="group.open"
+              :title="group.open ? '收起' : '展开（展开才加载）'"
+              @click="toggleGroup(group)"
             >
-              <span class="group__arrow" aria-hidden="true">{{
-                isCollapsed(group.key) ? '▸' : '▾'
-              }}</span>
-              <span class="chan" :class="`chan--${group.kind}`">{{ CHANNEL_LABEL[group.kind] }}</span>
+              <span class="group__arrow" aria-hidden="true">{{ group.open ? '▾' : '▸' }}</span>
+              <span class="chan" :class="`chan--${group.channel}`">
+                {{ CHANNEL_LABEL[group.channel] }}
+              </span>
               <span class="group__name">{{ group.label }}</span>
-              <span class="group__count">{{ group.items.length }} 条</span>
+              <span class="group__count">
+                共 {{ group.total }} 条<template v-if="group.channel === 'feishu_group'">
+                  · {{ group.total }} 位顾客</template
+                >
+              </span>
             </button>
           </h3>
 
-          <ul v-if="!isCollapsed(group.key)" class="list">
-            <li v-for="item in group.items" :key="item.id" class="item">
-              <button class="row" type="button" @click="open(item)">
-                <span class="row__title">{{ item.title }}</span>
-                <span class="row__time">{{ relative(item.updated_at) }}</span>
-              </button>
-              <!-- 删除：不可恢复，所以按钮低调、且一定要确认 -->
-              <button
-                class="row__del"
-                type="button"
-                :title="`删除「${item.title}」`"
-                aria-label="删除会话"
-                @click="remove(item)"
-              >
-                ✕
-              </button>
-            </li>
-          </ul>
-        </section>
+          <template v-if="group.open">
+            <p v-if="group.loading && group.items.length === 0" class="group__hint">加载中…</p>
 
-        <button v-if="hasMore" class="more" type="button" :disabled="loading" @click="loadMore">
-          加载更多（当前 {{ items.length }} 条）
-        </button>
+            <ul v-else-if="group.items.length" class="list">
+              <li v-for="item in group.items" :key="item.id" class="item">
+                <button class="row" type="button" @click="open(item)">
+                  <span class="row__title">{{ item.title }}</span>
+                  <span class="row__time">{{ relative(item.updated_at) }}</span>
+                </button>
+                <!-- 删除：不可恢复，所以按钮低调、且一定要确认 -->
+                <button
+                  class="row__del"
+                  type="button"
+                  :title="`删除「${item.title}」`"
+                  aria-label="删除会话"
+                  @click="remove(group, item)"
+                >
+                  ✕
+                </button>
+              </li>
+            </ul>
+
+            <!-- 组内分页：只加这一组，别的组不动 -->
+            <button
+              v-if="!group.loading && group.items.length < group.total"
+              class="more"
+              type="button"
+              @click="loadMore(group)"
+            >
+              加载更多（还有 {{ group.total - group.items.length }} 条）
+            </button>
+          </template>
+          <p v-else class="group__hint">
+            已收起 · 共 {{ group.total }} 条{{ group.loaded ? '' : '（展开时才加载）' }}
+          </p>
+        </section>
       </template>
     </main>
   </div>
@@ -370,6 +410,12 @@ onMounted(load)
   font-size: 0.72rem;
 }
 
+.group__hint {
+  margin: 0 0 2px;
+  color: var(--text-faint);
+  font-size: 0.76rem;
+}
+
 .item {
   display: flex;
   align-items: stretch;
@@ -413,21 +459,14 @@ onMounted(load)
   color: var(--primary);
 }
 
-.group__name {
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* 三色渠道标签。⚠️ **颜色之外一定带文字** —— 只靠颜色的标签对色弱用户等于没有。 */
 .chan {
   flex-shrink: 0;
   padding: 1px 8px;
   border: 1px solid transparent;
   border-radius: 999px;
-  font-size: 0.72rem;
   font-family: var(--mono);
+  font-size: 0.72rem;
   line-height: 1.7;
 }
 
@@ -488,6 +527,6 @@ onMounted(load)
 .row__time {
   flex-shrink: 0;
   color: var(--text-faint);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
 }
 </style>

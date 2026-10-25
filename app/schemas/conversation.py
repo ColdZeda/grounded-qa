@@ -36,3 +36,33 @@ class ConversationOut(BaseModel):
     external_title: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class ConversationGroupOut(BaseModel):
+    """会话列表的一"段"（内部 / 私聊 / 某个群）的**规模信息**。
+
+    ⚠️ 存在的理由（2026-10-25）：以前一次拉全局 50 条再在前端分组，
+        **一个组会把配额吃光** —— 内部会话有 200 条时，飞书组一条都不出现。
+        现在首屏按组各拉 10 条，靠这个接口知道每组**一共多少条**。
+    """
+
+    #: 分组的键：`web` / `p2p` / `grp:{chat_id}`（前端直接当 `key` 用）
+    key: str
+    #: 机器可读的渠道，前端据此上三色标签
+    channel: str
+    #: 群里才有；私聊 / 网页是 `None`
+    external_chat_id: str | None = None
+    #: 群名（拿不到就是 `None`，前端退成 id 后 6 位）
+    external_title: str | None = None
+    #: 这一组一共多少条（**不是**"已加载多少条"）
+    count: int
+    #: 这一组最近一次活动时间 —— 用来给群排序（活跃的在前）
+    latest_at: datetime
+
+
+class ConversationSummaryOut(BaseModel):
+    """会话列表的分组摘要（首屏只调这一个接口就能画出所有组头）。"""
+
+    #: 全部可见会话的总条数（各 `groups[].count` 之和）
+    total: int
+    groups: list[ConversationGroupOut] = Field(default_factory=list)

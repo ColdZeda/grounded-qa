@@ -57,6 +57,28 @@ export interface ConversationOut {
 }
 
 /**
+ * 会话列表的一"段"（内部 / 私聊 / 某个群）的规模信息（`GET /conversations/summary`）。
+ *
+ * ⚠️ 为什么需要它：列表是**按组翻页**的，手里只有"已加载的那几条"，
+ *    数不出"一共多少"。没有总数就画不出组头，也说不出"还有 N 条"。
+ */
+export interface ConversationGroup {
+  /** `web` / `p2p` / `grp:{chat_id}` —— 前端直接当 key */
+  key: string
+  channel: Channel
+  external_chat_id: string | null
+  external_title: string | null
+  /** 这一组**一共**多少条（不是已加载多少条） */
+  count: number
+  latest_at: string
+}
+
+export interface ConversationSummary {
+  total: number
+  groups: ConversationGroup[]
+}
+
+/**
  * 这个分数是**什么口径**。
  *
  * ⚠️ 必须原样展示给用户，**不能统一成一个"相关度"** ——
@@ -335,8 +357,6 @@ export interface UsageOut {
   note: string
   /** 按渠道拆（顺序固定：Web / 飞书私聊 / 飞书群聊）。 */
   channels: ChannelUsage[]
-  /** 总量里没能归到渠道的部分（加渠道维度之前的账），正常是 0，`null` = 取不到。 */
-  tokens_unattributed: number | null
 }
 
 export interface MemberUsage {

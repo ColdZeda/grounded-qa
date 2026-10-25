@@ -48,9 +48,11 @@ async def _seed_document(session, tenant_id: uuid.UUID, *, blocks: int = 3) -> D
     return document
 
 
-async def _seed_conversation(session, *, tenant_id: uuid.UUID, user_id: uuid.UUID) -> Conversation:
+async def _seed_conversation(
+    session, *, tenant_id: uuid.UUID, user_id: uuid.UUID, title: str = "（自测）会话"
+) -> Conversation:
     conversation = Conversation(
-        tenant_id=tenant_id, user_id=user_id, title="（自测）会话", channel=Channel.WEB
+        tenant_id=tenant_id, user_id=user_id, title=title, channel=Channel.WEB
     )
     session.add(conversation)
     await session.flush()
@@ -151,3 +153,81 @@ async def test_member_cannot_delete_someone_elses_conversation(
     )
 
     assert response.status_code == 404
+
+
+# ------------------------------------------------------------
+# 分组摘要 ＋ 按组分页（2026-10-25：一个组不许吃光全局配额）
+# ------------------------------------------------------------
+async def test_summary_reports_each_group_count(client, login, make_account, session) -> None:
+    account = await make_account(label="conv-summary")
+    for index in range(3):
+        await _seed_conversation(
+            session,
+            tenant_id=account.tenant_id,
+            user_id=account.user_id,
+            title=f"网页 {index}",
+        )
+    # 同一个飞书群里的两条（同一个 chat_id，两个人）
+    for open_id in ("ou_a", "ou_b"):
+        session.add(
+            Conversation(
+                tenant_id=account.tenant_id,
+                user_id=account.user_id,
+                title=f"群友 {open_id}",
+                channel=Channel.FEISHU_GROUP,
+                external_chat_id="oc_group1",
+                external_user_id=open_id,
+                external_title="客服测试群",
+            )
+        )
+    await session.commit()
+    token = await login(account.email, account.password)
+
+    body = (await client.get(f"{PREFIX}/conversations/summary", headers=account.auth(token))).json()
+
+    by_key = {item["key"]: item for item in body["groups"]}
+    assert body["total"] == 5
+    assert by_key["web"]["count"] == 3
+    assert by_key["grp:oc_group1"]["count"] == 2
+    assert by_key["grp:oc_group1"]["external_title"] == "客服测试群"
+    # 顺序固定：内部 → 私聊 → 群
+    assert next(item["key"] for item in body["groups"]) == "web"
+
+
+async def test_list_filters_by_channel_and_chat(client, login, make_account, session) -> None:
+    """按组翻页靠这两个过滤：一个组只拉自己那几条，不会把别的组挤掉。"""
+    account = await make_account(label="conv-filter")
+    await _seed_conversation(
+        session, tenant_id=account.tenant_id, user_id=account.user_id, title="网页会话"
+    )
+    session.add(
+        Conversation(
+            tenant_id=account.tenant_id,
+            user_id=account.user_id,
+            title="群里的人",
+            channel=Channel.FEISHU_GROUP,
+            external_chat_id="oc_group2",
+            external_user_id="ou_x",
+            external_title="第二个群",
+        )
+    )
+    await session.commit()
+    token = await login(account.email, account.password)
+
+    web = (
+        await client.get(
+            f"{PREFIX}/conversations",
+            params={"channel": "web", "limit": 10},
+            headers=account.auth(token),
+        )
+    ).json()
+    group = (
+        await client.get(
+            f"{PREFIX}/conversations",
+            params={"channel": "feishu_group", "chat_id": "oc_group2", "limit": 10},
+            headers=account.auth(token),
+        )
+    ).json()
+
+    assert [item["title"] for item in web] == ["网页会话"]
+    assert [item["title"] for item in group] == ["群里的人"]

@@ -90,15 +90,6 @@ async def my_usage(
         ChannelUsage(channel=channel.value, label=label, tokens_used=per.get(channel.value))
         for channel, label in CHANNEL_LABELS.items()
     ]
-    #: 分项之和。**任何一项取不到就整体算 None**（宁可说"不知道"，也不给一个少一块的合计）
-    attributed: int | None = (
-        None
-        if any(item.tokens_used is None for item in channels)
-        else sum(item.tokens_used or 0 for item in channels)
-    )
-    #: 总量里没能归到渠道的部分：加渠道维度之前的账会落在这里，第二天自动归零。
-    #: ⚠️ 用 `max(0, …)`：明细比总量多只可能是写入时序造成的毛刺，显示负数只会让人困惑。
-    unattributed = None if used is None or attributed is None else max(0, used - attributed)
 
     return UsageOut(
         date=_today(now),
@@ -113,7 +104,6 @@ async def my_usage(
         generated_at_display=now.strftime("%Y-%m-%d %H:%M:%S"),
         note=NOTE,
         channels=channels,
-        tokens_unattributed=unattributed,
     )
 
 

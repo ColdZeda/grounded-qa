@@ -52,10 +52,12 @@ class UsageOut(BaseModel):
     #: 口径说明（前端原样显示）
     note: str
     #: **按渠道拆**（Web / 飞书私聊 / 飞书群聊）。顺序固定，永远三项。
+    #:
+    #: ⚠️ **不许再加"未归因 / 差额"之类的字段**（2026-10-25 用户要求删干净）：
+    #:    那是我们**迁移期**才知道的信息（"加渠道维度之前记的账"），对用户零价值，
+    #:    摆在页面上只会显得草台。**一致性由测试守**（`sum(channels) == tokens_used`），
+    #:    不该靠界面上写一行字。
     channels: list[ChannelUsage] = Field(default_factory=list)
-    #: 总量里**没能归到渠道**的部分。
-    #: 正常情况下是 0；`None` = 取不到。加渠道维度之前记的账会落在这里（第二天自动归零）。
-    tokens_unattributed: int | None = None
 
 
 class MemberUsage(BaseModel):

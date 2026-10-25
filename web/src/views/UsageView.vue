@@ -163,12 +163,7 @@ onMounted(load)
             ⚠️ 飞书的消息仍然全部记在**渠道账号**名下，不是按人记的 —— 页面底部那句要说清。
           -->
           <div v-if="usage.channels.length" class="chans">
-            <p class="chans__head">
-              按渠道
-              <span v-if="usage.tokens_unattributed" class="chans__legacy">
-                另有 {{ num(usage.tokens_unattributed) }} token 是加渠道之前的账（第二天自动归零）
-              </span>
-            </p>
+            <p class="chans__head">按渠道</p>
             <ul class="chans__list">
               <li v-for="item in usage.channels" :key="item.channel" class="chan">
                 <span class="chan__label">{{ item.label }}</span>
@@ -347,11 +342,6 @@ onMounted(load)
   margin: 0 0 8px;
   color: var(--text-muted);
   font-size: 0.78rem;
-}
-
-.chans__legacy {
-  color: var(--warn);
-  font-size: 0.72rem;
 }
 
 .chans__list {
