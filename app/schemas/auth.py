@@ -44,6 +44,9 @@ class UserOut(BaseModel):
     email: str
     role: UserRole
     tenant_id: uuid.UUID
+    #: 是不是一键演示账号（**只读管理员**：看得到全部页面，写操作一律 403）。
+    #: 前端据此隐藏「上传 / 替换 / 删除 / 建成员」这些按钮，别让人点了才吃 403。
+    is_demo: bool = False
 
 
 class PasswordChange(BaseModel):

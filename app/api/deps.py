@@ -103,9 +103,29 @@ async def require_admin(current_user: Annotated[User, Depends(get_current_user)]
     return current_user
 
 
-# 路由里直接用这两个别名，写法统一、少一层括号
+async def require_admin_writer(current_user: Annotated[User, Depends(require_admin)]) -> User:
+    """管理员 **且不是演示账号** —— 管理端所有"改数据"的动作走这里。
+
+    ⚠️ **演示账号 = 只读管理员**（2026-10-25 定）。它的 `role` 是 `admin`，
+        所以知识库 / 评测报告 / 运维 / 冲突体检 / 全部会话都看得到（演示才有意义）；
+        但它一个字节都改不了 —— 因为管理端的写接口会造成**不可逆**后果：
+        · 删文档是**硬删**（无回收站），访客能把你整个知识库删空；
+        · 建成员 = 访客能给自己开一个**永久 admin**，把"演示开关关掉"这件事架空。
+    ⚠️ 只读接口仍然用 `AdminUser`；**新增写接口时记得用这个别名**，
+        它比"逐个接口记得判一下"可靠。
+    """
+    if current_user.is_demo:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="演示账号是只读的：页面都能看，但不能新增 / 修改 / 删除",
+        )
+    return current_user
+
+
+# 路由里直接用这几个别名，写法统一、少一层括号
 CurrentUser = Annotated[User, Depends(get_current_user)]
 AdminUser = Annotated[User, Depends(require_admin)]
+AdminWriter = Annotated[User, Depends(require_admin_writer)]
 
 
 # ------------------------------------------------------------

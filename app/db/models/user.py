@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import Boolean, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.config import DEMO_EMAIL
 from app.db.base import (
     Base,
     TenantMixin,
@@ -72,3 +73,13 @@ class User(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
 
     def __repr__(self) -> str:
         return f"<User {self.email} role={self.role.value}>"
+
+    @property
+    def is_demo(self) -> bool:
+        """是不是一键演示账号（**只读管理员**）。
+
+        ⚠️ 演示账号的 `role` 也是 `admin`（否则知识库 / 评测 / 运维全看不到，演示没意义），
+            但它在管理端的**写接口**上被 `app/api/deps.py::require_admin_writer` 一律拦成 403：
+            访客能看全部页面，却改不了任何数据（删文档不可恢复、建成员等于给自己留永久后门）。
+        """
+        return self.email == DEMO_EMAIL

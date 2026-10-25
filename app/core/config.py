@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 DEV_JWT_SECRET = "dev-only-insecure-secret-change-me-in-production"
 DEFAULT_ADMIN_PASSWORD = "change-me"
 
+#: 一键演示账号的邮箱。**只在这三处出现**：`app/api/auth.py`（find-or-create）、
+#: `app/api/deps.py`（拦写操作）、`app/db/models/user.py`（`is_demo` 属性）。
+#: ⚠️ 刻意用 `demo-visitor@` 而不是 `demo@`：后者容易和"开发者自己建的本地账号"撞上。
+DEMO_EMAIL = "demo-visitor@grounded.local"
+
 #: **已实测校准过** `answer_min_score` 的 rerank 模型。
 #:
 #: ⚠️ 判定只用「模型在不在这个表里」—— **在表外 = 从没校准过 = 那个阈值是抄来的**。

@@ -15,6 +15,16 @@ import AppHeader from '@/components/AppHeader.vue'
 import { ApiError } from '@/api/client'
 import { createUser, listUsers, type UserSummary } from '@/api/admin'
 import type { UserRole } from '@/types/api'
+import { currentUser } from '@/stores/auth'
+
+/**
+ * 是不是一键演示账号（**只读管理员**）。
+ * ⚠️ 用**函数调用**形式（`isDemoAccount()`），别写成裸标识符 ——
+ *    `AGENTS §10`：裸标识符当整个 `v-if` 条件时会被编译器常量折叠，整段消失。
+ */
+function isDemoAccount(): boolean {
+  return currentUser.value?.is_demo === true
+}
 
 const items = ref<UserSummary[]>([])
 const loading = ref(true)
@@ -107,7 +117,14 @@ onMounted(load)
 
       <section class="card">
         <h3 class="card__title">新建成员</h3>
-        <form class="form" @submit.prevent="submit">
+        <!--
+          ⚠️ 演示账号是**只读管理员**：这一页看得见（才有演示价值），但不能建成员 ——
+             能建成员就等于能给自己开一个永久 admin，把"关掉演示开关"架空（后端 `AdminWriter` 也拦）。
+        -->
+        <p v-if="isDemoAccount()" class="alert alert--info">
+          演示账号是<strong>只读</strong>的：本页可以查看，但不能新建成员。
+        </p>
+        <form v-else class="form" @submit.prevent="submit">
           <label class="form__field">
             <span>账号</span>
             <input

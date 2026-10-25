@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 
-from app.api.deps import AdminUser, SessionDep
+from app.api.deps import AdminUser, AdminWriter, SessionDep
 from app.core.security import PasswordTooLongError, hash_password
 from app.db.models.tenant import Tenant
 from app.db.models.user import User
@@ -70,7 +70,7 @@ async def list_users(session: SessionDep, current_admin: AdminUser) -> list[User
 async def create_user(
     payload: UserCreate,
     session: SessionDep,
-    current_admin: AdminUser,
+    current_admin: AdminWriter,
 ) -> User:
     """管理员建成员 —— 这是本项目**唯一的"加人"入口**（没有开放注册）。
 

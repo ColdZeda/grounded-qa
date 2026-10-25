@@ -18,7 +18,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, SessionDep
-from app.core.config import get_settings
+from app.core.config import DEMO_EMAIL, get_settings
 from app.core.security import (
     PasswordTooLongError,
     create_access_token,
@@ -129,13 +129,8 @@ async def change_password(
 
 
 # ------------------------------------------------------------
-# 演示登录（走查阶段 P0-③）
+# 演示登录（走查阶段 P0-③；2026-10-25 起是**只读管理员**）
 # ------------------------------------------------------------
-
-#: 演示账号的邮箱。**只在本文件的 find-or-create 里出现**，`.env` 里没有它的密码。
-#: ⚠️ 刻意用 `demo-visitor@` 而不是 `demo@`：后者容易和"开发者自己建的本地账号"撞上，
-#:    而那类账号往往是 admin —— 演示入口必须只发 **member**。
-DEMO_EMAIL = "demo-visitor@grounded.local"
 
 
 @router.get(
@@ -159,15 +154,18 @@ async def read_capabilities() -> Capabilities:
     summary="演示账号一键登录（需 DEMO_LOGIN_ENABLED）",
 )
 async def demo_login(session: SessionDep) -> TokenOut:
-    """签发**演示成员**的 token —— 面试官 / 访客点一下就进来，不用问密码。
+    """签发**演示账号**的 token —— 面试官 / 访客点一下就进来，不用问密码。
 
-    ⚠️ 三条刻意设计：
+    ⚠️ 四条刻意设计：
         ① **关闭时返回 404**（不是 403）：这个接口在未开启的部署里"不存在"，
            别让人从错误码猜出"这里有个开关"；
         ② **账号是 find-or-create 的、密码是随机生成的**（谁也不知道，包括我）——
            前端硬编码账号等于把密码打进 JS bundle，`view-source` 就能拿到；
-        ③ 演示账号是 `member`（不能上传 / 不能看评测与运维），且**照常受**
-           "每分钟次数 ＋ 每日 token"两道限制 —— 演示入口不是后门。
+        ③ **它是只读管理员**（2026-10-25 改）：`role=admin` 所以知识库 / 评测报告 /
+           运维 / 冲突体检 / 全部会话都看得到（这是演示的价值）；但管理端的**写接口**
+           走 `AdminWriter`，对演示账号一律 403 —— 访客能看、改不了。
+           理由：删文档是硬删（能删空知识库）、建成员等于给自己开永久后门。
+        ④ 它**照常受**"每分钟次数 ＋ 每日 token"两道限制 —— 演示入口不是后门。
     """
     settings = get_settings()
     if not settings.demo_login_enabled:
@@ -184,10 +182,16 @@ async def demo_login(session: SessionDep) -> TokenOut:
             tenant_id=tenant.id,
             email=DEMO_EMAIL,
             hashed_password=hashed,
-            role=UserRole.MEMBER,
+            role=UserRole.ADMIN,
             is_active=True,
         )
         session.add(user)
+        await session.commit()
+        await session.refresh(user)
+    elif user.role is not UserRole.ADMIN:
+        # ⚠️ 演示账号早先被创建成 `member`；只读管理员是后改的，
+        #    所以**每次登录顺手对齐角色** —— 否则老库里那个账号永远升不上来（且不报错）。
+        user.role = UserRole.ADMIN
         await session.commit()
         await session.refresh(user)
 

@@ -1,9 +1,10 @@
-"""演示登录（走查阶段 P0-③）。
+"""演示登录（走查阶段 P0-③；2026-10-25 改成**只读管理员**）。
 
 断言重点：
     ① 默认**关闭**时，接口对外**不存在**（404，而不是 403 —— 别让人从错误码猜出开关）；
     ② `capabilities` 如实反映开关（前端据此决定显示不显示按钮）；
-    ③ 打开后签发的 token 能用，且身份是 **member**（演示入口不是后门）。
+    ③ 打开后签发的 token 能用，身份是 **admin**（否则知识库 / 评测 / 运维都看不到，演示没意义），
+       但 `is_demo=true` —— 写操作由 `AdminWriter` 拦成 403，见 `test_demo_readonly.py`。
 """
 
 from __future__ import annotations
@@ -13,8 +14,7 @@ from httpx import AsyncClient
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.auth import DEMO_EMAIL
-from app.core.config import get_settings
+from app.core.config import DEMO_EMAIL, get_settings
 from app.db.models.tenant import Tenant
 from app.db.models.user import User
 
@@ -35,7 +35,7 @@ async def test_demo_login_is_404_when_disabled(client: AsyncClient) -> None:
     assert resp.status_code == 404
 
 
-async def test_demo_login_issues_member_token_when_enabled(
+async def test_demo_login_issues_admin_token_when_enabled(
     client: AsyncClient,
     session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -63,7 +63,9 @@ async def test_demo_login_issues_member_token_when_enabled(
         me = await client.get(f"{PREFIX}/auth/me", headers={"Authorization": f"Bearer {token}"})
         assert me.status_code == 200
         body = me.json()
-        assert body["role"] == "member"  # 不是管理员
+        # 只读管理员：看得到管理端页面，但**写操作**会被 AdminWriter 拦成 403
+        assert body["role"] == "admin"
+        assert body["is_demo"] is True
         assert body["email"] == DEMO_EMAIL
 
         # 幂等：再点一次还是同一个账号（不会每次建一个新用户）

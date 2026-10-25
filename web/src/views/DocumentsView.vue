@@ -42,11 +42,16 @@ let timer: number | null = null
 const pollDelay = ref(POLL_MS)
 
 /**
- * ⚠️ 写成**函数**而不是 `computed`：模板里要用 `isAdmin()` 这种**调用形式**
+ * 能不能做**写操作**（上传 / 替换 / 删除）。
+ *
+ * ⚠️ 演示账号是**只读管理员**：`role` 也是 admin（所以这一页看得见），
+ *    但后端 `AdminWriter` 会把这些接口一律 403 ⟹ 前端也别把按钮摆出来，
+ *    否则访客点一下吃个 403，看着像坏了。
+ * ⚠️ 写成**函数**而不是 `computed`：模板里要用 `canWrite()` 这种**调用形式**
  * （`AGENTS §10`：裸标识符当整个 `v-if` 条件时会被编译器常量折叠，整段消失）。
  */
-function isAdmin(): boolean {
-  return currentUser.value?.role === 'admin'
+function canWrite(): boolean {
+  return currentUser.value?.role === 'admin' && currentUser.value?.is_demo !== true
 }
 
 /** 还有文档在路上吗？有就继续轮询，没有就停下来。 */
@@ -193,7 +198,7 @@ onMounted(load)
   <div class="shell">
     <AppHeader title="知识库" :hint="`共 ${total} 份`" tone="teal">
       <button
-        v-if="isAdmin()"
+        v-if="canWrite()"
         class="btn btn--sm"
         type="button"
         :disabled="uploading"
@@ -227,7 +232,7 @@ onMounted(load)
       <p class="hint">
         只收 <code>.md</code> / <code>.txt</code>。上传后走队列异步入库（解析 → 切分 →
         向量化），下面能看到每一步的状态。
-        <template v-if="!isAdmin()">上传是管理员动作，你可以查看但不能新增。</template>
+        <template v-if="!canWrite()">上传是管理员动作，你可以查看但不能新增。</template>
       </p>
 
       <p v-if="error" class="alert alert--danger">{{ error }}</p>
@@ -239,7 +244,7 @@ onMounted(load)
       </div>
 
       <p v-else-if="items.length === 0" class="empty">
-        还没有文档。{{ isAdmin() ? '点右上角「＋ 上传文档」开始。' : '' }}
+        还没有文档。{{ canWrite() ? '点右上角「＋ 上传文档」开始。' : '' }}
       </p>
 
       <ul v-else class="list">
@@ -257,8 +262,8 @@ onMounted(load)
           <span class="badge" :class="`badge--${item.status}`">
             {{ STATUS_LABEL[item.status] }}
           </span>
-          <!-- 管理动作只给管理员；判断用**函数调用** `isAdmin()`（AGENTS §10 编译期折叠坑） -->
-          <div v-if="isAdmin()" class="row__ops">
+          <!-- 管理动作只给管理员；判断用**函数调用** `canWrite()`（AGENTS §10 编译期折叠坑） -->
+          <div v-if="canWrite()" class="row__ops">
             <button
               class="row__op"
               type="button"

@@ -29,6 +29,8 @@ export interface UserOut {
   email: string
   role: UserRole
   tenant_id: string
+  /** 一键演示账号（**只读管理员**）：页面都能看，写操作一律被后端 403。 */
+  is_demo?: boolean
 }
 
 // ------------------------------------------------------------

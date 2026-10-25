@@ -32,7 +32,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import delete, func, select
 
-from app.api.deps import AdminUser, CurrentUser, LimitsRedisDep, SessionDep
+from app.api.deps import AdminUser, AdminWriter, CurrentUser, LimitsRedisDep, SessionDep
 from app.core.config import get_settings
 from app.core.limits import LimitGuard, ensure
 from app.db.models.knowledge import Chunk, Document, DocumentStatus
@@ -85,7 +85,7 @@ def _out(document: Document, *, created: bool, note: str = "") -> DocumentUpload
 )
 async def upload_document(
     session: SessionDep,
-    current_admin: AdminUser,
+    current_admin: AdminWriter,
     enqueue: EnqueueDep,
     redis: LimitsRedisDep,
     file: Annotated[UploadFile, File(description="文本类文件（.md / .markdown / .txt）")],
@@ -210,7 +210,7 @@ async def list_documents(
 async def delete_document(
     document_id: uuid.UUID,
     session: SessionDep,
-    current_admin: AdminUser,
+    current_admin: AdminWriter,
 ) -> None:
     """删除一份文档（连同它的切片和 raw 副本）。
 
