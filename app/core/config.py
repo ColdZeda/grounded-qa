@@ -303,19 +303,27 @@ class Settings(BaseSettings):
                 f"JWT_SECRET 只有 {secret_bytes} 字节，HS256 要求至少 32 字节（RFC 7518 §3.2）"
             )
 
-        # ⚠️ **空值必须先判，否则这道闸会漏掉它**（2026-10-17 补）：
-        #    `.env` 里写成 `ADMIN_PASSWORD=`（占位没填）时，读出来是**空字符串**，
-        #    它**不等于** `DEFAULT_ADMIN_PASSWORD`（`"change-me"`）——
-        #    原来那句相等判断就**放行了**，然后 `seed` 会建一个**空密码的管理员**。
-        #    这是"配置看起来填了、其实没填"的典型：**闸只比较了"是不是默认值"，
-        #    没比较"是不是根本为空"**。
-        if not self.admin_password.strip():
-            problems.append("ADMIN_PASSWORD 是空的")
-        elif self.admin_password == DEFAULT_ADMIN_PASSWORD:
-            problems.append("ADMIN_PASSWORD 仍是默认值")
-
         if problems:
             raise ValueError("配置不安全，拒绝启动 —— " + "；".join(problems))
+
+        # ⚠️ **`ADMIN_PASSWORD` 故意不在这道闸里**（2026-10-25 挪走）。
+        #    它只在 `python -m app.db.seed` 建库时被读一次，**跑流量时一次都不读**。
+        #    拿"整站起不来"去担保一个建库变量，代价已经实测过一次：
+        #    `.env` 里它空着 → api crash-loop（pydantic ValidationError）→
+        #    `depends_on: condition: service_healthy` 把 nginx 一起拖住 →
+        #    **整站连接被拒**；而且**回滚也救不了**（回滚只换镜像，`.env` 不在版本控制里，
+        #    新旧镜像读同一份坏配置）。
+        #    ⟹ 闸门挪到真正用它的地方（`app/db/seed.py::_guard_admin_password`，建库时硬失败），
+        #      这里只留一条**告警**：站点照常起，但要让人在日志里看得见。
+        if not self.admin_password.strip():
+            logger.warning(
+                "ADMIN_PASSWORD 是空的 —— 不影响运行（运行时不用它），但**首次建库会失败**："
+                "seed 拒绝用空密码创建管理员。要重建库，请先在 .env 里设一个真实密码。"
+            )
+        elif self.admin_password == DEFAULT_ADMIN_PASSWORD:
+            logger.warning(
+                "ADMIN_PASSWORD 仍是默认值 —— 不影响运行，但**首次建库会失败**（理由同上）。"
+            )
 
         return self
 

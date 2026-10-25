@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from app.core.config import (
@@ -50,9 +52,22 @@ def test_production_rejects_short_jwt_secret() -> None:
         Settings(app_env="prod", jwt_secret="too-short", admin_password=STRONG_PASSWORD)
 
 
-def test_production_rejects_default_admin_password() -> None:
-    with pytest.raises(ValueError, match="ADMIN_PASSWORD"):
-        Settings(app_env="prod", jwt_secret=STRONG_SECRET, admin_password=DEFAULT_ADMIN_PASSWORD)
+def test_production_does_not_refuse_to_start_on_default_admin_password(caplog) -> None:
+    """**默认 ADMIN_PASSWORD 不再拦启动**，只告警（2026-10-25 挪到 seed 侧硬失败）。
+
+    ⚠️ 它跑流量时一次都不读。以前它挂在启动校验上，代价实测过：
+        `.env` 留空 → api crash-loop → `depends_on: service_healthy` 把 nginx 一起拖住
+        → **整站连接被拒**，而且**回滚救不了**（回滚换镜像，`.env` 不在版本控制里）。
+    ⚠️ 但**不能就这么放过去**：启动必须留一条告警，建库时必须硬失败
+        （`app/db/seed.py::_guard_admin_password`，见 `test_seed_guard.py`）。
+    """
+    with caplog.at_level(logging.WARNING):
+        settings = Settings(
+            app_env="prod", jwt_secret=STRONG_SECRET, admin_password=DEFAULT_ADMIN_PASSWORD
+        )
+
+    assert settings.admin_password == DEFAULT_ADMIN_PASSWORD
+    assert "首次建库会失败" in caplog.text
 
 
 def test_production_accepts_properly_configured_secrets() -> None:
@@ -61,15 +76,18 @@ def test_production_accepts_properly_configured_secrets() -> None:
     assert settings.jwt_secret == STRONG_SECRET
 
 
-#: ⚠️ 这两条锁的是 2026-10-17 抓到的一个**真实漏洞**：
-#:    `.env` 里写成 `ADMIN_PASSWORD=`（占位没填）时读出来是**空字符串**，
-#:    它**不等于** `DEFAULT_ADMIN_PASSWORD`（`"change-me"`）——
-#:    原来那道闸只比较"是不是默认值"，于是**空值被放行**，
-#:    接着 `seed` 会建一个**空密码的管理员**。
+#: ⚠️ 这条锁的是 2026-10-17 抓到的真实漏洞 + 2026-10-25 的事故，两件事要**同时**成立：
+#:    ① `.env` 写成 `ADMIN_PASSWORD=` 读出来是**空字符串**，不等于 `change-me` ——
+#:       只比较"是不是默认值"会把它放过去，于是 seed 建出一个**空密码的管理员**；
+#:    ② 但**拦在启动上是错的位置** —— 一个建库变量把整站打掉、回滚还救不了。
+#:    ⟹ 现在的分工：**启动只告警（这里是空的，照样能起）＋ 建库时硬失败**（seed 侧）。
 #:    📌 这和本项目一贯的病同源：**闸只覆盖了"想到的那种错"，没覆盖"什么都没填"**。
-def test_production_rejects_EMPTY_admin_password() -> None:
-    with pytest.raises(ValueError, match="ADMIN_PASSWORD 是空的"):
-        Settings(app_env="prod", jwt_secret=STRONG_SECRET, admin_password="")
+def test_production_tolerates_EMPTY_admin_password_at_startup(caplog) -> None:
+    with caplog.at_level(logging.WARNING):
+        settings = Settings(app_env="prod", jwt_secret=STRONG_SECRET, admin_password="")
+
+    assert settings.admin_password == ""
+    assert "ADMIN_PASSWORD 是空的" in caplog.text
 
 
 def test_production_rejects_EMPTY_jwt_secret() -> None:

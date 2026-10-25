@@ -97,15 +97,39 @@ async def _seed_orders(session: AsyncSession, tenant_id: uuid.UUID, user_id: uui
     print(f"[seed] 订单：新建 {created} 条，已存在跳过 {len(_ORDER_SPECS) - created} 条")
 
 
-async def seed() -> None:
-    """建默认租户 + 管理员（幂等）。"""
-    settings = get_settings()
+def _guard_admin_password(password: str) -> None:
+    """建库前必须有一个**真实的**管理员密码 —— 空值和默认值一律拒绝。
 
-    if settings.app_env != "dev" and settings.admin_password == DEFAULT_ADMIN_PASSWORD:
+    ⚠️ **为什么闸在这里，而不在 `Settings` 的启动校验里**（2026-10-25 挪过来的）：
+        `ADMIN_PASSWORD` 只在"库里还没有这个邮箱"时被读一次，**跑流量时一次都不读**。
+        以前它挂在启动校验上，后果实测过：`.env` 里留空 → api crash-loop →
+        `depends_on: condition: service_healthy` 把 nginx 一起拖住 → **整站连接被拒**，
+        而且**回滚救不了**（回滚换镜像，`.env` 不在版本控制里）。
+        ⟹ 闸门放在**真正用它的那一刻**：站点照常启动（只打告警），建库这一步响亮地失败。
+
+    ⚠️ **空值必须单独判**：`.env` 写成 `ADMIN_PASSWORD=` 读出来是**空字符串**，
+        它不等于 `change-me`；只比较"是不是默认值"会把它放过去，
+        然后这里就会建一个**空密码的管理员**（等于没有密码）。
+    """
+    if not password.strip():
+        raise SystemExit(
+            "拒绝执行：ADMIN_PASSWORD 是空的。\n"
+            ".env 里 `ADMIN_PASSWORD=` 这种写法读出来是空字符串 —— 用空密码建管理员等于没有密码。\n"
+            "请在 .env 里设一个真实密码后再跑 seed。"
+        )
+    if password == DEFAULT_ADMIN_PASSWORD:
         raise SystemExit(
             "拒绝执行：APP_ENV 不是 dev，但 ADMIN_PASSWORD 仍是默认值。\n"
             "请在 .env 里设一个真实密码后再跑 seed。"
         )
+
+
+async def seed() -> None:
+    """建默认租户 + 管理员（幂等）。"""
+    settings = get_settings()
+
+    if settings.app_env != "dev":
+        _guard_admin_password(settings.admin_password)
 
     email = settings.admin_email.strip().lower()
     factory = get_session_factory()
