@@ -1,7 +1,7 @@
 /** 知识库文档接口（对应 `app/api/documents.py`）。 */
 
 import { apiJson } from './client'
-import type { DocumentListOut, DocumentUploadOut } from '@/types/api'
+import type { DocumentChunksOut, DocumentListOut, DocumentUploadOut } from '@/types/api'
 
 /**
  * 上传一个文件。
@@ -21,4 +21,19 @@ export function uploadDocument(file: File): Promise<DocumentUploadOut> {
 /** 文档列表（按创建时间倒序）。界面靠它轮询入库状态。 */
 export function listDocuments(limit = 100): Promise<DocumentListOut> {
   return apiJson<DocumentListOut>(`/documents?limit=${limit}`)
+}
+
+/**
+ * 「看原文」：某一块 ＋ 前后各 `window` 块（**永远不是整篇**）。
+ *
+ * ⚠️ **点了才请求**：会话默认视图一个字都不变，不点就零流量。
+ */
+export function getChunkContext(
+  documentId: string,
+  around: number,
+  window = 1,
+): Promise<DocumentChunksOut> {
+  return apiJson<DocumentChunksOut>(
+    `/documents/${documentId}/chunks?around=${around}&window=${window}`,
+  )
 }

@@ -73,6 +73,11 @@ export interface Citation {
   score: number
   score_kind: ScoreKind
   snippet: string
+  /**
+   * 这块在文档里的序号（「看原文」靠它定位）。
+   * ⚠️ 可选：2026-10-25 之前的回答没有这个字段 ⟹ 那些卡片没有「看原文」按钮（不是 bug）。
+   */
+  ordinal?: number
 }
 
 /**
@@ -157,8 +162,7 @@ export interface DocumentOut {
   updated_at: string
 }
 
-export interface DocumentUploadOut extends DocumentOut {
-  /** 这次请求是不是真的新建了一份。`false` = 判重命中（**不是失败**）。 */
+export interface DocumentUploadOut extends DocumentOut {  /** 这次请求是不是真的新建了一份。`false` = 判重命中（**不是失败**）。 */
   created: boolean
   note: string
 }
@@ -166,6 +170,25 @@ export interface DocumentUploadOut extends DocumentOut {
 export interface DocumentListOut {
   total: number
   items: DocumentOut[]
+}
+
+/** 切片的一块（「看上下文」用）。 */
+export interface ChunkOut {
+  ordinal: number
+  content: string
+  /** 是不是用户点开的那一块（前后相邻的几块是 `false`）。 */
+  hit: boolean
+}
+
+/** `GET /documents/{id}/chunks?around=` —— **只给相邻几块**，永远不是整篇。 */
+export interface DocumentChunksOut {
+  document_id: string
+  filename: string
+  /** 请求的那一块（越界已被后端夹到合法区间）。 */
+  ordinal: number
+  total: number
+  window: number
+  items: ChunkOut[]
 }
 
 // ------------------------------------------------------------
@@ -284,6 +307,16 @@ export interface MonitorSnapshot {
 // 配额与成本（app/schemas/usage.py）
 // ------------------------------------------------------------
 
+/** 某个渠道今天花了多少（**同一笔总量**的分项，不参与限流判定）。 */
+export interface ChannelUsage {
+  /** 机器值：`web` / `feishu_p2p` / `feishu_group` */
+  channel: string
+  /** 给人看的名字（「内部 Web」/「飞书私聊」/「飞书群聊」） */
+  label: string
+  /** `null` = 取不到 */
+  tokens_used: number | null
+}
+
 export interface UsageOut {
   date: string
   /** ⚠️ `null` = **取不到**（Redis 不可用），要显示 `—`，不是 0。 */
@@ -298,6 +331,10 @@ export interface UsageOut {
   price_per_million_tokens: number | null
   generated_at_display: string
   note: string
+  /** 按渠道拆（顺序固定：Web / 飞书私聊 / 飞书群聊）。 */
+  channels: ChannelUsage[]
+  /** 总量里没能归到渠道的部分（加渠道维度之前的账），正常是 0，`null` = 取不到。 */
+  tokens_unattributed: number | null
 }
 
 export interface MemberUsage {
@@ -305,6 +342,8 @@ export interface MemberUsage {
   role: string
   tokens_used: number | null
   quota_limit: number
+  /** 这一行是**飞书渠道账号**（私聊＋所有群聊都记在它名下）。 */
+  is_channel_account: boolean
 }
 
 export interface TenantUsageOut {

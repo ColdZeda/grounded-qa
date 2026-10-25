@@ -49,3 +49,32 @@ class DocumentListOut(BaseModel):
 
     total: int
     items: list[DocumentOut]
+
+
+class ChunkOut(BaseModel):
+    """切片的一块（**看上下文**用）。"""
+
+    #: 在这份文档里的序号（0 开始）。检索命中的「第 3 / 12 块」就是它。
+    ordinal: int
+    content: str
+    #: 是不是**用户点开的那一块**（前后相邻的那几块是 `False`）
+    hit: bool = False
+
+
+class DocumentChunksOut(BaseModel):
+    """`GET /documents/{id}/chunks?around=` 的返回：**只给相邻的几块**。
+
+    ⚠️ **故意不返回整篇**：一是流量，二是"你看到的是片段"这件事本身要**一直成立**
+       （整篇返回会让人以为这就是全文，然后拿别处的原文来对不上）。
+    """
+
+    document_id: uuid.UUID
+    filename: str
+    #: 请求的那一块（越界已被夹到 [0, total-1]）
+    ordinal: int
+    #: 这份文档一共几块
+    total: int
+    #: 实际前后各取了几块（入参回显，前端据此说"上下各 N 块"）
+    window: int
+    #: 升序，包含命中块
+    items: list[ChunkOut]

@@ -54,13 +54,49 @@ function num(value: number | null | undefined, digits = 1): string {
   return value.toFixed(digits)
 }
 
+/**
+ * 哪一组「压成一行」渲染（2026-10-25 走查）。
+ *
+ * ⚠️ **只在页面上合并，后端仍然是"一个面板 = 一个指标"**：四个数的单位（%、MB、GB、负载）、
+ *    口径、告警阈值各不相同，合成一条 PromQL 会让它们全丢掉自己的单位与阈值。
+ *    合并解决的是"四张卡占了两行、信息密度反而低"这件事。
+ */
+const COMPACT_GROUPS = new Set(['资源'])
+
+function isCompact(group: Group): boolean {
+  return COMPACT_GROUPS.has(group.name)
+}
+
+/** 一行里显示的值：没有样本是 `—`，多条序列用 `·` 并列（资源组其实都是单条）。 */
+function statValue(panel: MonitorPanel): string {
+  if (panel.items.length === 0) return '—'
+  if (panel.items.length === 1) return fmt(panel, panel.items[0])
+  return panel.items.map((item) => fmt(panel, item)).join(' · ')
+}
+
+/** 布尔型面板 = "抓得到/抓不到"，它不该显示 1/0，而是 ✓ / ✗。 */
+function isBoolPanel(panel: MonitorPanel): boolean {
+  return panel.unit === 'bool'
+}
+
+function isOk(panel: MonitorPanel): boolean {
+  return (panel.items[0]?.value ?? 0) >= 1
+}
+
+function boolHint(panel: MonitorPanel): string {
+  return isOk(panel)
+    ? 'Prometheus 能抓到 /metrics（容器在跑、端口对）'
+    : '抓不到 /metrics —— 容器挂了、端口不对，或 Prometheus 自己没在跑'
+}
+
 /** 把「单位」翻成给人看的一串字。`null` 一律 `—`。 */
 function fmt(panel: MonitorPanel, item: MonitorItem | undefined): string {
   const value = item?.value
   if (value === null || value === undefined) return '—'
   switch (panel.unit) {
     case 'bool':
-      return value >= 1 ? '抓得到' : '抓不到'
+      // 兜底文字：真正的显示是 ✓ / ✗ 图标（见模板里的 `bool` 分支）
+      return value >= 1 ? '✓' : '✗'
     case 'ratio':
       return `${num(value * 100)}%`
     case 'pct':
@@ -162,14 +198,45 @@ onMounted(load)
 
         <section v-for="group in groups" :key="group.name" class="group">
           <h3 class="group__title">{{ group.name }}</h3>
-          <div class="cards">
+
+          <!--
+            资源组：**四个数一行**（CPU / 可用内存 / 根分区 / 负载）。
+            每格仍保留自己的单位与口径（悬停见 `panel.hint`）—— 见 `COMPACT_GROUPS` 的注释。
+          -->
+          <div v-if="isCompact(group)" class="stats">
+            <article
+              v-for="panel in group.panels"
+              :key="panel.key"
+              class="stats__item"
+              :title="panel.hint"
+            >
+              <span class="stats__label">{{ panel.title }}</span>
+              <span class="stats__value">{{ statValue(panel) }}</span>
+              <span v-if="isStale(panel)" class="stale">样本是 {{ ageOf(panel) }}的</span>
+            </article>
+            <p class="stats__hint">主机级指标 · Prometheus 每 30 秒采一次</p>
+          </div>
+
+          <div v-else class="cards">
             <article v-for="panel in group.panels" :key="panel.key" class="card">
               <header class="card__head">
                 <h4 class="card__title">{{ panel.title }}</h4>
                 <span v-if="isStale(panel)" class="stale">样本是 {{ ageOf(panel) }}的</span>
               </header>
 
-              <p v-if="panel.items.length === 0" class="value value--none" title="没有采到样本">
+              <!-- 布尔面板：不显示 1/0，显示 ✓ / ✗（悬停与读屏文字给完整解释） -->
+              <p v-if="isBoolPanel(panel)" class="value">
+                <span
+                  class="bool"
+                  :class="isOk(panel) ? 'bool--ok' : 'bool--bad'"
+                  role="img"
+                  :aria-label="boolHint(panel)"
+                  :title="boolHint(panel)"
+                >
+                  {{ isOk(panel) ? '✓' : '✗' }}
+                </span>
+              </p>
+              <p v-else-if="panel.items.length === 0" class="value value--none" title="没有采到样本">
                 —
               </p>
               <p v-else-if="panel.items.length === 1" class="value">
@@ -255,6 +322,62 @@ onMounted(load)
   /* 190px 是「五块卡片排一行」的下限：卡里最长的东西是那行注释，
      再窄就会把 "0 = 抓不到" 这类句子拆得太碎。 */
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+/* ---------- 压成一行的资源组 ----------
+   ⚠️ 四个数一行，**不是四张卡挤一行**：每格只有"标题 + 数"，口径收进悬停。
+   窄屏时自动折成两列（`auto-fit`），不会把数字挤成竖排。 */
+.stats {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.stats__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: help;
+}
+
+.stats__label {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.stats__value {
+  color: var(--text);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats__hint {
+  margin: 2px 0 0;
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  grid-column: 1 / -1;
+}
+
+/* ---------- 布尔状态：✓ / ✗ ----------
+   ⚠️ 图标之外还有 `title` + `aria-label`（`boolHint()`）：
+      只靠一个符号，读屏用户和色弱用户都拿不到"这是好还是坏"。 */
+.bool {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.bool--ok {
+  color: var(--ok);
+}
+
+.bool--bad {
+  color: var(--danger);
 }
 
 .card {

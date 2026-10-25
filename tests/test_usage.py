@@ -8,11 +8,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from app.api.usage import _cost, _reset_at
 from app.core.config import get_settings
-from app.core.limits import add_tokens, peek_quota, peek_rate
+from app.core.limits import SHANGHAI, _quota_key, add_tokens, peek_quota, peek_rate
 from app.db.models.user import UserRole
 from tests.fakeredis import FakeRedis
 
@@ -33,7 +35,7 @@ async def test_peek_quota_zero_when_untouched() -> None:
 
 async def test_peek_quota_reads_what_add_tokens_wrote() -> None:
     redis = FakeRedis()
-    await add_tokens(redis, subject="u1", tokens=1500)
+    await add_tokens(redis, subject="u1", tokens=1500, channel="web")
     assert await peek_quota(redis, subject="u1") == 1500
     # 别人不受影响
     assert await peek_quota(redis, subject="u2") == 0
@@ -58,10 +60,6 @@ def test_cost_is_none_without_price() -> None:
 
 
 def test_reset_at_is_next_midnight_beijing() -> None:
-    from datetime import datetime
-
-    from app.core.limits import SHANGHAI
-
     # 20:30 的下一零点 = 次日 00:00
     assert _reset_at(datetime(2026, 10, 19, 20, 30, tzinfo=SHANGHAI)) == "2026-10-20 00:00"
 
@@ -72,7 +70,7 @@ def test_reset_at_is_next_midnight_beijing() -> None:
 @pytest.mark.integration
 async def test_my_usage_reflects_recorded_tokens(client, login, make_account, limits_redis) -> None:
     account = await make_account(label="usage")
-    await add_tokens(limits_redis, subject=str(account.user_id), tokens=12_345)
+    await add_tokens(limits_redis, subject=str(account.user_id), tokens=12_345, channel="web")
     token = await login(account.email, account.password)
 
     response = await client.get(f"{PREFIX}/usage/me", headers=account.auth(token))
@@ -97,7 +95,9 @@ async def test_my_usage_clamps_remaining_but_keeps_used(
     """超额时 `remaining` 贴 0，但 `tokens_used` **保持真实值**（不能把它抹成上限）。"""
     account = await make_account(label="usage-over")
     limit = get_settings().token_quota_per_day
-    await add_tokens(limits_redis, subject=str(account.user_id), tokens=limit + 5_000)
+    await add_tokens(
+        limits_redis, subject=str(account.user_id), tokens=limit + 5_000, channel="web"
+    )
     token = await login(account.email, account.password)
 
     body = (await client.get(f"{PREFIX}/usage/me", headers=account.auth(token))).json()
@@ -107,14 +107,87 @@ async def test_my_usage_clamps_remaining_but_keeps_used(
 
 
 @pytest.mark.integration
+async def test_my_usage_splits_tokens_by_channel(client, login, make_account, limits_redis) -> None:
+    """**按渠道拆**：三档之和必须等于总量。
+
+    ⚠️ 这是唯一能挡住"新加一个调用点忘了传 channel"的判据 —— 漏传时
+       页面会显示总量 1000、分项只有 900，而**任何地方都不报错**。
+    """
+    account = await make_account(label="usage-channel")
+    subject = str(account.user_id)
+    await add_tokens(limits_redis, subject=subject, tokens=700, channel="web")
+    await add_tokens(limits_redis, subject=subject, tokens=200, channel="feishu_p2p")
+    await add_tokens(limits_redis, subject=subject, tokens=100, channel="feishu_group")
+    token = await login(account.email, account.password)
+
+    body = (await client.get(f"{PREFIX}/usage/me", headers=account.auth(token))).json()
+
+    by_channel = {item["channel"]: item["tokens_used"] for item in body["channels"]}
+    assert by_channel == {"web": 700, "feishu_p2p": 200, "feishu_group": 100}
+    # 颜色之外一定有文字；顺序固定（前端按顺序渲染，不自己排）
+    assert [item["label"] for item in body["channels"]] == ["内部 Web", "飞书私聊", "飞书群聊"]
+    assert sum(by_channel.values()) == body["tokens_used"] == 1000
+    assert body["tokens_unattributed"] == 0
+
+
+@pytest.mark.integration
+async def test_unattributed_tokens_are_shown_not_hidden(
+    client, login, make_account, limits_redis
+) -> None:
+    """加渠道维度**之前**记的账：总量 > 分项之和。
+
+    ⚠️ 这种差额**必须显式显示**（"另有 N 未标注渠道"），不能悄悄丢掉 ——
+       否则页面看起来"分项加起来对不上总量"，而人只会怀疑数字在瞎编。
+       真实的这类数据只会存在一天（Redis 每天清零）。
+    """
+    account = await make_account(label="usage-legacy")
+    subject = str(account.user_id)
+    await add_tokens(limits_redis, subject=subject, tokens=300, channel="web")
+    # 直接往配额键里加分项没记的那部分（模拟上线前的流量）
+    key, _ = _quota_key(subject, datetime.now(SHANGHAI))
+    await limits_redis.incrby(key, 500)
+    token = await login(account.email, account.password)
+
+    body = (await client.get(f"{PREFIX}/usage/me", headers=account.auth(token))).json()
+
+    assert body["tokens_used"] == 800
+    assert sum(item["tokens_used"] for item in body["channels"]) == 300
+    assert body["tokens_unattributed"] == 500
+
+
+@pytest.mark.integration
+async def test_tenant_usage_marks_the_feishu_channel_account(
+    client, login, make_account, limits_redis
+) -> None:
+    """飞书渠道账号在成员表里**必须带标记** —— 否则它就是一行"看不出是谁、数字还很大"的账号。"""
+    admin = await make_account(role=UserRole.ADMIN, label="usage-mark")
+    token = await login(admin.email, admin.password)
+
+    body = (await client.get(f"{PREFIX}/usage/tenant", headers=admin.auth(token))).json()
+
+    settings = get_settings()
+    channel_email = (settings.feishu_channel_email or settings.admin_email).strip().lower()
+    # ⚠️ 判据写成"标记 == 这行是不是渠道账号"，而不是"必须有一行被标记"：
+    #    测试库里不一定会 seed 出那个账号，断言它存在会让这条测试**依赖别人的数据**。
+    for item in body["items"]:
+        assert item["is_channel_account"] == (item["email"].strip().lower() == channel_email)
+    # 并且：被标记的行只可能是它，不会误标到别人
+    assert all(
+        item["email"].strip().lower() == channel_email
+        for item in body["items"]
+        if item["is_channel_account"]
+    )
+
+
+@pytest.mark.integration
 async def test_tenant_usage_is_scoped_and_admin_only(
     client, login, make_account, limits_redis
 ) -> None:
     """管理员只看到**自己租户**的人；普通成员进不来。"""
     admin = await make_account(role=UserRole.ADMIN, label="usage-admin")
     outsider = await make_account(role=UserRole.MEMBER, label="usage-outsider")
-    await add_tokens(limits_redis, subject=str(admin.user_id), tokens=800)
-    await add_tokens(limits_redis, subject=str(outsider.user_id), tokens=900)
+    await add_tokens(limits_redis, subject=str(admin.user_id), tokens=800, channel="web")
+    await add_tokens(limits_redis, subject=str(outsider.user_id), tokens=900, channel="web")
 
     admin_token = await login(admin.email, admin.password)
     response = await client.get(f"{PREFIX}/usage/tenant", headers=admin.auth(admin_token))

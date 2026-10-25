@@ -396,7 +396,12 @@ class FeishuChannel:
             await session.commit()
 
             if self._guard is not None and final.usage.get("total_tokens"):
-                await self._guard.record_tokens(user.id, int(final.usage["total_tokens"]))
+                await self._guard.record_tokens(
+                    user.id,
+                    int(final.usage["total_tokens"]),
+                    # 这条消息记在**哪个渠道**的账上：群聊 / 私聊分开算（2026-10-25）
+                    channel=conversation.channel.value,
+                )
 
             return render_reply(final, show_sources=self._settings.feishu_show_sources)
 

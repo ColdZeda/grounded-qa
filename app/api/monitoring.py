@@ -62,7 +62,7 @@ PANELS: tuple[_Panel, ...] = (
         group="可用性与延迟",
         title="API 抓取状态",
         unit="bool",
-        hint="1 = Prometheus 能抓到 /metrics；0 = 抓不到（容器挂了或端口不对）",
+        hint="✓ = Prometheus 能抓到 /metrics；✗ = 抓不到（容器挂了、端口不对，或 Prometheus 没在跑）",
         expr='up{job="grounded-api"}',
     ),
     _Panel(

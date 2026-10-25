@@ -61,18 +61,36 @@ const groups = computed<Group[]>(() => {
     if (bucket) bucket.push(item)
     else byChat.set(key, [item])
   }
+  /*
+   * ⚠️ **群名可能重名**（2026-10-25）：两个群都叫「客服测试群」时，两段长得一模一样，
+   *    坐席会点错。**重名的才**加 `#` ＋ `chat_id` 后 4 位 —— 不重名就不加，
+   *    别给每一段都挂一串噪声。所以要先把名字数一遍，再拼标题。
+   */
+  const nameCount = new Map<string, number>()
   for (const [chatId, list] of byChat) {
-    // 同一群里所有会话的 `external_title` 是同一个群名（解析失败时是 id 后 6 位）
-    const name = list[0].external_title ?? `飞书群 · ${chatId.slice(-6)}`
+    const name = groupName(chatId, list)
+    nameCount.set(name, (nameCount.get(name) ?? 0) + 1)
+  }
+
+  for (const [chatId, list] of byChat) {
+    const name = groupName(chatId, list)
+    const suffix = (nameCount.get(name) ?? 0) > 1 ? ` #${chatId.slice(-4)}` : ''
     out.push({
       key: `grp:${chatId}`,
       kind: 'feishu_group',
-      label: `${name}（${list.length} 人）`,
+      // ⚠️「N 位顾客」不是「N 人」：这个数字是**问过的人数**，不是群成员数
+      //    （多群之后尤其容易混 —— 用户 2026-10-25 就误解过）
+      label: `${name}${suffix}（${list.length} 位顾客）`,
       items: list,
     })
   }
   return out
 })
+
+/** 群名（拿不到就退成 `chat_id` 后 6 位）。同一个群的所有会话该值是同一个。 */
+function groupName(chatId: string, list: ConversationOut[]): string {
+  return list[0]?.external_title ?? `飞书群 · ${chatId.slice(-6)}`
+}
 
 /** 相对时间。列表按"最近更新"排序，所以相对时间比绝对时间好读。 */
 function relative(iso: string): string {

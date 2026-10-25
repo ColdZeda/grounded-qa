@@ -26,6 +26,8 @@ from app.core.limits import (
     consume_rate,
     ensure,
     human_delay,
+    peek_channel_usage,
+    peek_quota,
     read_quota,
 )
 from tests.fakeredis import FakeRedis
@@ -115,7 +117,7 @@ async def test_quota_is_read_only_and_blocks_at_the_limit() -> None:
 
     assert (await read_quota(redis, subject=SUBJECT, limit=100, now=_at(10, 0))).allowed is True
 
-    await add_tokens(redis, subject=SUBJECT, tokens=100, now=_at(10, 0))
+    await add_tokens(redis, subject=SUBJECT, tokens=100, channel="web", now=_at(10, 0))
     decision = await read_quota(redis, subject=SUBJECT, limit=100, now=_at(10, 0))
 
     # ⚠️ `read_quota` **不写库**：连续读两次，用量不该变（加是在回答之后）
@@ -128,19 +130,43 @@ async def test_quota_is_read_only_and_blocks_at_the_limit() -> None:
 async def test_quota_accumulates_tokens() -> None:
     redis = FakeRedis()
 
-    await add_tokens(redis, subject=SUBJECT, tokens=30, now=_at(10, 0))
-    await add_tokens(redis, subject=SUBJECT, tokens=12, now=_at(10, 0))
+    await add_tokens(redis, subject=SUBJECT, tokens=30, channel="web", now=_at(10, 0))
+    await add_tokens(redis, subject=SUBJECT, tokens=12, channel="web", now=_at(10, 0))
 
     decision = await read_quota(redis, subject=SUBJECT, limit=1000, now=_at(10, 0))
     assert decision.used == 42
+
+
+async def test_tokens_are_also_split_by_channel_without_touching_the_quota() -> None:
+    """按渠道另记一本明细账，**配额那一笔完全不受影响**（2026-10-25）。
+
+    ⚠️ 这条测试盯两件事：① 三档之和 == 总量；② 加明细**不改变限流判据**。
+       哪天有人在 `add_tokens` 里把渠道键当成配额键用，或者漏记一个渠道，
+       这两条断言会立刻红 —— 否则表现只是"页面上的数字对不上"，没人会发现。
+    """
+    redis = FakeRedis()
+
+    await add_tokens(redis, subject=SUBJECT, tokens=100, channel="web", now=_at(10, 0))
+    await add_tokens(redis, subject=SUBJECT, tokens=30, channel="feishu_group", now=_at(10, 0))
+
+    per = await peek_channel_usage(
+        redis,
+        subject=SUBJECT,
+        channels=["web", "feishu_p2p", "feishu_group"],
+        now=_at(10, 5),
+    )
+
+    assert per == {"web": 100, "feishu_p2p": 0, "feishu_group": 30}
+    total = await peek_quota(redis, subject=SUBJECT, now=_at(10, 5))
+    assert sum(per.values()) == total == 130
 
 
 async def test_quota_ignores_zero_and_negative_tokens() -> None:
     """拒答是 0 token（根本没调模型）—— 不该因为它写一条 0 进去。"""
     redis = FakeRedis()
 
-    await add_tokens(redis, subject=SUBJECT, tokens=0, now=_at(10, 0))
-    await add_tokens(redis, subject=SUBJECT, tokens=-5, now=_at(10, 0))
+    await add_tokens(redis, subject=SUBJECT, tokens=0, channel="web", now=_at(10, 0))
+    await add_tokens(redis, subject=SUBJECT, tokens=-5, channel="web", now=_at(10, 0))
 
     assert redis.data == {}
 
@@ -163,7 +189,7 @@ async def test_quota_retry_after_points_at_next_midnight_beijing_time() -> None:
 async def test_quota_window_rolls_over_at_midnight() -> None:
     redis = FakeRedis()
 
-    await add_tokens(redis, subject=SUBJECT, tokens=100, now=_at(23, 59, 59))
+    await add_tokens(redis, subject=SUBJECT, tokens=100, channel="web", now=_at(23, 59, 59))
     # 同一刻仍算今天
     assert (
         await read_quota(redis, subject=SUBJECT, limit=100, now=_at(23, 59, 59))
@@ -192,7 +218,7 @@ async def test_add_tokens_swallows_redis_errors() -> None:
     """记账失败不能让**已经生成完的回答**变成 500 —— 用户已经看到字了。"""
     redis = FakeRedis(broken=True)
 
-    await add_tokens(redis, subject=SUBJECT, tokens=100)  # 不抛
+    await add_tokens(redis, subject=SUBJECT, tokens=100, channel="web")  # 不抛
 
 
 # ------------------------------------------------------------

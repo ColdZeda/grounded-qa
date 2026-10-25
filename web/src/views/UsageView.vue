@@ -64,6 +64,16 @@ function percentOf(used: number | null, limit: number): string {
   return `${((used / limit) * 100).toFixed(1)}%`
 }
 
+/**
+ * 某渠道占**今天总量**的比例。
+ * ⚠️ 分母是总量（不是配额）：这里回答的是"花掉的钱里这个渠道占几成"。
+ */
+function share(tokens: number | null): string {
+  const total = usage.value?.tokens_used
+  if (tokens === null || total === null || total === undefined || total <= 0) return '—'
+  return `${((tokens / total) * 100).toFixed(0)}%`
+}
+
 async function load(): Promise<void> {
   loading.value = true
   error.value = ''
@@ -147,6 +157,26 @@ onMounted(load)
           <p v-if="usage.tokens_used === null" class="alert alert--warn alert--inline">
             取不到用量（Redis 不可用）。这是个 `—`，<b>不是 0</b> —— 额度到底还剩多少，现在不知道。
           </p>
+
+          <!--
+            按渠道拆（2026-10-25 用户提的）：**总量是同一笔账**，这里只是把它拆开看。
+            ⚠️ 飞书的消息仍然全部记在**渠道账号**名下，不是按人记的 —— 页面底部那句要说清。
+          -->
+          <div v-if="usage.channels.length" class="chans">
+            <p class="chans__head">
+              按渠道
+              <span v-if="usage.tokens_unattributed" class="chans__legacy">
+                另有 {{ num(usage.tokens_unattributed) }} token 是加渠道之前的账（第二天自动归零）
+              </span>
+            </p>
+            <ul class="chans__list">
+              <li v-for="item in usage.channels" :key="item.channel" class="chan">
+                <span class="chan__label">{{ item.label }}</span>
+                <span class="chan__value mono">{{ num(item.tokens_used) }}</span>
+                <span class="chan__pct">{{ share(item.tokens_used) }}</span>
+              </li>
+            </ul>
+          </div>
         </section>
 
         <!-- 租户视图：只有管理员有 -->
@@ -170,7 +200,20 @@ onMounted(load)
             </thead>
             <tbody>
               <tr v-for="item in tenant.items" :key="item.email">
-                <td class="email">{{ item.email }}</td>
+                <td class="email">
+                  {{ item.email }}
+                  <!--
+                    ⚠️ 这行不打标记就是个"看不出是谁、数字还特别大"的账号
+                        （用户 2026-10-25 走查时正好在这里困惑过）。
+                  -->
+                  <span
+                    v-if="item.is_channel_account"
+                    class="tag"
+                    title="飞书私聊 ＋ 所有群聊的消耗都记在这个账号名下（飞书不按人记账）"
+                  >
+                    飞书渠道总账
+                  </span>
+                </td>
                 <td>{{ item.role === 'admin' ? '管理员' : '成员' }}</td>
                 <td class="right mono">{{ num(item.tokens_used) }}</td>
                 <td class="right mono">{{ percentOf(item.tokens_used, item.quota_limit) }}</td>
@@ -179,7 +222,9 @@ onMounted(load)
           </table>
 
           <p class="foot">
-            ⚠️ 这是<b>租户内</b>的视图：你看不到别的租户的人。用量取不到的成员显示 `—`，并排在最后。
+            ⚠️ 这是<b>租户内</b>的视图：你看不到别的租户的人。用量取不到的成员显示 `—`，并排在最后。<br />
+            带「<b>飞书渠道总账</b>」标记的那一行，是<b>飞书私聊 ＋ 所有群聊的合计</b> ——
+            飞书的消息全部记在这一个账号名下，不按顾客分。想按渠道看，看上面那张卡的「按渠道」。
           </p>
         </section>
       </template>
@@ -285,6 +330,69 @@ onMounted(load)
   color: var(--text-faint);
   font-family: inherit;
   font-size: 0.72rem;
+}
+
+/* ---------- 按渠道（同一笔总量的三个分项） ---------- */
+.chans {
+  margin: 16px 0 0;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+.chans__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.chans__legacy {
+  color: var(--warn);
+  font-size: 0.72rem;
+}
+
+.chans__list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chan {
+  display: grid;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.82rem;
+  grid-template-columns: 6.5em 1fr 3em;
+}
+
+.chan__label {
+  color: var(--text-muted);
+}
+
+.chan__value {
+  text-align: right;
+}
+
+.chan__pct {
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  text-align: right;
+}
+
+/* 「飞书渠道总账」标记：小、但必须有 —— 否则那一行就是个谜 */
+.tag {
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, #0e9384 35%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, #0e9384 8%, var(--surface));
+  color: #0e9384;
+  font-size: 0.68rem;
+  white-space: nowrap;
 }
 
 .alert--inline {

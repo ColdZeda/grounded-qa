@@ -55,6 +55,9 @@ class Citation:
     #:    会让人以为它们可比 —— 实际上 0.62 的 rerank 分和 0.62 的余弦相似度
     #:    完全是两回事。
     score_kind: str
+    #: 这块在文档里的序号（「看原文」靠它定位：`GET /documents/{id}/chunks?around=`）。
+    #: ⚠️ 默认 0 只是为了老数据反序列化不炸；新回答一定带上真实序号。
+    ordinal: int = 0
 
     def as_dict(self) -> dict[str, object]:
         """转成可直接入库（`messages.citations`）的结构。"""
@@ -65,6 +68,7 @@ class Citation:
             "score": round(self.score, 4),
             "score_kind": self.score_kind,
             "snippet": self.snippet,
+            "ordinal": self.ordinal,
         }
 
 
@@ -348,6 +352,7 @@ class RagPipeline:
                     score=hit.score,
                     snippet=prompt_module.make_snippet(hit.content),
                     score_kind=citation_kind,
+                    ordinal=hit.ordinal,
                 )
                 for index, hit in enumerate(hits, start=1)
             ]

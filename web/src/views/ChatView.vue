@@ -11,6 +11,7 @@ import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import AppHeader from '@/components/AppHeader.vue'
+import ContextDrawer from '@/components/ContextDrawer.vue'
 import MessageItem from '@/components/MessageItem.vue'
 import { ApiError } from '@/api/client'
 import { streamAnswer } from '@/api/chat'
@@ -45,6 +46,19 @@ const messages = ref<UiMessage[]>([])
 const draft = ref('')
 const loading = ref(true)
 const loadError = ref('')
+
+/**
+ * 「看原文」抽屉的状态。
+ *
+ * ⚠️ 放在**页面级**（不在 `MessageItem` 里）：一条消息可能有很多来源，
+ *    每个来源各挂一个抽屉 = 一堆重复状态，而且"同时打开两个"迟早发生。
+ *    `null` = 抽屉关着。
+ */
+const ctx = ref<{ documentId: string; ordinal: number; title: string } | null>(null)
+
+function openContext(payload: { documentId: string; ordinal: number; title: string }): void {
+  ctx.value = payload
+}
 
 /** `retrieving` = 检索中（还没收到 sources）；`generating` = 正在出字。 */
 const phase = ref<'idle' | 'retrieving' | 'generating'>('idle')
@@ -499,10 +513,16 @@ onBeforeUnmount(() => {
 <template>
   <div class="shell">
     <!--
-      标题就是会话标题（新会话时是「新会话」）：页面动作条只回答"这一页是什么"，
-      会话本身的名字放在这里最省地方 —— 左边侧栏已经在说"你在会话这一分区"。
+      标题就是会话标题（新会话时是「新会话」）：页面动作条只回答"这一页是什么"。
+      ⚠️ `back` 是 2026-10-25 走查补的：此前回列表只有左下角侧栏的「会话」，
+         它长得像"分区入口"、不像"返回"，外人第一反应是找不到路。
     -->
-    <AppHeader :title="conversationTitle || '新会话'" tone="blue">
+    <AppHeader
+      :title="conversationTitle || '新会话'"
+      tone="blue"
+      back="/conversations"
+      back-label="会话列表"
+    >
       <button class="btn btn--ghost btn--sm" type="button" @click="router.push({ name: 'chat-new' })">
         ＋ 新会话
       </button>
@@ -536,9 +556,23 @@ onBeforeUnmount(() => {
       </p>
 
       <div v-else class="thread">
-        <MessageItem v-for="message in messages" :key="message.id" :message="message" />
+        <MessageItem
+          v-for="message in messages"
+          :key="message.id"
+          :message="message"
+          @open-context="openContext"
+        />
       </div>
     </main>
+
+    <!-- 「看原文」抽屉：**点了才挂载、才请求**（关着的时候零成本） -->
+    <ContextDrawer
+      v-if="ctx"
+      :document-id="ctx.documentId"
+      :ordinal="ctx.ordinal"
+      :title="ctx.title"
+      @close="ctx = null"
+    />
 
     <footer class="composer">
       <div class="composer__bar">

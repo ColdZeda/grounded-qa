@@ -21,14 +21,36 @@ import { runtimeEnv } from '@/stores/env'
  */
 type Tone = 'blue' | 'teal' | 'violet' | 'amber' | 'green' | 'slate'
 
-withDefaults(defineProps<{ title: string; hint?: string; tone?: Tone }>(), {
-  hint: '',
-  tone: 'blue',
-})
+withDefaults(
+  defineProps<{
+    title: string
+    hint?: string
+    tone?: Tone
+    /**
+     * 返回目标（路由路径）。给了才出现 `←` 按钮。
+     *
+     * ⚠️ 为什么要有它（2026-10-25 走查）：会话页当时只能靠**左下角侧栏的「会话」**
+     *    回列表，而它长得像"分区入口"、不像"返回" —— 外人第一反应是找不到路。
+     */
+    back?: string
+    /** 返回按钮上的字（默认「返回」）。会话页写「会话列表」更明确。 */
+    backLabel?: string
+  }>(),
+  {
+    hint: '',
+    tone: 'blue',
+    back: '',
+    backLabel: '返回',
+  },
+)
 </script>
 
 <template>
   <header class="head" :class="`head--${tone}`">
+    <RouterLink v-if="back" class="head__back" :to="back" :title="backLabel">
+      <span aria-hidden="true">←</span>
+      <span class="head__back-text">{{ backLabel }}</span>
+    </RouterLink>
     <span class="head__dot" aria-hidden="true"></span>
     <h1 class="head__title" :title="title">{{ title }}</h1>
     <span v-if="hint" class="head__hint">{{ hint }}</span>
@@ -106,6 +128,35 @@ withDefaults(defineProps<{ title: string; hint?: string; tone?: Tone }>(), {
   height: 8px;
   border-radius: 3px;
   background: var(--tone);
+}
+
+/*
+ * 返回按钮：**带文字**，不只一个 `←`。
+ * 只有一个箭头的"返回"在走查里被当成了装饰（人不敢点）；文字让它变成一条路。
+ */
+.head__back {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+
+.head__back:hover {
+  border-color: var(--text-faint);
+  color: var(--text);
+}
+
+/* 窄一点就只留箭头（这时候标题和按钮更值钱），但 `title` 仍在 */
+@media (max-width: 1199.98px) {
+  .head__back-text {
+    display: none;
+  }
 }
 
 .head__title {

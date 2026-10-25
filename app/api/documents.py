@@ -24,21 +24,29 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from sqlalchemy import func, select
 
-from app.api.deps import AdminUser, LimitsRedisDep, SessionDep
+from app.api.deps import AdminUser, CurrentUser, LimitsRedisDep, SessionDep
 from app.core.config import get_settings
 from app.core.limits import LimitGuard, ensure
-from app.db.models.knowledge import Document, DocumentStatus
+from app.db.models.knowledge import Chunk, Document, DocumentStatus
 from app.db.repository import TenantScopedRepository
 from app.kb.ingest import is_supported, prepare_document
 from app.kb.text import TEXT_SUFFIXES
 from app.kb.uploads import remove_upload, write_upload
-from app.schemas.document import DocumentListOut, DocumentOut, DocumentUploadOut
+from app.schemas.document import (
+    ChunkOut,
+    DocumentChunksOut,
+    DocumentListOut,
+    DocumentOut,
+    DocumentUploadOut,
+)
 from app.workers.queue import IngestJob, enqueue_ingest
 
 logger = logging.getLogger("grounded.documents")
@@ -179,3 +187,72 @@ async def list_documents(
         DocumentOut.model_validate(item) for item in await repo.list(limit=limit, offset=offset)
     ]
     return DocumentListOut(total=total, items=items)
+
+
+@router.get(
+    "/{document_id}/chunks",
+    response_model=DocumentChunksOut,
+    summary="某一块的上下文（引用核对用）",
+)
+async def chunk_context(
+    document_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+    around: Annotated[int, Query(ge=0, description="要看的块序号（0 开始）")] = 0,
+    window: Annotated[int, Query(ge=0, le=5, description="前后各取几块")] = 1,
+) -> DocumentChunksOut:
+    """取**某一块 ＋ 前后各 `window` 块**，用于在引用卡片上"看原文"。
+
+    ## 为什么需要它
+
+    「参考来源」只有 160 字摘要（`make_snippet` 截断的）—— 知道"出自哪"，
+    但**判断不了"有没有断章取义"**、也看不出表格有没有被切断。
+    回答可核对是本项目的深度锚（幻觉治理），所以这一屏必须能点开。
+
+    ## 三条刻意的限制
+
+    ⚠️ ① **只给相邻几块，不给整篇**：流量是一方面，更重要的是"你看到的是片段"
+        这件事要一直成立 —— 返回全文会让人以为那就是全部。
+    ⚠️ ② **权限是 `CurrentUser` 而不是管理员**：核对引用是**每个提问者**的基本能力，
+        只给管理员的话，普通成员点了只会看到 403。文档**列表**仍然只给管理员。
+    ⚠️ ③ **越权一律 404**（不走 403）：不能让人用 404/403 的差别去枚举 document_id。
+    """
+    doc_repo = TenantScopedRepository(session, tenant_id=current_user.tenant_id, model=Document)
+    document = await doc_repo.get(document_id)
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
+
+    chunk_repo = TenantScopedRepository(session, tenant_id=current_user.tenant_id, model=Chunk)
+    scoped = chunk_repo.select().where(Chunk.document_id == document_id)
+    # ⚠️ 用仓储的 `select()` 包一层子查询来数总数，而不是自己手写
+    #    `WHERE tenant_id = ...` —— 租户过滤只允许有一个归属地（`TenantScopedRepository`）。
+    total = int(await session.scalar(select(func.count()).select_from(scoped.subquery())) or 0)
+    if total == 0:
+        return DocumentChunksOut(
+            document_id=document.id,
+            filename=document.filename,
+            ordinal=0,
+            total=0,
+            window=window,
+            items=[],
+        )
+
+    hit = min(max(around, 0), total - 1)
+    low, high = max(0, hit - window), min(total - 1, hit + window)
+    rows = (
+        await session.scalars(
+            scoped.where(Chunk.ordinal.between(low, high)).order_by(Chunk.ordinal)
+        )
+    ).all()
+
+    return DocumentChunksOut(
+        document_id=document.id,
+        filename=document.filename,
+        ordinal=hit,
+        total=total,
+        window=window,
+        items=[
+            ChunkOut(ordinal=row.ordinal, content=row.content, hit=row.ordinal == hit)
+            for row in rows
+        ],
+    )

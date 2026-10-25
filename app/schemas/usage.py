@@ -10,6 +10,21 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class ChannelUsage(BaseModel):
+    """某个渠道今天花了多少（**明细账**，不参与限流判定）。
+
+    ⚠️ 三个渠道是**同一笔总量**的三个分项：`web` / `feishu_p2p` / `feishu_group`。
+       全加起来的对得上 `UsageOut.tokens_used` 才是对的（有测试盯这条）。
+    """
+
+    #: 机器值：`web` / `feishu_p2p` / `feishu_group`（= `Channel` 枚举的值）
+    channel: str
+    #: 给人看的名字（**颜色之外一定要有文字**，色弱用户和打印稿都要能读）
+    label: str
+    #: 今天这个渠道消耗的 token；`None` = 取不到
+    tokens_used: int | None = None
+
+
 class UsageOut(BaseModel):
     """**我**今天的用量。"""
 
@@ -36,6 +51,11 @@ class UsageOut(BaseModel):
     generated_at_display: str
     #: 口径说明（前端原样显示）
     note: str
+    #: **按渠道拆**（Web / 飞书私聊 / 飞书群聊）。顺序固定，永远三项。
+    channels: list[ChannelUsage] = Field(default_factory=list)
+    #: 总量里**没能归到渠道**的部分。
+    #: 正常情况下是 0；`None` = 取不到。加渠道维度之前记的账会落在这里（第二天自动归零）。
+    tokens_unattributed: int | None = None
 
 
 class MemberUsage(BaseModel):
@@ -45,6 +65,8 @@ class MemberUsage(BaseModel):
     role: str
     tokens_used: int | None = None
     quota_limit: int
+    #: 这一行是不是**飞书渠道账号**（所有飞书消息都记在它名下，私聊＋群聊）
+    is_channel_account: bool = False
 
 
 class TenantUsageOut(BaseModel):

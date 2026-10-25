@@ -27,7 +27,7 @@ from app.api.deps import CurrentUser, LimitsRedisDep, SessionDep
 from app.core.config import get_settings
 from app.core.limits import LimitGuard, ensure
 from app.core.metrics import record_chat_outcome, record_image_analysis
-from app.db.models.conversation import Conversation, Message, MessageRole
+from app.db.models.conversation import Channel, Conversation, Message, MessageRole
 from app.db.models.image import Image
 from app.db.models.user import User, UserRole
 from app.db.repository import TenantScopedRepository
@@ -150,7 +150,9 @@ async def _prepare_image(
 
     # ⚠️ 读图的 token 也是花出去的钱：记账 + 指标。
     #    拿不到 usage 时记 0（**如实**：不是"没花"，是"没量到"）。
-    await guard.record_tokens(user.id, int(analysis.usage.get("total_tokens") or 0))
+    await guard.record_tokens(
+        user.id, int(analysis.usage.get("total_tokens") or 0), channel=Channel.WEB.value
+    )
     record_image_analysis("fallback" if analysis.fallback else "ok")
 
     logger.info(
@@ -482,7 +484,9 @@ async def _stream(
         #    （问大问题、看两眼就走）反而完全不进账。
         # ⚠️ 拒答时 `usage` 是空的（根本没调模型）⟹ 记 0，不占额度。
         if final is not None:
-            await guard.record_tokens(user_id, int(final.usage.get("total_tokens") or 0))
+            await guard.record_tokens(
+                user_id, int(final.usage.get("total_tokens") or 0), channel=Channel.WEB.value
+            )
 
 
 async def _persist_answer(

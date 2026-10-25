@@ -22,6 +22,30 @@ defineProps<{
   activeIndex: number | null
 }>()
 
+/**
+ * 点「看原文」→ 让**页面**（`ChatView`）去开抽屉。
+ *
+ * ⚠️ 抽屉不挂在这个组件里：一条消息可能有 10 条来源，挂 10 个抽屉 = 10 份状态
+ *    （而且"同时打开两个"这种蠢事迟早发生）。抽屉只能有一个，所以状态放在页面级。
+ */
+const emit = defineEmits<{
+  (event: 'open-context', payload: { documentId: string; ordinal: number; title: string }): void
+}>()
+
+/** 这条来源能不能点开：老数据没有 `ordinal` ⟹ 没有按钮（而不是点了报错）。 */
+function canOpen(cite: Citation): boolean {
+  return typeof cite.ordinal === 'number' && cite.ordinal >= 0
+}
+
+function open(cite: Citation): void {
+  if (!canOpen(cite)) return
+  emit('open-context', {
+    documentId: cite.document_id,
+    ordinal: cite.ordinal as number,
+    title: `来源 [${cite.index}]`,
+  })
+}
+
 const KIND_LABEL: Record<ScoreKind, string> = {
   rerank: '精排分',
   vector_cosine: '向量余弦',
@@ -66,6 +90,19 @@ function kindHint(kind: string): string {
         <span v-if="isDetailed()" class="chip" :title="kindHint(cite.score_kind)">
           {{ kindLabel(cite.score_kind) }} {{ cite.score.toFixed(3) }}
         </span>
+        <!--
+          「看原文」：摘要只有 160 字，**判断不了有没有断章取义**（2026-10-25 走查）。
+          点开 → 页面级抽屉显示这一块 ＋ 前后各一块。老数据没有 `ordinal` ⟹ 不出现这个按钮。
+        -->
+        <button
+          v-if="canOpen(cite)"
+          class="cite__open"
+          type="button"
+          :title="`看第 ${(cite.ordinal ?? 0) + 1} 块的原文（含上下文）`"
+          @click="open(cite)"
+        >
+          看原文 · 第 {{ (cite.ordinal ?? 0) + 1 }} 块 ›
+        </button>
       </div>
       <p class="cite__snippet">{{ cite.snippet }}</p>
     </div>
@@ -123,5 +160,23 @@ function kindHint(kind: string): string {
   color: var(--text-muted);
   font-size: 0.875rem;
   line-height: 1.55;
+}
+
+/* 「看原文」：做得小、靠右 —— 它是**二级动作**（先读摘要，想核对才点），
+   但它必须在场：摘要能证明"有来源"，证明不了"没断章取义"。 */
+.cite__open {
+  margin-left: auto;
+  padding: 1px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.cite__open:hover {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 </style>

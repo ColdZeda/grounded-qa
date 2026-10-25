@@ -24,9 +24,10 @@ from sqlalchemy import select
 
 from app.api.deps import AdminUser, CurrentUser, LimitsRedisDep, SessionDep
 from app.core.config import get_settings
-from app.core.limits import SHANGHAI, peek_quota, peek_rate
+from app.core.limits import SHANGHAI, peek_channel_usage, peek_quota, peek_rate
+from app.db.models.conversation import Channel
 from app.db.models.user import User
-from app.schemas.usage import MemberUsage, TenantUsageOut, UsageOut
+from app.schemas.usage import ChannelUsage, MemberUsage, TenantUsageOut, UsageOut
 
 router = APIRouter(prefix="/usage", tags=["usage"])
 
@@ -35,7 +36,17 @@ NOTE = (
     "embedding / rerank 按次计费，不在这个数里。"
     "数据存在 Redis，只保留 2 天，所以只能看今天、做不了趋势。"
     "配额按北京时间的自然日切，零点重置。"
+    "「按渠道」是把**同一笔总量**拆开看：飞书的消息仍然全部记在渠道账号名下，"
+    "不是按人记的。"
 )
+
+#: 渠道 → 给人看的名字。⚠️ 键取自 `Channel` 枚举（**不要另抄一份字符串**：
+#: 抄一份的后果是枚举改了、页面还在显示旧名字，而且没有任何报错）。
+CHANNEL_LABELS: dict[Channel, str] = {
+    Channel.WEB: "内部 Web",
+    Channel.FEISHU_P2P: "飞书私聊",
+    Channel.FEISHU_GROUP: "飞书群聊",
+}
 
 
 def _today(now: datetime) -> str:
@@ -69,6 +80,26 @@ async def my_usage(
     rate_used = await peek_rate(redis, subject=str(current_user.id), now=now)
     price = settings.llm_price_per_million_tokens
 
+    per = await peek_channel_usage(
+        redis,
+        subject=str(current_user.id),
+        channels=[channel.value for channel in CHANNEL_LABELS],
+        now=now,
+    )
+    channels = [
+        ChannelUsage(channel=channel.value, label=label, tokens_used=per.get(channel.value))
+        for channel, label in CHANNEL_LABELS.items()
+    ]
+    #: 分项之和。**任何一项取不到就整体算 None**（宁可说"不知道"，也不给一个少一块的合计）
+    attributed: int | None = (
+        None
+        if any(item.tokens_used is None for item in channels)
+        else sum(item.tokens_used or 0 for item in channels)
+    )
+    #: 总量里没能归到渠道的部分：加渠道维度之前的账会落在这里，第二天自动归零。
+    #: ⚠️ 用 `max(0, …)`：明细比总量多只可能是写入时序造成的毛刺，显示负数只会让人困惑。
+    unattributed = None if used is None or attributed is None else max(0, used - attributed)
+
     return UsageOut(
         date=_today(now),
         tokens_used=used,
@@ -81,6 +112,8 @@ async def my_usage(
         price_per_million_tokens=price if price > 0 else None,
         generated_at_display=now.strftime("%Y-%m-%d %H:%M:%S"),
         note=NOTE,
+        channels=channels,
+        tokens_unattributed=unattributed,
     )
 
 
@@ -105,6 +138,11 @@ async def tenant_usage(
         )
     ).all()
 
+    #: 飞书渠道账号：**所有飞书消息都记在它名下**（私聊＋群聊＋所有群）。
+    #: ⚠️ 不加这个标记，成员表里那一行就是个"看不出是谁、数字还特别大"的账号 ——
+    #:    用户 2026-10-25 走查时就这么困惑过一次。
+    channel_email = (settings.feishu_channel_email or settings.admin_email).strip().lower()
+
     items: list[MemberUsage] = []
     total: int | None = 0
     for user in rows:
@@ -119,6 +157,7 @@ async def tenant_usage(
                 role=user.role.value,
                 tokens_used=used,
                 quota_limit=settings.token_quota_per_day,
+                is_channel_account=user.email.strip().lower() == channel_email,
             )
         )
 

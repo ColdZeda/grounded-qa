@@ -21,6 +21,15 @@ import type { UiMessage } from '@/types/ui'
 
 const props = defineProps<{ message: UiMessage }>()
 
+/**
+ * 「看原文」一路往上抛到 `ChatView`。
+ * ⚠️ 抽屉只有**一个**（在页面级）：一条消息 10 条来源就挂 10 个抽屉是错的设计，
+ *    而且"同时开两个"迟早发生。组件这里只负责转发，不持有抽屉状态。
+ */
+const emit = defineEmits<{
+  (event: 'open-context', payload: { documentId: string; ordinal: number; title: string }): void
+}>()
+
 const activeIndex = ref<number | null>(null)
 
 const isUser = computed(() => props.message.role === 'user')
@@ -166,13 +175,21 @@ function onBodyClick(event: MouseEvent): void {
         <summary class="sources__title">
           未采用的候选 · {{ message.citations.length }} 条（均低于拒答阈值，与答案无关）
         </summary>
-        <CitationList :citations="message.citations" :active-index="activeIndex" />
+        <CitationList
+          :citations="message.citations"
+          :active-index="activeIndex"
+          @open-context="emit('open-context', $event)"
+        />
       </details>
     </section>
 
     <section v-else-if="message.citations.length > 0" class="sources">
       <h4 class="sources__title">参考来源 · {{ message.citations.length }} 条</h4>
-      <CitationList :citations="message.citations" :active-index="activeIndex" />
+      <CitationList
+        :citations="message.citations"
+        :active-index="activeIndex"
+        @open-context="emit('open-context', $event)"
+      />
     </section>
   </article>
 </template>

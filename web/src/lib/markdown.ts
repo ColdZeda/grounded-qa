@@ -65,3 +65,18 @@ export function renderAnswer(
     return `<button type="button" class="${cls}" data-cite="${index}">[${index}]</button>`
   })
 }
+
+/**
+ * 渲染**知识库原片段**（「看原文」抽屉里用）。
+ *
+ * ⚠️ 为什么也要过 markdown：语料里的政策表就是 markdown 表格，不过渲染的话
+ *    「看原文」里是一屏 `| 支付方式 | 到账时间 |` 和 `|---|---|` —— 那是**源码**，
+ *    不是"原文"。我们要让人看到的是**原文的意思**（表就是表），
+ *    这与引用摘要的清洗（`app/rag/mdtext.py`）是两件事：那边是"塞不进一行里只好降级"，
+ *    这里有版面，就该正常渲染。
+ * ⚠️ 同样**不生成 `[n]` 按钮**：片段里的 `[1]` 是文字，不是引用。
+ * ⚠️ `html: false` 这条红线对这里同样有效（文档内容也是外部输入）。
+ */
+export function renderChunk(content: string): string {
+  return md.render(content)
+}

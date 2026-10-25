@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Final, Literal
@@ -192,6 +193,17 @@ def _quota_key(subject: str, now: datetime) -> tuple[str, int]:
     return f"gq:quota:{subject}:{local:%Y%m%d}", int((tomorrow - local).total_seconds()) + 1
 
 
+def _usage_key(subject: str, channel: str, now: datetime) -> str:
+    """**按渠道的明细账**（只给人看，不参与任何判定）。
+
+    ⚠️ 和 `_quota_key` 是两个键、两件事：配额键是"准入凭证"，它决定放不放行；
+       这个键只回答"这个人的消耗里，网页 / 飞书私聊 / 飞书群聊各占多少"。
+       **改这里绝不影响限流** —— 这是 2026-10-25 加渠道维度时定下的硬约束。
+    """
+    local = now.astimezone(SHANGHAI)
+    return f"gq:usage:{subject}:{local:%Y%m%d}:{channel}"
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -288,25 +300,58 @@ async def peek_rate(
     return int(raw or 0)
 
 
+async def peek_channel_usage(
+    redis: Redis,
+    *,
+    subject: str,
+    channels: Sequence[str],
+    now: datetime | None = None,
+) -> dict[str, int | None]:
+    """**只看**：这个人在每个渠道上各花了多少 token。
+
+    缺键 = 0（今天这个渠道没记过账）；Redis 挂了 = **全部 `None`**（页面显示 `—`）。
+    ⚠️ 这两件事必须分开：0 是"没花"，`None` 是"不知道"。
+    """
+    moment = now or _now()
+    out: dict[str, int | None] = {}
+    try:
+        for channel in channels:
+            raw = await redis.get(_usage_key(subject, channel, moment))
+            out[channel] = int(raw or 0)
+    except RedisError:
+        return dict.fromkeys(channels)
+    return out
+
+
 async def add_tokens(
     redis: Redis,
     *,
     subject: str,
     tokens: int,
+    channel: str,
     now: datetime | None = None,
 ) -> None:
     """记账。**必须在回答结束之后调用**（`usage` 那时才有）。
 
     ⚠️ 调用点在 `_stream` 的 `finally` 里 —— 用户中途关掉页面时 token **照样花了**，
         不记的话，最费钱的那类请求（问大问题、看两眼就走）反而完全不进账。
+    ⚠️ `channel` **必填**（2026-10-25）：漏传会让"分渠道之和 ≠ 总量"，
+        而这种错**不会报错、只会让页面上的数字对不上** ⟹ 用必填参数把它变成编译期错误。
     """
     if tokens <= 0:
         return
-    key, _ = _quota_key(subject, now or _now())
+    moment = now or _now()
+    key, _ = _quota_key(subject, moment)
     try:
         used = int(await redis.incrby(key, tokens))
         if used == tokens:  # 今天第一次写 → 挂过期（2 天，跨零点也能查昨天的账）
             await redis.expire(key, 2 * 86_400)
+        # 明细账单独一个键；**放在同一个 try 里** —— 配额记上了而明细没记上是可以接受的
+        # （页面会显示"另有 N 未标注渠道"），但绝不能因为明细失败而回滚配额。
+        detail = _usage_key(subject, channel, moment)
+        detail_used = int(await redis.incrby(detail, tokens))
+        if detail_used == tokens:
+            await redis.expire(detail, 2 * 86_400)
     except RedisError as exc:
         _fail_open("add_tokens", 0, exc)
         return
@@ -371,5 +416,11 @@ class LimitGuard:
             limit=self._settings.token_quota_per_day,
         )
 
-    async def record_tokens(self, user_id: uuid.UUID, tokens: int) -> None:
-        await add_tokens(self._redis, subject=str(user_id), tokens=tokens)
+    async def record_tokens(self, user_id: uuid.UUID, tokens: int, *, channel: str) -> None:
+        """记账。`channel` 必填 —— 它是"这个人的消耗按渠道各占多少"的唯一来源。"""
+        await add_tokens(self._redis, subject=str(user_id), tokens=tokens, channel=channel)
+
+    async def channel_usage(
+        self, user_id: uuid.UUID, channels: Sequence[str]
+    ) -> dict[str, int | None]:
+        return await peek_channel_usage(self._redis, subject=str(user_id), channels=channels)
