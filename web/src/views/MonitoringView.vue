@@ -99,7 +99,10 @@ function boolHint(panel: MonitorPanel): string {
 const refusalSample = computed<number | null>(() => {
   const panel = snapshot.value?.panels.find((item) => item.title === '24 小时问答结果')
   if (!panel || panel.items.length === 0) return null
-  return panel.items.reduce((sum, item) => sum + (item.value ?? 0), 0)
+  const total = panel.items.reduce((sum, item) => sum + (item.value ?? 0), 0)
+  // ⚠️ **必须取整**：这几个计数来自 Prometheus 的 `increase()`，它按抓取点数外推 ⟹ 原始值是
+  //    小数（实测显示过「样本 8.0273096922373 次」）。样本量是"几次"，不存在 0.27 次。
+  return Math.round(total)
 })
 
 /** 把「单位」翻成给人看的一串字。`null` 一律 `—`。 */
