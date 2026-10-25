@@ -1,9 +1,9 @@
 /** 会话与消息接口（对应 `app/api/conversations.py` 与 `app/api/chat.py` 的读接口）。 */
 
-import { apiJson } from './client'
+import { apiFetch, apiJson } from './client'
 import type { ConversationOut, MessageOut } from '@/types/api'
 
-/** 按 `updated_at` 倒序。后端默认 50 条，够用（现在也没有分页 UI）。 */
+/** 按 `updated_at` 倒序。⚠️ 后端没有 `total`，"还有没有更多"只能靠"返回条数 == limit"判断。 */
 export function listConversations(limit = 50): Promise<ConversationOut[]> {
   return apiJson<ConversationOut[]>(`/conversations?limit=${limit}`)
 }
@@ -30,4 +30,14 @@ export function listMessages(conversationId: string, limit = 100): Promise<Messa
 /** 会话详情。用于直接拿 URL 进来时确认这个会话**存在且可见**（越权一律 404）。 */
 export function getConversation(conversationId: string): Promise<ConversationOut> {
   return apiJson<ConversationOut>(`/conversations/${conversationId}`)
+}
+
+/**
+ * 删除会话（**连同里面的消息，不可恢复**）。
+ *
+ * ⚠️ 后端权限与"能不能看见"完全一致：自己的会话，或本租户管理员看得到的那些；
+ *    越权一律 404（不给 403，否则可以靠状态码差别枚举 id）。
+ */
+export function deleteConversation(conversationId: string): Promise<void> {
+  return apiFetch(`/conversations/${conversationId}`, { method: 'DELETE' }).then(() => undefined)
 }

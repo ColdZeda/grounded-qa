@@ -1,4 +1,4 @@
-"""会话：列表 / 详情 / 新建。
+"""会话：列表 / 详情 / 新建 / 删除。
 
 ⚠️ **这个模块是"租户隔离"的样板间。** 后续所有业务路由都照这个写法来：
 
@@ -16,7 +16,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import Select
+from sqlalchemy import Select, delete
 
 from app.api.deps import CurrentUser, SessionDep
 from app.db.models.conversation import Conversation
@@ -96,3 +96,36 @@ async def create_conversation(
     # 重新读一次，拿到数据库侧生成的 created_at / updated_at
     await session.refresh(conversation)
     return conversation
+
+
+@router.delete(
+    "/{conversation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="删除会话（连同消息）",
+)
+async def delete_conversation(
+    conversation_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> None:
+    """删掉一个会话**和它下面的全部消息**。
+
+    ⚠️ **硬删、不可恢复** —— 内部工作台不做回收站（2026-10-25 定）。
+    ⚠️ 权限和 `get_conversation` **完全一致**（自己的会话，或本租户管理员看得到的那些）：
+        两处用同一个 `_visible_to`，否则会出现"看得见却删不掉 / 看不见却能删"。
+    ⚠️ 越权一律 **404**（不给 403，否则可枚举 id）。
+    ⚠️ 消息由数据库 `ON DELETE CASCADE` 一起删：`Conversation.messages` 是
+        `lazy="raise"`，走 ORM 级联会抛"未加载"，所以直接发 Core DELETE。
+    """
+    repo = TenantScopedRepository(session, tenant_id=current_user.tenant_id, model=Conversation)
+    stmt = _visible_to(repo.select().where(Conversation.id == conversation_id), current_user)
+    conversation = await session.scalar(stmt)
+    if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在")
+
+    await session.execute(
+        delete(Conversation).where(
+            Conversation.id == conversation_id, Conversation.tenant_id == current_user.tenant_id
+        )
+    )
+    await session.commit()

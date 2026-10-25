@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.api.deps import AdminUser, CurrentUser, LimitsRedisDep, SessionDep
 from app.core.config import get_settings
@@ -183,10 +183,57 @@ async def list_documents(
     """
     repo = TenantScopedRepository(session, tenant_id=current_admin.tenant_id, model=Document)
     total = await repo.count()
-    items = [
-        DocumentOut.model_validate(item) for item in await repo.list(limit=limit, offset=offset)
-    ]
+    rows = await repo.list(limit=limit, offset=offset)
+
+    # 每篇切了几块：**一次分组查询**，不要逐个文档 count（那会变成 N+1）。
+    # ⚠️ 计数也走仓储的 `select()`，租户过滤只有一个归属地。
+    chunk_repo = TenantScopedRepository(session, tenant_id=current_admin.tenant_id, model=Chunk)
+    counts: dict[uuid.UUID, int] = {}
+    if rows:
+        counted = await session.execute(
+            chunk_repo.select()
+            .where(Chunk.document_id.in_([row.id for row in rows]))
+            .with_only_columns(Chunk.document_id, func.count())
+            .group_by(Chunk.document_id)
+        )
+        counts = {document_id: int(count) for document_id, count in counted.all()}
+
+    items = []
+    for row in rows:
+        item = DocumentOut.model_validate(row)
+        item.chunk_count = counts.get(row.id, 0)
+        items.append(item)
     return DocumentListOut(total=total, items=items)
+
+
+@router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT, summary="删除文档")
+async def delete_document(
+    document_id: uuid.UUID,
+    session: SessionDep,
+    current_admin: AdminUser,
+) -> None:
+    """删除一份文档（连同它的切片和 raw 副本）。
+
+    ⚠️ **硬删、不可恢复** —— 内部工作台不做回收站（2026-10-25 定）。
+    ⚠️ 越权 / 不存在一律 **404**（不给 403，否则可枚举 id）。
+    ⚠️ 顺序是**先删行、再删文件**：行没删掉却把文件删了，库里会留一条"永远修不好"的文档；
+       反过来最坏只是留一个孤儿文件（下面 `remove_upload` 自己吞掉异常）。
+    """
+    repo = TenantScopedRepository(session, tenant_id=current_admin.tenant_id, model=Document)
+    document = await repo.get(document_id)
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
+
+    # `chunks.document_id` 上是 `ON DELETE CASCADE` ⟹ 切片由数据库一起删（不用 ORM 级联，
+    # 那些关系是 `lazy="raise"`，走 ORM 反而会抛"未加载"）。
+    await session.execute(
+        delete(Document).where(
+            Document.id == document_id, Document.tenant_id == current_admin.tenant_id
+        )
+    )
+    await session.commit()
+    await remove_upload(document_id)
+    logger.info("文档已删除 document=%s file=%s", document_id, document.filename)
 
 
 @router.get(

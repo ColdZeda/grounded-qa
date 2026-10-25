@@ -17,7 +17,7 @@ import { useRouter } from 'vue-router'
 
 import AppHeader from '@/components/AppHeader.vue'
 import { ApiError } from '@/api/client'
-import { listConversations } from '@/api/conversations'
+import { deleteConversation, listConversations } from '@/api/conversations'
 import type { Channel, ConversationOut } from '@/types/api'
 
 const router = useRouter()
@@ -49,13 +49,13 @@ interface Group {
  */
 const groups = computed<Group[]>(() => {
   const out: Group[] = []
-  const web = items.value.filter((item) => item.channel === 'web')
-  const p2p = items.value.filter((item) => item.channel === 'feishu_p2p')
+  const web = filtered.value.filter((item) => item.channel === 'web')
+  const p2p = filtered.value.filter((item) => item.channel === 'feishu_p2p')
   if (web.length) out.push({ key: 'web', kind: 'web', label: '内部（Web）', items: web })
   if (p2p.length) out.push({ key: 'p2p', kind: 'feishu_p2p', label: '飞书私聊', items: p2p })
 
   const byChat = new Map<string, ConversationOut[]>()
-  for (const item of items.value.filter((one) => one.channel === 'feishu_group')) {
+  for (const item of filtered.value.filter((one) => one.channel === 'feishu_group')) {
     const key = item.external_chat_id ?? 'unknown'
     const bucket = byChat.get(key)
     if (bucket) bucket.push(item)
@@ -104,11 +104,74 @@ function relative(iso: string): string {
   return new Date(iso).toLocaleDateString('zh-CN')
 }
 
+/**
+ * 会话变多之后的三件事（2026-10-25 走查）：
+ *  ① **筛选**（全部 / 内部 / 飞书）—— 群聊按人分桶后，飞书会把列表淹没
+ *  ② **群段可收起** —— 10 个群 × 每个群几个人，平铺就是几十行
+ *  ③ **删除** —— 以前只能传不能删
+ */
+const filter = ref<'all' | 'web' | 'feishu'>('all')
+const collapsed = ref<Set<string>>(new Set())
+
+/** 筛选项。⚠️ 文案带数字没意义（要动态算），所以只给名字。 */
+const FILTERS = [
+  { value: 'all' as const, label: '全部' },
+  { value: 'web' as const, label: '内部' },
+  { value: 'feishu' as const, label: '飞书' },
+]
+
+/** 每页步长。⚠️ 没有 `total`（后端返回的是纯数组），所以用"返回条数 == limit"判断还有没有更多。 */
+const PAGE = 50
+const limit = ref(PAGE)
+
+const filtered = computed(() => {
+  if (filter.value === 'web') return items.value.filter((item) => item.channel === 'web')
+  if (filter.value === 'feishu') return items.value.filter((item) => item.channel !== 'web')
+  return items.value
+})
+
+const hasMore = computed(() => items.value.length >= limit.value && limit.value < 200)
+
+function setFilter(next: 'all' | 'web' | 'feishu'): void {
+  filter.value = next
+}
+
+function toggleGroup(key: string): void {
+  const next = new Set(collapsed.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  collapsed.value = next
+}
+
+function isCollapsed(key: string): boolean {
+  return collapsed.value.has(key)
+}
+
+async function loadMore(): Promise<void> {
+  limit.value = Math.min(limit.value + PAGE, 200)
+  await load()
+}
+
+/** 删除会话（连带消息，**不可恢复**）。确认框写清"几条消息会没"。 */
+async function remove(item: ConversationOut): Promise<void> {
+  const ok = window.confirm(`确定删除「${item.title}」吗？\n\n这个会话里的消息会一起删除，且**无法恢复**。`)
+  if (!ok) return
+  error.value = ''
+  try {
+    await deleteConversation(item.id)
+    // 本地先摘掉再重拉，避免"点了删除但列表没变"那种最难受的反馈
+    items.value = items.value.filter((one) => one.id !== item.id)
+    await load()
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : `删除失败：${(err as Error).message}`
+  }
+}
+
 async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    items.value = await listConversations()
+    items.value = await listConversations(limit.value)
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : `加载失败：${(err as Error).message}`
   } finally {
@@ -151,21 +214,70 @@ onMounted(load)
       </p>
 
       <template v-else>
+        <!--
+          筛选（2026-10-25）：群聊按人分桶之后，飞书会把内部会话淹掉。
+          ⚠️ 筛选是**纯前端**的（数据已经在手上），所以切换是瞬时的、也不多发请求。
+        -->
+        <div class="filters" role="group" aria-label="按渠道筛选">
+          <button
+            v-for="option in FILTERS"
+            :key="option.value"
+            class="filters__btn"
+            :class="{ 'filters__btn--on': filter === option.value }"
+            type="button"
+            :aria-pressed="filter === option.value"
+            @click="setFilter(option.value)"
+          >
+            {{ option.label }}
+          </button>
+          <span class="filters__count">
+            已加载 {{ items.length }} 条{{ hasMore ? '（还有更多）' : '' }}
+          </span>
+        </div>
+
+        <p v-if="filtered.length === 0" class="empty">这个筛选下没有会话。</p>
+
         <section v-for="group in groups" :key="group.key" class="group">
           <h3 class="group__head">
-            <span class="chan" :class="`chan--${group.kind}`">{{ CHANNEL_LABEL[group.kind] }}</span>
-            <span class="group__name">{{ group.label }}</span>
+            <button
+              class="group__toggle"
+              type="button"
+              :aria-expanded="!isCollapsed(group.key)"
+              :title="isCollapsed(group.key) ? '展开' : '收起'"
+              @click="toggleGroup(group.key)"
+            >
+              <span class="group__arrow" aria-hidden="true">{{
+                isCollapsed(group.key) ? '▸' : '▾'
+              }}</span>
+              <span class="chan" :class="`chan--${group.kind}`">{{ CHANNEL_LABEL[group.kind] }}</span>
+              <span class="group__name">{{ group.label }}</span>
+              <span class="group__count">{{ group.items.length }} 条</span>
+            </button>
           </h3>
 
-          <ul class="list">
-            <li v-for="item in group.items" :key="item.id">
+          <ul v-if="!isCollapsed(group.key)" class="list">
+            <li v-for="item in group.items" :key="item.id" class="item">
               <button class="row" type="button" @click="open(item)">
                 <span class="row__title">{{ item.title }}</span>
                 <span class="row__time">{{ relative(item.updated_at) }}</span>
               </button>
+              <!-- 删除：不可恢复，所以按钮低调、且一定要确认 -->
+              <button
+                class="row__del"
+                type="button"
+                :title="`删除「${item.title}」`"
+                aria-label="删除会话"
+                @click="remove(item)"
+              >
+                ✕
+              </button>
             </li>
           </ul>
         </section>
+
+        <button v-if="hasMore" class="more" type="button" :disabled="loading" @click="loadMore">
+          加载更多（当前 {{ items.length }} 条）
+        </button>
       </template>
     </main>
   </div>
@@ -193,17 +305,112 @@ onMounted(load)
   text-align: center;
 }
 
+/* ---------- 筛选 ---------- */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.filters__btn {
+  padding: 4px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.filters__btn--on {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.filters__count {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 0.72rem;
+}
+
+/* ---------- 群段 / 会话行 ---------- */
 .group {
   margin-bottom: 22px;
 }
 
 .group__head {
+  margin: 0 0 8px;
+}
+
+.group__toggle {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 8px;
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
   font-size: 0.85rem;
   font-weight: 500;
+  text-align: left;
+}
+
+.group__arrow {
+  color: var(--text-faint);
+  font-size: 0.75rem;
+}
+
+.group__count {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: 0.72rem;
+}
+
+.item {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.item > .row {
+  flex: 1 1 auto;
+}
+
+/* 删除：低调但不藏（hover 才出现的话，触屏用户永远看不到） */
+.row__del {
+  flex: 0 0 auto;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 0.8rem;
+}
+
+.row__del:hover {
+  border-color: var(--danger, #b42318);
+  color: var(--danger, #b42318);
+}
+
+.more {
+  display: block;
+  width: 100%;
+  margin: 4px 0 0;
+  padding: 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.more:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 .group__name {

@@ -1,6 +1,6 @@
 /** 知识库文档接口（对应 `app/api/documents.py`）。 */
 
-import { apiJson } from './client'
+import { apiFetch, apiJson } from './client'
 import type { DocumentChunksOut, DocumentListOut, DocumentUploadOut } from '@/types/api'
 
 /**
@@ -36,4 +36,13 @@ export function getChunkContext(
   return apiJson<DocumentChunksOut>(
     `/documents/${documentId}/chunks?around=${around}&window=${window}`,
   )
+}
+
+/**
+ * 删除一份文档（**连同它的切片和 raw 副本，不可恢复**）。
+ *
+ * ⚠️ 只在**管理员**的「知识库」页出现；后端也是管理员才放行，越权一律 404。
+ */
+export function deleteDocument(documentId: string): Promise<void> {
+  return apiFetch(`/documents/${documentId}`, { method: 'DELETE' }).then(() => undefined)
 }

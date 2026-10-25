@@ -13,8 +13,9 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import AppHeader from '@/components/AppHeader.vue'
+import ConflictsPanel from '@/components/ConflictsPanel.vue'
 import { ApiError } from '@/api/client'
-import { listDocuments, uploadDocument } from '@/api/documents'
+import { deleteDocument, listDocuments, uploadDocument } from '@/api/documents'
 import { currentUser } from '@/stores/auth'
 import type { DocumentOut } from '@/types/api'
 
@@ -40,7 +41,13 @@ let timer: number | null = null
  */
 const pollDelay = ref(POLL_MS)
 
-const isAdmin = computed(() => currentUser.value?.role === 'admin')
+/**
+ * ⚠️ 写成**函数**而不是 `computed`：模板里要用 `isAdmin()` 这种**调用形式**
+ * （`AGENTS §10`：裸标识符当整个 `v-if` 条件时会被编译器常量折叠，整段消失）。
+ */
+function isAdmin(): boolean {
+  return currentUser.value?.role === 'admin'
+}
 
 /** 还有文档在路上吗？有就继续轮询，没有就停下来。 */
 const inFlight = computed(() =>
@@ -100,11 +107,45 @@ function pickFile(): void {
   fileInput.value?.click()
 }
 
+/**
+ * 「替换」＝ **先传新的、成功了再删旧的**（2026-10-25 定）。
+ *
+ * ⚠️ 顺序不能反：先删后传，一旦用户取消选择或上传失败，库里就**没有这份文档**了 ——
+ *    那是最糟的结果（本来只是"想换一版"）。
+ */
+const replaceTarget = ref<DocumentOut | null>(null)
+
+function startReplace(item: DocumentOut): void {
+  replaceTarget.value = item
+  fileInput.value?.click()
+}
+
+/** 删除一份文档（硬删、不可恢复）。⚠️ 一定要确认 —— 切片会一起没。 */
+async function removeDoc(item: DocumentOut): Promise<void> {
+  const ok = window.confirm(
+    `确定删除「${item.filename}」吗？\n\n它的 ${item.chunk_count} 个切片会一起删除，且**无法恢复**。`,
+  )
+  if (!ok) return
+  error.value = ''
+  notice.value = ''
+  try {
+    await deleteDocument(item.id)
+    notice.value = `已删除「${item.filename}」（连同 ${item.chunk_count} 个切片）。`
+    await load()
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : `删除失败：${(err as Error).message}`
+  }
+}
+
 async function onPick(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
-  if (!file) return
+  if (!file) {
+    replaceTarget.value = null // 取消了替换：旧文档**原样留着**
+    return
+  }
 
+  const replacing = replaceTarget.value
   error.value = ''
   notice.value = ''
   uploading.value = true
@@ -113,11 +154,17 @@ async function onPick(event: Event): Promise<void> {
     notice.value = result.created
       ? `已收下「${file.name}」，正在后台上线，稍等几秒。`
       : `没有重复入库：${result.note}`
+    // 新的真的进去了，才把旧的删掉
+    if (replacing !== null && replacing.id !== result.id) {
+      await deleteDocument(replacing.id)
+      notice.value += ` 旧版「${replacing.filename}」已删除。`
+    }
     await load()
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : `上传失败：${(err as Error).message}`
   } finally {
     uploading.value = false
+    replaceTarget.value = null
     // 清掉选择，否则再选同一个文件不会触发 change 事件
     if (fileInput.value) fileInput.value.value = ''
   }
@@ -146,7 +193,7 @@ onMounted(load)
   <div class="shell">
     <AppHeader title="知识库" :hint="`共 ${total} 份`" tone="teal">
       <button
-        v-if="isAdmin"
+        v-if="isAdmin()"
         class="btn btn--sm"
         type="button"
         :disabled="uploading"
@@ -174,10 +221,13 @@ onMounted(load)
     </AppHeader>
 
     <main class="body">
+      <!-- 知识库体检（冲突检查）：2026-10-25 从「评测报告」搬来 —— 它是库的健康，不是评测分数 -->
+      <ConflictsPanel />
+
       <p class="hint">
         只收 <code>.md</code> / <code>.txt</code>。上传后走队列异步入库（解析 → 切分 →
         向量化），下面能看到每一步的状态。
-        <template v-if="!isAdmin">上传是管理员动作，你可以查看但不能新增。</template>
+        <template v-if="!isAdmin()">上传是管理员动作，你可以查看但不能新增。</template>
       </p>
 
       <p v-if="error" class="alert alert--danger">{{ error }}</p>
@@ -189,19 +239,44 @@ onMounted(load)
       </div>
 
       <p v-else-if="items.length === 0" class="empty">
-        还没有文档。{{ isAdmin ? '点右上角「＋ 上传文档」开始。' : '' }}
+        还没有文档。{{ isAdmin() ? '点右上角「＋ 上传文档」开始。' : '' }}
       </p>
 
       <ul v-else class="list">
         <li v-for="item in items" :key="item.id" class="row">
           <div class="row__main">
             <span class="row__name" :title="item.filename">{{ item.filename }}</span>
-            <span class="row__meta">{{ humanSize(item.size_bytes) }} · {{ relative(item.created_at) }}</span>
+            <span class="row__meta">
+              {{ humanSize(item.size_bytes) }} ·
+              <!-- 切成几块：切分质量是检索质量的第一道门，看不出来就没人会发现切坏了 -->
+              <strong class="row__chunks">{{ item.chunk_count }} 块</strong> ·
+              {{ relative(item.created_at) }}
+            </span>
             <span v-if="item.error_message" class="row__err">{{ item.error_message }}</span>
           </div>
           <span class="badge" :class="`badge--${item.status}`">
             {{ STATUS_LABEL[item.status] }}
           </span>
+          <!-- 管理动作只给管理员；判断用**函数调用** `isAdmin()`（AGENTS §10 编译期折叠坑） -->
+          <div v-if="isAdmin()" class="row__ops">
+            <button
+              class="row__op"
+              type="button"
+              :disabled="uploading"
+              title="换一版：先上传新的，成功后再删掉这份旧的"
+              @click="startReplace(item)"
+            >
+              替换
+            </button>
+            <button
+              class="row__op row__op--danger"
+              type="button"
+              title="删除这份文档（连同切片，不可恢复）"
+              @click="removeDoc(item)"
+            >
+              删除
+            </button>
+          </div>
         </li>
       </ul>
     </main>
@@ -285,6 +360,38 @@ onMounted(load)
 .row__meta {
   color: var(--text-faint);
   font-size: 0.78rem;
+}
+
+/* 切块数：不是装饰 —— "这份文档被切成 1 块"通常意味着切分没生效 */
+.row__chunks {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* 管理动作（替换 / 删除）：平时低调，悬停才明显 —— 删除是不可逆的 */
+.row__ops {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.row__op {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.row__op:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.row__op--danger:hover:not(:disabled) {
+  border-color: var(--danger, #b42318);
+  color: var(--danger, #b42318);
 }
 
 /* 失败原因**必须显眼**：不然用户只看到"失败"两个字，不知道该怎么办 */

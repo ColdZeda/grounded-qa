@@ -158,6 +158,8 @@ export interface DocumentOut {
   status: DocumentStatus
   /** ⚠️ **只有 `failed` 时才有值** —— 界面靠它解释"为什么没进库"。 */
   error_message: string | null
+  /** 被切成几块。上传接口返回时是 0（还没切），列表接口每次都是真数。 */
+  chunk_count: number
   created_at: string
   updated_at: string
 }

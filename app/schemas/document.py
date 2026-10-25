@@ -28,6 +28,12 @@ class DocumentOut(BaseModel):
     error_message: str | None
     created_at: datetime
     updated_at: datetime
+    #: 这份文档被切成几块（2026-10-25 走查：列表原来只给文件名/大小/状态，
+    #: 看不出切分结果 —— 而切分质量是检索质量的第一道门）。
+    #: ⚠️ 字段名**不能叫 `chunks`**：`Document` 上正好有个同名关系（`lazy="raise"`），
+    #:    `model_validate(..., from_attributes=True)` 会去读它并抛"未加载"。
+    #: ⚠️ 上传接口也用这个 schema，那时是 0（还没切）；列表接口每次都带真数。
+    chunk_count: int = 0
 
 
 class DocumentUploadOut(DocumentOut):

@@ -89,6 +89,19 @@ function boolHint(panel: MonitorPanel): string {
     : '抓不到 /metrics —— 容器挂了、端口不对，或 Prometheus 自己没在跑'
 }
 
+/**
+ * 「24 小时拒答率」的**样本量**（2026-10-25 走查）。
+ *
+ * ⚠️ 没有它，只有 1 次请求时页面会显示「拒答率 100%」—— 那既不是"系统坏了"，
+ *    也不是"拒答很准"，只是**分母是 1**。比率必须和分母一起出现（本项目一贯的"不许裸数字"）。
+ * 算法：把「24 小时问答结果」里各 outcome 的计数加起来（answered/refused/error）。
+ */
+const refusalSample = computed<number | null>(() => {
+  const panel = snapshot.value?.panels.find((item) => item.title === '24 小时问答结果')
+  if (!panel || panel.items.length === 0) return null
+  return panel.items.reduce((sum, item) => sum + (item.value ?? 0), 0)
+})
+
 /** 把「单位」翻成给人看的一串字。`null` 一律 `—`。 */
 function fmt(panel: MonitorPanel, item: MonitorItem | undefined): string {
   const value = item?.value
@@ -250,6 +263,10 @@ onMounted(load)
               </ul>
 
               <p class="card__hint">{{ panel.hint }}</p>
+              <!-- 比率没有分母就没有意义：样本只有 1 的时候，「拒答率 100%」什么都不说明 -->
+              <p v-if="panel.title === '24 小时拒答率' && refusalSample !== null" class="card__sample">
+                样本 {{ refusalSample }} 次 —— 少于几十次时，这个百分比基本没意义
+              </p>
             </article>
           </div>
         </section>
@@ -424,6 +441,13 @@ onMounted(load)
 
 .value--none {
   color: var(--text-faint);
+}
+
+/* 样本量：比 hint 更靠上、更显眼一点 —— 它是判读这个比率的前提 */
+.card__sample {
+  margin: 6px 0 0;
+  color: var(--warn);
+  font-size: 0.72rem;
 }
 
 .series {
