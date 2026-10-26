@@ -279,6 +279,10 @@ async def _run(args: argparse.Namespace) -> int:
                     "question": row.question,
                     "hit_pipeline": row.hit_pipeline,
                     "hit_agent": row.hit_agent,
+                    # ⚠️ **逐轮原始结果也落盘**：只存多数结论的话，
+                    #    “这次到底抖不抖”就又只能靠回忆了。
+                    "pipeline_hits": row.pipeline_hits,
+                    "agent_hits": row.agent_hits,
                     "tools_ok": row.tools_ok,
                     "pipeline": _as_dict(row.pipeline),
                     "agent": _as_dict(row.agent),
