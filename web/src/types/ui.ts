@@ -10,7 +10,7 @@ import type { Citation } from './api'
  *     · `streaming` / `error` / `cancelled` 是纯界面状态
  *     硬要把两者合成一个类型，就会被迫给 `id` 加 `?`，然后每个用到的地方都要判空。
  */
-import type { AgentStep } from './api'
+import type { AgentStep, CitationAudit, CitationRepair } from './api'
 
 export interface UiMessage {
   id: string
@@ -63,4 +63,19 @@ export interface UiMessage {
   agentRetries?: number | null
   /** 全轨迹（点开能回放“它当时为什么这么做”）。 */
   agentTrace?: AgentStep[] | null
+  /**
+   * 引用可核对性（`done.citation_audit` / `meta.citation_audit`）。
+   *
+   * ⚠️ **只在内部侧显示**：它说的是"我们没核对上 N 处"，顾客看不懂也用不上
+   *    （`architecture.md §9.53 ①`：顾客侧只给结论和"能不能办"）。
+   * ⚠️ 2026-10-27 之前它只随 SSE 帧走一次 ⟹ 刷新即消失、事后也统计不到，
+   *    现在两种模式都落进 `messages.meta`。
+   */
+  citationAudit?: CitationAudit | null
+  /**
+   * 修法 D 自动改正过的编号（改前 / 改后 / 命中块）。
+   *
+   * ⚠️ 必须显示：这是"系统动过证据"的唯一凭据，不显示就等于**悄悄改**。
+   */
+  citationRepairs?: CitationRepair[] | null
 }

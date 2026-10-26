@@ -24,7 +24,7 @@ import {
   squeezeForUpload,
   uploadImage,
 } from '@/api/images'
-import type { MessageOut } from '@/types/api'
+import type { Channel, MessageOut } from '@/types/api'
 import type { UiMessage } from '@/types/ui'
 import { detailLevel, setDetailLevel } from '@/stores/prefs'
 
@@ -83,6 +83,17 @@ const chatMode = ref<'fast' | 'agent'>(
 
 /** 服务端总闸是不是开着（`GET /auth/me` 里的 `agent_available`）。 */
 const agentAvailable = computed(() => currentUser.value?.agent_available === true)
+
+/**
+ * 这个会话是从哪来的（`web` / `feishu_p2p` / `feishu_group`）。
+ *
+ * ⚠️ **飞书会话在 Web 端只读**（2026-10-27 走查第 5 条）：在这里打字发不出去到飞书，
+ *    却会进下一轮的上下文 —— 坐席以为顾客看见了，其实没有。所以：去发送框、去图片、
+ *    去 agent 开关，只留"看 + 反馈"。
+ * ⚠️ `/conversations/new` 还没有会话 ⟹ 先当 `web`（一定是本端发起的）。
+ */
+const conversationChannel = ref<Channel>('web')
+const isExternalChannel = computed(() => conversationChannel.value !== 'web')
 const agentHint = computed(() =>
   agentAvailable.value
     ? '更准（会自己查订单/改写检索），但慢 2~4 倍'
@@ -301,6 +312,10 @@ function toUi(message: MessageOut): UiMessage {
     agentSteps: message.meta?.agent_steps ?? null,
     agentRetries: message.meta?.agent_retries ?? null,
     agentTrace: message.meta?.agent_trace ?? null,
+    // 引用核对结果 / 编号自动改正 —— **两种模式都有**，不看 `agent_trace`。
+    // ⚠️ 不映射的话，刷新后"这条被改过编号"就消失了 ⟹ 等于悄悄改。
+    citationAudit: message.meta?.citation_audit ?? null,
+    citationRepairs: message.meta?.citation_repairs ?? null,
     refused: message.refused,
     latencyMs: message.latency_ms,
     // 2026-10-15 起置信度**落库了**（`architecture.md` §9.19）→ 刷新后徽标不再消失。
@@ -351,6 +366,8 @@ async function load(): Promise<void> {
   if (!id) {
     // `/conversations/new`：还没有会话，等第一条提问时才建。
     conversationTitle.value = ''
+    // 新会话一定是本端发起的 ⟹ 一定可写（别把上一次打开的飞书会话状态带过来）
+    conversationChannel.value = 'web'
     messages.value = []
     loading.value = false
     return
@@ -359,6 +376,10 @@ async function load(): Promise<void> {
   try {
     const [conversation, history] = await Promise.all([getConversation(id), listMessages(id)])
     conversationTitle.value = conversation.title
+    // ⚠️ **飞书会话在 Web 端只读**（2026-10-27 走查第 5 条）。
+    //    在这里发出去的消息飞书那边收不到，却会**污染下一轮的上下文** ——
+    //    坐席会以为顾客看见了，其实没有。这是最坏的一种"看起来能用"。
+    conversationChannel.value = conversation.channel
     messages.value = toUiList(history)
     await scrollToBottom(true)
   } catch (err) {
@@ -509,6 +530,11 @@ async function send(): Promise<void> {
           // ⚠️ 降级要**当场**告诉用户，不能等刷新页面才从 meta 里看到
           pending.degraded = event.degraded ?? null
           pending.agentSteps = event.agent_steps ?? null
+          // ⚠️ 轨迹**当轮就下发**（2026-10-27 走查 B2）：以前只有刷新才有，
+          //    而"刚才它为什么这么做"恰恰是当场才想问的。
+          pending.agentTrace = event.agent_trace ?? pending.agentTrace ?? null
+          pending.citationAudit = event.citation_audit ?? null
+          pending.citationRepairs = event.citation_repairs ?? null
         },
         onError: (event) => {
           pending.error = event.detail
@@ -625,7 +651,24 @@ onBeforeUnmount(() => {
       @close="ctx = null"
     />
 
-    <footer class="composer">
+    <!--
+      ⚠️ **飞书会话在 Web 端只读**（2026-10-27 走查第 5 条）。
+
+      为什么不是"发得出去就行"：这条会话的消息由飞书那边的顾客产生，
+      我们在这里打字**发不到他手机上**，却会进下一轮的上下文 ——
+      坐席会以为顾客看见了，其实没有。所以整条 composer 换成一句说明，
+      只留"看 + 反馈"。（要回复顾客请去飞书群里回，那是唯一真实的通道。）
+    -->
+    <footer v-if="isExternalChannel" class="composer composer--readonly">
+      <p class="composer__readonly">
+        🔒 这是
+        <strong>{{ conversationChannel === 'feishu_group' ? '飞书群' : '飞书私聊' }}</strong>
+        会话，在 Web 端<strong>只读</strong> —— 这里发出的消息顾客收不到。
+        <span class="composer__readonly-hint">要回复请回到飞书；要复核证据就点上面的来源。</span>
+      </p>
+    </footer>
+
+    <footer v-else class="composer">
       <div class="composer__bar">
         <button
           class="btn btn--ghost btn--sm"
@@ -800,6 +843,26 @@ onBeforeUnmount(() => {
   padding: 10px 20px 14px;
 }
 
+/* 飞书会话的只读条：说明「这里发不出去」，别让它看起来像坏掉的输入框 */
+.composer--readonly {
+  background: var(--surface-sunken);
+}
+
+.composer__readonly {
+  max-width: 820px;
+  margin: 0 auto;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.composer__readonly-hint {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-faint);
+  font-size: 0.8rem;
+}
+
 .composer__bar {
   display: flex;
   align-items: center;
@@ -810,7 +873,7 @@ onBeforeUnmount(() => {
 
 .mode-switch {
   display: inline-flex;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
   margin-right: 8px;
@@ -821,12 +884,12 @@ onBeforeUnmount(() => {
   background: transparent;
   padding: 2px 8px;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--text-muted);
   cursor: pointer;
 }
 .mode-switch button.on {
-  background: var(--brand-weak, #eef2ff);
-  color: var(--brand, #3b5bdb);
+  background: var(--primary-soft);
+  color: var(--primary);
   font-weight: 600;
 }
 .mode-switch button:disabled {

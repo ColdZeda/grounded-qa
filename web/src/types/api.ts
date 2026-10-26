@@ -169,6 +169,11 @@ export interface MessageMeta {
   awaiting?: string
   /** 全轨迹（模型每步选了什么、工具返回了什么）。 */
   agent_trace?: AgentStep[]
+  // ---- 以下**两种模式都可能带**（2026-10-27 起落库；以前只随 SSE 帧走一次） ----
+  /** 引用可核对性：这次有几处引用对不上。只在 `checked > 0` 时有。 */
+  citation_audit?: CitationAudit
+  /** 修法 D 自动改正过的编号（改前 / 改后 / 命中块）。 */
+  citation_repairs?: CitationRepair[]
 }
 
 /** agent 轨迹里的一步（`app/rag/agent.py::_trace`）。 */
@@ -185,6 +190,8 @@ export interface AgentStep {
   tool_calls?: string[]
   reason?: string
   question?: string
+  /** `kind=model_error` 时的第几次尝试（1 = 首次，2 = 重试）。 */
+  attempt?: number
   error?: string
   finish_reason?: string
 }
@@ -521,6 +528,30 @@ export interface DoneEvent {
   degraded?: string
   /** 回落时 agent 走了几步。 */
   agent_steps?: number
+  /**
+   * agent 的完整轨迹 —— **当轮就下发**（2026-10-27 走查 B2）。
+   *
+   * ⚠️ 以前它只在"从 `messages.meta` 重建消息"时有 ⟹ 正在等答案的人看不到，
+   *    刷新一下才出现。而轨迹的价值恰恰是"解释刚才发生了什么"，事后补看等于没有。
+   */
+  agent_trace?: AgentStep[]
+  /**
+   * 修法 D 自动改正过的引用编号（改前 / 改后 / 命中块）。
+   * ⚠️ 界面必须显示 —— 否则等于"系统悄悄动了证据"。
+   */
+  citation_repairs?: CitationRepair[]
+}
+
+/** 一处被自动改正的编号（`citations.py::CitationFix`）。 */
+export interface CitationRepair {
+  /** 出问题的那一句（后端截断到 120 字） */
+  sentence: string
+  /** 模型原来标的编号 */
+  marker: number
+  /** 改成哪个编号（一定是本次引用列表里的一号） */
+  corrected: number
+  /** 新编号指向的那一块（数字确实在这块原文里） */
+  chunk_id: string
 }
 
 /** `event: error` —— 流开始**之后**出的错，只能这样告诉前端（改不了状态码了）。 */

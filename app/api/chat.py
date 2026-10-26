@@ -608,6 +608,16 @@ async def _stream(
                 if isinstance(degraded, str) and degraded:
                     done_payload["degraded"] = degraded
                     done_payload["agent_steps"] = int(event.extra.get("agent_steps") or 0)
+                # ⚠️ **2026-10-27 走查 B2**：轨迹以前只在"从 `messages.meta` 重建消息"时读，
+                #    流式当轮 `done` 帧没带 ⟹ **正在等答案的人永远看不到**，刷新一下才有。
+                #    轨迹的价值恰恰是"解释刚才发生了什么"，事后补看等于没用。
+                trace = event.extra.get("agent_trace")
+                if isinstance(trace, list) and trace:
+                    done_payload["agent_trace"] = trace
+                # 修法 D 的明细也跟着出去：界面要能说"我们改过编号"（不静默动证据）。
+                repairs = event.extra.get("citation_repairs")
+                if isinstance(repairs, list) and repairs:
+                    done_payload["citation_repairs"] = repairs
                 yield _sse("done", done_payload)
     except Exception as exc:
         # ⚠️ 这里**不能**再抛 HTTP 异常：响应头早就发出去了，改不了状态码。

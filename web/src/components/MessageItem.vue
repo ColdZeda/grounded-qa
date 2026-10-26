@@ -39,6 +39,32 @@ const canFeedback = computed(
   () => props.message.role === 'assistant' && !props.message.streaming && !props.message.error,
 )
 
+/**
+ * 参考来源：**默认折叠 + 最多先给 5 条**（2026-10-27 走查第 6 条）。
+ *
+ * ⚠️ 为什么不直接全列：`rerank_top_n` 是 5，但 agent 多次检索后引用会更多，
+ *    一次铺开会把答案挤到屏幕外。先给 5 条，想看全的点一下 —— **信息不删，只是分层**。
+ */
+const SOURCE_PREVIEW = 5
+const showAllSources = ref(false)
+const visibleCitations = computed(() =>
+  showAllSources.value
+    ? props.message.citations
+    : props.message.citations.slice(0, SOURCE_PREVIEW),
+)
+const hiddenSourceCount = computed(() =>
+  Math.max(props.message.citations.length - SOURCE_PREVIEW, 0),
+)
+
+/**
+ * 引用可核对性（**内部侧**才显示）。
+ *
+ * ⚠️ 一句话就够："有几句我们没核对上"。**不说"答案是错的"** —— 两件事不一样，
+ *    而且判据刻意宽松，误报是存在的（`app/rag/citations.py`）。
+ */
+const unsupportedCount = computed(() => props.message.citationAudit?.unsupported ?? 0)
+const repairs = computed(() => props.message.citationRepairs ?? [])
+
 async function sendFeedback(): Promise<void> {
   const verdict = feedbackVerdict.value
   if (verdict === null || feedbackBusy.value) return
@@ -211,12 +237,23 @@ function onBodyClick(event: MouseEvent): void {
 
     <!-- 纠错反馈：报告的入口（内部工作台才有） -->
     <div v-if="canFeedback" class="fb">
-      <button v-if="!feedbackOpen && !feedbackDone" type="button" class="fb__btn" @click="feedbackOpen = true">
-        ⚑ 这条答得不对
+      <button
+        v-if="!feedbackOpen && !feedbackDone"
+        type="button"
+        class="fb__btn"
+        @click="feedbackOpen = true"
+      >
+        ⚑ 上报错误
       </button>
-      <span v-else-if="feedbackDone" class="fb__done">已记录，谢谢</span>
+      <span v-else-if="feedbackDone" class="fb__done">✓ 已记录，谢谢</span>
 
       <div v-if="feedbackOpen" class="fb__panel">
+        <!--
+          ⚠️ 2026-10-27 走查 C1：以前这块**没有标题、边框也没生效**（CSS 变量名写错了：
+              `--line`/`--muted`/`--brand` 都不存在），看起来像一句普通提示。
+              现在：标题 + 卡片 + 胶囊选项，一眼就知道"这是个能操作的东西"。
+        -->
+        <p class="fb__title">这条哪里不对？</p>
         <div class="fb__chips">
           <button
             v-for="option in [
@@ -240,7 +277,9 @@ function onBodyClick(event: MouseEvent): void {
           placeholder="一句话说明（选「其他」时必填）"
         />
         <div class="fb__actions">
-          <button type="button" :disabled="feedbackBusy" @click="sendFeedback">提交</button>
+          <button type="button" class="fb__submit" :disabled="feedbackBusy" @click="sendFeedback">
+            提交
+          </button>
           <button type="button" @click="feedbackOpen = false">取消</button>
         </div>
         <p v-if="feedbackError" class="fb__error">{{ feedbackError }}</p>
@@ -279,6 +318,27 @@ function onBodyClick(event: MouseEvent): void {
       ⚡ 快速模式<span v-if="message.agentSteps"> · 走了 {{ message.agentSteps }} 步后回落</span>
     </div>
 
+    <!--
+      **引用核对结果**（内部侧，2026-10-27）：
+        · 有对不上的 → 黄条，说"我们没核对上 N 处"（**不说答案是错的**）；
+        · 有被自动改正的编号 → 也必须说（否则等于"系统悄悄动了证据"）。
+      判据 → `architecture.md §9.54`。
+    -->
+    <div v-if="unsupportedCount > 0" class="audit">
+      ⚠️ 本次有 {{ unsupportedCount }} 处引用**未能核对上**，请以原文为准
+    </div>
+    <details v-if="repairs.length > 0" class="audit audit--repaired">
+      <summary>
+        🔧 已自动改正 {{ repairs.length }} 处引用编号（只改编号、正文一个字没动）
+      </summary>
+      <ul class="audit__list">
+        <li v-for="(fix, index) in repairs" :key="index">
+          <code>[{{ fix.marker }}] → [{{ fix.corrected }}]</code>
+          <span class="audit__sentence">{{ fix.sentence }}</span>
+        </li>
+      </ul>
+    </details>
+
     <!-- agent 轨迹：点开回放“它当时为什么这么做”（只有 agent 跑过才有） -->
     <details v-if="(message.agentTrace?.length ?? 0) > 0" class="trace">
       <summary class="trace__title">
@@ -306,20 +366,44 @@ function onBodyClick(event: MouseEvent): void {
           </template>
           <template v-else-if="step.kind === 'ask_user'">反问：{{ step.question }}</template>
           <template v-else-if="step.kind === 'budget'">预算/{步数}用完（{{ step.reason }}）→ 回落</template>
-          <template v-else-if="step.kind === 'model_error'">模型报错 → 回落</template>
+          <template v-else-if="step.kind === 'model_error'">
+            模型报错<span v-if="step.attempt">（第 {{ step.attempt }} 次）</span> → 回落
+          </template>
           <template v-else-if="step.kind === 'refused'">阈值拒答（{{ step.reason }}）</template>
         </li>
       </ol>
     </details>
 
-    <section v-else-if="message.citations.length > 0" class="sources">
-      <h4 class="sources__title">参考来源 · {{ message.citations.length }} 条</h4>
+    <!--
+      **参考来源：默认折叠 + 先给 5 条**（2026-10-27 走查第 6 条）。
+
+      ⚠️ 两个容易搞错的地方：
+        ① 这段**必须排除拒答**。以前它挂在一个 `v-else-if` 链上，而那条链的
+           `v-if` 是"有没有 agent 轨迹" —— 于是拒答时**上面刚说"依据不足"、
+           下面又列 5 条来源**（2026-10-24 走查就卡在这）。
+        ② "折叠"用 `<details>` 而不是 v-if：内容还在 DOM 里，
+           坐着看的和想复制的人拿到的是同一份。
+    -->
+    <details v-if="!message.refused && message.citations.length > 0" class="sources">
+      <summary class="sources__title">
+        参考来源 · {{ message.citations.length }} 条<span class="sources__hint">
+          （点开可核对原文）</span
+        >
+      </summary>
       <CitationList
-        :citations="message.citations"
+        :citations="visibleCitations"
         :active-index="activeIndex"
         @open-context="emit('open-context', $event)"
       />
-    </section>
+      <button
+        v-if="hiddenSourceCount > 0"
+        type="button"
+        class="sources__more"
+        @click="showAllSources = !showAllSources"
+      >
+        {{ showAllSources ? '收起' : `还有 ${hiddenSourceCount} 条` }}
+      </button>
+    </details>
   </article>
 </template>
 
@@ -488,6 +572,10 @@ function onBodyClick(event: MouseEvent): void {
 
 .sources {
   margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 6px 10px;
 }
 
 .sources__title {
@@ -495,9 +583,68 @@ function onBodyClick(event: MouseEvent): void {
   color: var(--text-muted);
   font-size: 0.8rem;
   font-weight: 600;
+  /* ⚠️ 折叠后它就是个 `<summary>`：必须给 `cursor: pointer`，
+     否则没人知道能点开（这是"默认折叠"最容易漏的一步）。 */
+  cursor: pointer;
+  user-select: none;
+}
+
+.sources__hint {
+  font-weight: 400;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+.sources__more {
+  margin-top: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.sources__more:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* 引用核对结果（内部侧）：**黄条，不是红条** —— "我们没核对上" ≠ "答案是错的" */
+.audit {
+  margin-top: 6px;
+  padding: 4px 10px;
+  border-left: 3px solid var(--warn);
+  border-radius: 4px;
+  background: var(--warn-soft);
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+/* 被自动改正过编号：用 info 色。它是"兜底生效了"，不是问题 */
+.audit--repaired {
+  border-left-color: var(--primary);
+  background: var(--primary-soft);
+  cursor: pointer;
+}
+
+.audit__list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 0.78rem;
+}
+
+.audit__sentence {
+  margin-left: 6px;
+  color: var(--text-muted);
 }
 
 /* 拒答时的候选：折叠 + 说明"未采用"，不再像"参考来源"那样默认铺开 */
+.sources--refused {
+  border-style: dashed;
+}
+
 .sources--refused summary.sources__title {
   cursor: pointer;
   user-select: none;
@@ -552,7 +699,7 @@ function onBodyClick(event: MouseEvent): void {
 .trace {
   margin-top: 8px;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 .trace__title {
   cursor: pointer;
@@ -582,54 +729,127 @@ function onBodyClick(event: MouseEvent): void {
 </style>
 
 <style scoped>
+/*
+ * 纠错反馈（2026-10-27 走查 C1 重做）。
+ *
+ * ⚠️ 三条都是走查直接指出来的：
+ *    ① **入口要像按钮**：描边 + 悬停变色，不能长得像一句提示；
+ *    ② **面板要像卡片**：边框 + 圆角 + 底色 + 内边距，和正文分开；
+ *    ③ **选项要像胶囊**：圆角要大（999px），选中的那颗实心。
+ * ⚠️ 只用 `main.css` 里**真的存在**的变量（`--border` / `--text-muted` / `--primary`）——
+ *    以前写的是 `--line` / `--muted` / `--brand`，全都不存在 ⟹ 静默退化成"没边框"。
+ */
 .fb {
-  margin-top: 8px;
+  margin-top: 10px;
   font-size: 12px;
 }
-.fb__btn,
-.fb__actions button,
-.fb__chips button {
-  border: 1px solid var(--line);
-  background: transparent;
-  border-radius: 6px;
-  padding: 2px 8px;
+
+.fb__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
   font-size: 12px;
-  color: var(--muted);
   cursor: pointer;
+  transition:
+    border-color 0.15s,
+    color 0.15s,
+    background 0.15s;
 }
-.fb__chips {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 6px;
+
+.fb__btn:hover {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary);
 }
-.fb__chips button.on {
-  border-color: var(--brand, #3b5bdb);
-  color: var(--brand, #3b5bdb);
+
+.fb__panel {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  box-shadow: var(--shadow-sm);
+}
+
+.fb__title {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 12px;
   font-weight: 600;
 }
-.fb__panel {
-  margin-top: 6px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+
+.fb__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
 }
+
+.fb__chips button {
+  padding: 3px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.fb__chips button.on {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+  font-weight: 600;
+}
+
 .fb__note {
   width: 100%;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 4px 6px;
+  box-sizing: border-box;
+  margin-bottom: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
   font-size: 12px;
-  margin-bottom: 6px;
 }
+
 .fb__actions {
   display: flex;
   gap: 6px;
 }
-.fb__error {
-  color: #e03131;
-  margin: 6px 0 0;
+
+.fb__actions button {
+  padding: 4px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
 }
+
+.fb__actions button.fb__submit {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.fb__actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.fb__error {
+  margin: 6px 0 0;
+  color: var(--danger);
+}
+
 .fb__done {
-  color: #2f9e44;
+  color: var(--ok);
 }
 </style>
