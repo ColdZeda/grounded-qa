@@ -6,15 +6,26 @@
     `[2]` 是另一张**没有任何期限数字**的表。界面有引用、点进去是另一段话 ——
     **不逐条核对就发现不了**。这正是"引用溯源"最隐蔽的失败方式。
 
-⚠️ **本模块只做"抓"，不做"改"。** 三个理由：
+⚠️ **审计**本身只做"抓"，不做"改"。"改"由下面的 `repair()` 单开一条路，规矩完全另算。原先三条理由：
 
     ① 流式回答**已经发出去了**，事后改写等于让用户看到前后两个版本；
     ② 我们的检查器自己也会错 —— 误报时删掉一个**正确**的引用，比串号更糟
        （用户失去核对入口，而且我们没有任何记录）；
     ③ 先能度量，才谈得上修。串号率是 0 还是 12%，决定的修法完全不同。
 
-    ⟹ 产物是 `Answer.extra["citation_audit"]` ＋ 一行 warning ＋ 一个计数器。
-       真要改输出，等这个数字攒起来再说（`CANDIDATES.md` 有记账）。
+    ⟹ **2026-10-27 起多了一个例外：`repair()`（修法 D）。** ①②③ 逐条看现在是这样：
+
+        · ① **仍然成立** ⟹ 所以 `repair()` **必须在文字发出去之前**生效：
+          agent 那条路答案本来就是一整段（`finish` 的参数）；pipeline 那条路靠
+          `StreamingRepair` **按句攒齐再发**（流式粒度从"逐字"变成"逐句"）。
+        · ② **仍然成立** ⟹ 所以 `repair()` **什么都不删**：它只把编号**指到真正写着
+          那个数字的块**，而且只在「这一句**只有一个**编号」且「有且只有**一块**能支持
+          这句话的**全部**原子」时才动手 —— 多一个候选、少一个候选，都一个字不改。
+        · ③ **已经量过了**（306 句）：真串号 ≈2.5%、形态**全是错块号**、
+          校准后判据精确率 5/5。有这个数才敢改。
+
+    ⟹ 现在的分工：**`audit()` 度量**（模型错了几次）、**`repair()` 兜底**（用户看到的那份是对的）。
+       两个计数器分开记：`gq_citation_support_total` / `gq_citation_repaired_total`。
 
 ⚠️ 判据刻意宽松（**宁可放过，不可误杀**）：
     · 只核**数字 + 单位**这类"最不可替换"的原子 —— "退货"和"退换"是等价的，
@@ -160,15 +171,20 @@ def _supported(atom: str, pool: str, pool_spaced: str) -> bool:
         "199"（"元"在列头）都是**原文确实支持**的写法，模型渲染成"8 天"/"199 元"
         却被判串号 —— 这类占误报的四分之一。代价是"单位写错"（7 天说成 7 个月）
         会被放过；但抽样里这种一例都没有，而"错块号"（真串号唯一的形态）照样抓得住。
+
+    ⚠️ 两条路**都**要求"数字独立出现"（`_has_number`）——
+        2026-10-27 实测踩到：`家具主体保修 3 年` 去比《2023 年版保修条款》，
+        纯子串匹配会**因为标题里的 "2023 年版" 而通过**（"3年" 正好是 "2023年版" 的子串）。
+        数字必须两侧不接别的数字，才算原文里有这个数。
     """
-    if atom in pool:
-        return True
     match = _ATOM_NUMBER.match(atom)
     if match is None:
         return False
     number = match.group(0)
     if not _has_number(pool_spaced, number):
         return False
+    if atom in pool:
+        return True
     unit = atom[len(number) :]
     return not unit or unit in pool
 
@@ -271,4 +287,246 @@ def audit(
     return CitationAudit(checked=checked, unsupported=len(issues), issues=issues)
 
 
-__all__ = ["CitationAudit", "CitationIssue", "audit"]
+# ---------------------------------------------------------------- 修法 D：改编号
+
+#: 句子的结束符。⚠️ 必须与 `_SENTENCE` 里的那个字符类**保持一致** ——
+#: 否则"流式攒句"和"整段切句"切出来的句子不一样，修补的结果就会和审计对不上。
+_TERMINATORS = "。！？!?\n"
+
+
+@dataclass(frozen=True)
+class CitationFix:
+    """一处**被改掉的编号**。写日志 / 落库都靠它，没有它等于"系统悄悄动了证据"。"""
+
+    sentence: str
+    """出问题的那一句（截断到 120 字，够人看）。"""
+    marker: int
+    """模型原来标的编号。"""
+    corrected: int
+    """改成哪个编号（一定是本次引用列表里的一号）。"""
+    chunk_id: str
+    """新编号指向的那一块 —— 数字确实在这块原文里。"""
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "sentence": self.sentence[:120],
+            "marker": self.marker,
+            "corrected": self.corrected,
+            "chunk_id": self.chunk_id,
+        }
+
+    def describe(self) -> str:
+        return f"[{self.marker}]→[{self.corrected}] {self.sentence[:60]}"
+
+
+@dataclass(frozen=True)
+class CitationRepair:
+    """修补结果。**`fixes` 为空表示一个字都没动。**"""
+
+    text: str
+    fixes: list[CitationFix] = field(default_factory=list)
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.fixes)
+
+
+def _repair_text(
+    text: str,
+    hits: Sequence[RetrievedChunk],
+    contents: list[str],
+    spaced: list[str],
+    extra: str,
+    extra_spaced: str,
+) -> tuple[str, list[CitationFix]]:
+    """逐句过一遍，能确定的就改编号。**返回改过的文本 ＋ 明细。**"""
+    out: list[str] = []
+    fixes: list[CitationFix] = []
+    for segment in _SENTENCE.findall(text):
+        fixed, fix = _repair_segment(segment, hits, contents, spaced, extra, extra_spaced)
+        out.append(fixed)
+        if fix is not None:
+            fixes.append(fix)
+    return "".join(out), fixes
+
+
+def _repair_segment(
+    segment: str,
+    hits: Sequence[RetrievedChunk],
+    contents: list[str],
+    spaced: list[str],
+    extra: str,
+    extra_spaced: str,
+) -> tuple[str, CitationFix | None]:
+    """一句能不能改？**三条都要满足才动手**：
+
+    1. 这一句**只有一个**编号 —— 多个编号时"该改哪一个"说不清，不动；
+    2. 现在的编号**确实不支持**这句话（先确认它是错的，别去动对的）；
+    3. 有**且只有一块**能支持这句话的**全部**原子 —— 0 块（没证据）或 2 块以上（说不清
+       是哪一块）都不动。
+
+    ⚠️ 第 3 条是"支持**全部**原子"，不是"支持那些对不上的原子"：
+        只补上缺的那一个数，剩下的是否对得更没保证 —— 那等于用一半证据改编号。
+    """
+    markers = sorted({int(m) for m in _MARKER.findall(segment)})
+    if len(markers) != 1:
+        return segment, None
+    marker = markers[0]
+    atoms = _atoms_of(segment)
+    if not atoms:
+        return segment, None
+
+    total = len(contents)
+
+    def supported_by(index: int) -> bool:
+        if not 1 <= index <= total:
+            return False
+        pool = contents[index - 1] + extra
+        pool_spaced = spaced[index - 1] + extra_spaced
+        return all(_supported(atom, pool, pool_spaced) for atom in atoms)
+
+    if supported_by(marker):
+        return segment, None  # 本来就对，一个字都不动
+
+    candidates = [k for k in range(1, total + 1) if k != marker and supported_by(k)]
+    if len(candidates) != 1:
+        return segment, None
+
+    corrected = candidates[0]
+    fixed = segment.replace(f"[{marker}]", f"[{corrected}]")
+    return fixed, CitationFix(
+        sentence=segment.strip(),
+        marker=marker,
+        corrected=corrected,
+        chunk_id=str(hits[corrected - 1].chunk_id),
+    )
+
+
+def repair(
+    answer_text: str,
+    hits: Sequence[RetrievedChunk],
+    *,
+    extra_evidence: str = "",
+) -> CitationRepair:
+    """把指错的编号**指到真正写着那个数字的块**（修法 D）。
+
+    ⚠️ **只改编号，不改一个字**：句子、标点、顺序全部原样保留。
+    ⚠️ **必须用在文字发出去之前**（agent 在 `finish` 里、pipeline 用 `StreamingRepair`），
+       否则用户会看到前后两个版本 —— 那比串号更糟。
+    ⚠️ 判据见 `_repair_segment` 那三条。`hits` 为空（闭卷 / 拒答）时原样返回。
+    """
+    if not answer_text or not hits:
+        return CitationRepair(answer_text, [])
+    contents = [_norm(hit.content) for hit in hits]
+    spaced = [_norm_spaced(hit.content) for hit in hits]
+    extra = _norm(extra_evidence) if extra_evidence else ""
+    extra_spaced = _norm_spaced(extra_evidence) if extra_evidence else ""
+    text, fixes = _repair_text(answer_text, hits, contents, spaced, extra, extra_spaced)
+    return CitationRepair(text, fixes)
+
+
+class StreamingRepair:
+    """**按句攒齐再发**，让编号修补做在文字发出去之前。
+
+    为什么要它：pipeline 是逐字流式，`[3]` 到的时候那一句早就发出去了。
+    ⟹ 把"发"的粒度从**逐字**改成**逐句**（`。！？!?\n` 都算句末），
+      每句凑齐 → 修补 → 再发。典型句子 ~30 字，肉眼只差一点点。
+
+    ⚠️ **攒太久就原样发**（`max_hold`）：宁可不修，也不能让流式卡住。
+       触发时那一句跑的是**未修补**的原文，会被 `audit()` 如实计入。
+    ⚠️ `feed()` 返回的可能是空串（这句还没完）；调用方照常 `yield` 即可。
+
+    用法（pipeline）：:
+
+        buffer = StreamingRepair(hits, extra_evidence=order_facts)
+        async for piece in chat.stream(...):
+            raw.append(piece)          # 原文留着算"模型串号率"
+            text = buffer.feed(piece)
+            if text:
+                yield Delta(text=text)
+        tail = buffer.flush()
+    """
+
+    #: 一句最多攒这么多字符。超了就原样发（长句 / 表格行都可能撞上）。
+    MAX_HOLD = 200
+
+    def __init__(
+        self,
+        hits: Sequence[RetrievedChunk],
+        *,
+        extra_evidence: str = "",
+        max_hold: int = MAX_HOLD,
+    ) -> None:
+        self._hits = list(hits)
+        self._contents = [_norm(hit.content) for hit in hits]
+        self._spaced = [_norm_spaced(hit.content) for hit in hits]
+        self._extra = _norm(extra_evidence) if extra_evidence else ""
+        self._extra_spaced = _norm_spaced(extra_evidence) if extra_evidence else ""
+        self._max_hold = max_hold
+        self._buffer = ""
+        self._raw: list[str] = []
+        #: 全部修补明细（一次回答可能修多处）。
+        self.fixes: list[CitationFix] = []
+
+    @property
+    def raw_text(self) -> str:
+        """**未**修补的原文 —— 给 `audit()` 量"模型错了几次"用。"""
+        return "".join(self._raw)
+
+    def feed(self, piece: str) -> str:
+        """喂一段增量，返回**可以原样发出去**的文本（可能是空串）。"""
+        self._raw.append(piece)
+        self._buffer += piece
+        out: list[str] = []
+        while True:
+            cut = self._first_terminator()
+            if cut <= 0:
+                break
+            fixed, fixes = _repair_text(
+                self._buffer[:cut],
+                self._hits,
+                self._contents,
+                self._spaced,
+                self._extra,
+                self._extra_spaced,
+            )
+            self.fixes.extend(fixes)
+            out.append(fixed)
+            self._buffer = self._buffer[cut:]
+        if len(self._buffer) > self._max_hold:
+            out.append(self._buffer)
+            self._buffer = ""
+        return "".join(out)
+
+    def flush(self) -> str:
+        """收尾：把没等到句末的残句发出去（这一刻它已经是最后一句，可以修了）。"""
+        if not self._buffer:
+            return ""
+        fixed, fixes = _repair_text(
+            self._buffer,
+            self._hits,
+            self._contents,
+            self._spaced,
+            self._extra,
+            self._extra_spaced,
+        )
+        self.fixes.extend(fixes)
+        self._buffer = ""
+        return fixed
+
+    def _first_terminator(self) -> int:
+        for index, char in enumerate(self._buffer):
+            if char in _TERMINATORS:
+                return index + 1
+        return 0
+
+
+__all__ = [
+    "CitationAudit",
+    "CitationFix",
+    "CitationIssue",
+    "CitationRepair",
+    "StreamingRepair",
+    "audit",
+    "repair",
+]

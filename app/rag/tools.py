@@ -61,7 +61,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
-from app.core.metrics import record_retrieval_degraded
+from app.core.metrics import record_citation_repaired, record_retrieval_degraded
 from app.db.models.knowledge import ContentStatus, Document
 from app.db.models.order import Order
 from app.db.repository import TenantScopedRepository
@@ -487,6 +487,8 @@ class ToolRuntime:
         self._explicit_order_no: str | None = None
         #: 最近一次交卷自查的结果（`Answer.extra["citation_audit"]`）。
         self.last_audit: Any = None
+        #: 修法 D：本轮**自动改正**过的编号（改前 / 改后 / 命中块）。
+        self.last_repairs: list[dict[str, Any]] = []
 
     # ---- 只读属性 ----
 
@@ -869,20 +871,9 @@ class ToolRuntime:
 
     # ---- finish ----
 
-    def _audit(self, answer: str) -> Any:
-        """拿已有证据去核答案里的数字。
-
-        ⚠️ `hits` 的顺序必须与 `[n]` 编号一致 —— `ref` 天然就是
-            1..N 连续编号（`_search_kb` 里同一次追加时分配），所以直接按序取。
-
-        ⚠️ **订单事实也是证据，但它不占 `[n]` 编号**。
-            2026-10-26 本地端到端实测打出来：答案写"签收日 2026-10-17，
-            目前签收 8 天[1][2]"，两个数字都来自订单快照，却被判成“串号”——
-            因为核对器只看引用的 chunk。后果不只是界面上多一条噪音：
-            交卷自查会**因为这个误报把正确答案退回去重写**。
-            所以把它作为**不占编号的附加证据**传进去（`extra_evidence`）。
-        """
-        hits = [
+    def _audit_hits(self) -> list[RetrievedChunk]:
+        """把本轮证据转成核对器要的形状（`ref` 天然就是 1..N 连续编号）。"""
+        return [
             RetrievedChunk(
                 chunk_id=item.chunk_id,
                 document_id=item.document_id,
@@ -892,29 +883,58 @@ class ToolRuntime:
             )
             for item in self._evidence
         ]
-        facts = ""
-        if self._orders:
-            lines: list[str] = []
-            for hit in self._orders:
-                item = hit.snapshot
-                names = " ".join(str(entry.get("name", "")) for entry in (item.get("items") or []))
-                lines.append(
-                    " ".join(
-                        str(value)
-                        for value in (
-                            item.get("order_no"),
-                            item.get("status"),
-                            item.get("placed_at"),
-                            item.get("delivered_at"),
-                            item.get("days_since_delivery"),
-                            item.get("amount"),
-                            names,
-                        )
-                        if value not in (None, "")
+
+    def _extra_facts(self) -> str:
+        """**不占编号**的附加证据：订单事实（签收日 / 天数 / 金额 / 商品）。
+
+        ⚠️ 拼法与 `_audit` 原来的完全一致，别改 —— 改一下"8 天"就可能又核不上了。
+        """
+        if not self._orders:
+            return ""
+        lines: list[str] = []
+        for hit in self._orders:
+            item = hit.snapshot
+            names = " ".join(str(entry.get("name", "")) for entry in (item.get("items") or []))
+            lines.append(
+                " ".join(
+                    str(value)
+                    for value in (
+                        item.get("order_no"),
+                        item.get("status"),
+                        item.get("placed_at"),
+                        item.get("delivered_at"),
+                        item.get("days_since_delivery"),
+                        item.get("amount"),
+                        names,
                     )
+                    if value not in (None, "")
                 )
-            facts = " ".join(lines)
-        return citation_module.audit(answer, hits, extra_evidence=facts)
+            )
+        return " ".join(lines)
+
+    def _audit(self, answer: str) -> Any:
+        """拿已有证据去核答案里的数字。
+
+        ⚠️ **订单事实也是证据，但它不占 `[n]` 编号**。
+            2026-10-26 本地端到端实测打出来：答案写"签收日 2026-10-17，
+            目前签收 8 天[1][2]"，两个数字都来自订单快照，却被判成“串号”——
+            因为核对器只看引用的 chunk。后果不只是界面上多一条噪音：
+            交卷自查会**因为这个误报把正确答案退回去重写**。
+            所以把它作为**不占编号的附加证据**传进去（`extra_evidence`）。
+        """
+        return citation_module.audit(answer, self._audit_hits(), extra_evidence=self._extra_facts())
+
+    def _repair(self, answer: str) -> Any:
+        """修法 D：**交卷前**把指错的编号指回真正写着那个数字的块。
+
+        ⚠️ 为什么放在交卷这里：agent 的回答是**一整段**参数，此刻文字一个字都还没发出去
+            （`_finish` 之后才 `yield Delta`）—— 这是唯一能"改而不被看见"的时机。
+        ⚠️ 它顺带救掉一类**误退**：错块号的答案本来要被退回重写一轮（多花一次模型调用），
+            现在直接改对编号就过了。
+        """
+        return citation_module.repair(
+            answer, self._audit_hits(), extra_evidence=self._extra_facts()
+        )
 
     def _finish(self, answer: str, citations: list[int]) -> ToolResult:
         """交卷。**引用必须能对上** —— 对不上就退回去让它重来（循环只给一次机会）。
@@ -955,6 +975,17 @@ class ToolRuntime:
         #    “修不对 → 被拦 → 再修”无限循环，而步数是有限的。
         # ⚠️ **查过订单就不拦**：金额 / 签收天数本来就在订单事实里，
         #    不在知识库条款里 —— 硬拦会把正确答案卡死。
+        # 修法 D：**先修编号，再自查** —— 顺序不能反。
+        # 反过来的话，一个只是编号错一格的答案会被判"核对不上"、退回重写一轮，
+        # 而它其实一个字都不用改，只是 `[3]` 该写成 `[5]`。
+        repaired = self._repair(answer)
+        if repaired.changed:
+            answer = repaired.text
+            self.last_repairs = [fix.as_dict() for fix in repaired.fixes]
+            record_citation_repaired(len(repaired.fixes))
+            for fix in repaired.fixes:
+                logger.info("agent 交卷前改正引用编号：%s", fix.describe())
+
         report = self._audit(answer)
         self.last_audit = {
             "checked": report.checked,

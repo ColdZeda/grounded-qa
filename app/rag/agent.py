@@ -468,6 +468,10 @@ class AgentRunner:
         # `chat.py` 那边就能直接把它当作 `done` 事件的 `citation_audit` 发出去。
         if self._runtime.last_audit is not None:
             extra["citation_audit"] = self._runtime.last_audit
+        # 修法 D：本轮自动改正过的编号（改前 / 改后 / 命中块）。
+        # ⚠️ 一定要跟着答案出去：这是"系统动过证据"的唯一凭据，丢了就等于悄悄改。
+        if self._runtime.last_repairs:
+            extra["citation_repairs"] = list(self._runtime.last_repairs)
         # 跨轮事实（第二天那句"那保修呢"就靠它）。
         facts = self._scratchpad_delta()
         if facts:

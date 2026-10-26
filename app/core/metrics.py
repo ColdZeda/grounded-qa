@@ -90,6 +90,23 @@ def record_citation_support(ok: bool) -> None:
     citation_support.labels(result="ok" if ok else "unsupported").inc()
 
 
+#: **引用编号被自动改正**的次数（2026-10-27 起，修法 D）。
+#: ⚠️ 和 `citation_support` **分开记**：那个量的是"模型错了几次"（修之前），
+#:    这个量的是"我们替它改了几次"。合成一个就再也说不清"是我们修得多还是模型错得多"。
+#: ⚠️ **非零不等于出错**：改了说明原来那次是错的，但改完用户看到的是对的 ——
+#:    所以它既是质量信号也是**兜底在工作**的证据。见 `citations.py::repair`。
+citation_repaired = Counter(
+    "gq_citation_repaired_total",
+    "引用编号被确定性改正的次数（只把编号指到真正写着那个数字的块，不动文字）",
+)
+
+
+def record_citation_repaired(count: int = 1) -> None:
+    """记 N 次编号改正（一次回答里可能修多处）。"""
+    if count > 0:
+        citation_repaired.inc(count)
+
+
 #: **检索降级**：embedding / rerank 调不通时，链路会"照样答，只是变差"。
 #: ⚠️ 2026-10-26 被真实事故逼出来的：阿里云百炼的**预算耗尽**（`BudgetLimitExceeded`），
 #:    向量路与精排路**同时**挂掉 ⟹ 检索退化成纯全文（hit@5 从 0.98 掉到 0.57），

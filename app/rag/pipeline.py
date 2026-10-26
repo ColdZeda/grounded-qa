@@ -30,7 +30,11 @@ from datetime import date, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
-from app.core.metrics import record_citation_support, record_retrieval_degraded
+from app.core.metrics import (
+    record_citation_repaired,
+    record_citation_support,
+    record_retrieval_degraded,
+)
 from app.rag import citations as citation_module
 from app.rag import followup as followup_module
 from app.rag import prompt as prompt_module
@@ -406,27 +410,44 @@ class RagPipeline:
             )
         )
         collected: list[str] = []
+        #: ⚠️ **原文**单独留一份，只用来量"模型错了几次"。
+        #:    发出去的是 `collected`（可能已被 `StreamingRepair` 改过编号），
+        #:    两个都要，否则"我们修了多少"和"模型错了多少"就混成一个数了。
+        raw_parts: list[str] = []
         error: str | None = None
         # ⚠️ usage 用**每次回答自己的**字典收集（不是客户端上的属性）：
         #    客户端是进程内单例，并发请求会互相覆盖。
         usage: dict[str, int] = {}
+        #: 修法 D：**按句攒齐再发**，好让 `[n]` 的修补做在文字发出去之前。
+        #: 闭卷 / 拒答时 `hits` 为空，它原样透传（等价于不启用）。
+        repairer = citation_module.StreamingRepair(hits, extra_evidence=self._order_facts)
 
         try:
             async for piece in self._chat.stream(messages, usage=usage):
-                collected.append(piece)
-                yield Delta(text=piece)
+                raw_parts.append(piece)
+                text = repairer.feed(piece)
+                if text:
+                    collected.append(text)
+                    yield Delta(text=text)
         except ModelAPIError as exc:
             # ⚠️ **不要把已经拿到的部分丢掉**：用户看到了半截回答，
             #    如果库里存的是空，事后排查就对不上了。
             error = str(exc)
 
+        tail = repairer.flush()
+        if tail:
+            collected.append(tail)
+            yield Delta(text=tail)
+
         # 引用可核对性（v1.3 收尾）：**流式发完了才能核**，所以放在这里。
-        # ⚠️ 只记录 + 打 warning，**不改写已经发出去的文字**（理由见 `citations.py`）。
+        # ⚠️ **量的是原文**（`raw_parts`），不是发出去的那份 ——
+        #    这样"模型错了几次"（`gq_citation_support_total`）和
+        #    "我们替它改了几次"（`gq_citation_repaired_total`）才是两个能分开看的数。
         # ⚠️ **订单事实要一起递进去**（2026-10-27 校尺时发现的漏）：
         #    agent 那边 `tools._audit` 早就传了 `extra_evidence`，这一路却漏了 ——
         #    于是"你这单签收已 8 天"这种**正确答案**在 web/飞书永远被判串号
         #    （`8 天` 来自订单快照，不占任何 `[n]` 编号）。
-        audit = citation_module.audit("".join(collected), hits, extra_evidence=self._order_facts)
+        audit = citation_module.audit(repairer.raw_text, hits, extra_evidence=self._order_facts)
         if audit.checked:
             record_citation_support(audit.ok)
         if not audit.ok:
@@ -437,9 +458,18 @@ class RagPipeline:
                 audit.issues[0].markers,
                 audit.issues[0].atoms,
             )
+        # 修法 D：把指错的编号指到真正写着那个数字的块（**只改编号、不改文字**）。
+        # ⚠️ 明细必须落日志 —— "系统悄悄动了证据"是不能接受的。
+        final_text = "".join(collected)
+        if repairer.fixes:
+            record_citation_repaired(len(repairer.fixes))
+            for fix in repairer.fixes:
+                logger.info("引用编号已改正：%s", fix.describe())
+        #: 发出去的那份**再核一次**：这才是用户真正要担心的地方。
+        published = citation_module.audit(final_text, hits, extra_evidence=self._order_facts)
 
         yield Answer(
-            text="".join(collected),
+            text=final_text,
             refused=False,
             citations=citations,
             confidence=confidence,
@@ -448,8 +478,14 @@ class RagPipeline:
             extra={
                 "score_kind": score_kind,
                 **ref_time.as_extra(),
-                # 引用可核对性：**只抓不改**（理由见 `app/rag/citations.py`）
-                "citation_audit": audit.summary(),
+                # 引用可核对性：**发出去的那份**还有几处对不上
+                "citation_audit": published.summary(),
+                # 修法 D 的明细（改前 / 改后 / 命中块）
+                **(
+                    {"citation_repairs": [fix.as_dict() for fix in repairer.fixes]}
+                    if repairer.fixes
+                    else {}
+                ),
                 # 追问改写（v1.4 C1'）：非空表示这次检索用了"上一轮问句 ＋ 本问"。
                 # ⚠️ 记账是为了 badcase 归因 —— "召回错了"要能一眼看出是不是改写惹的祸。
                 **({"followup_query": followup_query} if followup_query else {}),

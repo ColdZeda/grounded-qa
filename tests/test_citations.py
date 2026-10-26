@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import uuid
 
-from app.rag.citations import audit
+from app.rag.citations import StreamingRepair, audit
+from app.rag.citations import repair as repair_citations
 from app.rag.retrieval import RetrievedChunk
 
 
@@ -235,3 +236,151 @@ def test_swapped_unit_is_deliberately_tolerated() -> None:
     hits = [_hit("[客服 SLA] 超时返工 3 个月内免费；售后邮箱 48 小时内回复。")]
 
     assert audit("售后邮箱 48 个月内回复 [1]", hits).unsupported == 0
+
+
+# --------------------------------------------------- 修法 D：把编号指回去（repair）
+#: 这三块**只有 [3] 支持"6 个月"** —— 与真机那一幕同构。
+_REPAIR_HITS = [
+    _hit("[版本变更公告 > 旧值与新值对照] 美国站包邮门槛由 $49 调整为 $59。"),
+    _hit("[保修与退换货的区别 > 对照表] 时间窗口：签收后 7 天（无理由）/ 30 天（质量问题）。"),
+    _hit("[2023 年版保修条款 > 保修期限] 家具主体 1 年；布艺与填充件 6 个月；五金配件 6 个月。"),
+]
+
+
+def test_a_year_in_the_heading_does_not_validate_a_term_value() -> None:
+    """⚠️ **2026-10-27 实测踩到的坑**：`家具主体保修 3 年` 去比《**2023 年版**保修条款》，
+    纯子串匹配会因为标题里的 "2023 年版" 而通过（"3年" 正好是 "2023年版" 的子串）。
+
+    数字必须**两侧不接别的数字**才算原文里有它 —— 这条对"完整出现"同样适用。
+    """
+    hits = [_hit("[2023 年版保修条款 > 保修期限] 家具主体 1 年；布艺与填充件 6 个月。")]
+
+    result = audit("家具主体保修 3 年 [1]", hits)
+
+    assert result.unsupported == 1, "2023 年版里的 3 不能当 3 年用"
+    # 而真正写着的那个数当然该过
+    assert audit("家具主体保修 1 年 [1]", hits).unsupported == 0
+
+
+def test_repair_points_the_marker_at_the_chunk_that_really_has_it() -> None:
+    """**修法 D 的样板**：`[2]` 改成 `[3]`，**一个字都没重写**。"""
+    answer = "- 布艺与填充件：**6 个月**，自签收起算 [2]"
+
+    result = repair_citations(answer, _REPAIR_HITS)
+
+    assert result.text == "- 布艺与填充件：**6 个月**，自签收起算 [3]"
+    assert result.changed is True
+    (fix,) = result.fixes
+    assert (fix.marker, fix.corrected) == (2, 3)
+    assert fix.chunk_id == str(_REPAIR_HITS[2].chunk_id)
+    # 改完必须真的核得过 —— 否则"修了"是假的。
+    assert audit(result.text, _REPAIR_HITS).unsupported == 0
+
+
+def test_repair_leaves_a_correct_citation_untouched() -> None:
+    """对的那句**一个字节都不动** —— 这是它敢上线的前提。"""
+    answer = "- 布艺与填充件：6 个月 [3]"
+
+    result = repair_citations(answer, _REPAIR_HITS)
+
+    assert result.text == answer
+    assert result.fixes == []
+
+
+def test_repair_refuses_when_no_chunk_supports_the_sentence() -> None:
+    """0 块支持（数字哪儿都没有）→ **不动**。宁可留着报，也不乱指。"""
+    answer = "家具主体保修 3 年 [3]"
+
+    result = repair_citations(answer, _REPAIR_HITS)
+
+    assert result.text == answer
+    assert result.fixes == []
+    assert audit(result.text, _REPAIR_HITS).unsupported == 1
+
+
+def test_repair_refuses_when_more_than_one_chunk_could_be_the_source() -> None:
+    """2 块都支持（`7 天` 在第 2 块、`30 天` 也在第 2 块；再造一块同样含 `30 天` 的）→ **不动**。
+
+    真机上就有这种：`gen-09` 那句「德国 €69、日本 ¥8000…本次未调整」同时命中 3 块。
+    """
+    hits = [
+        _hit("[总则] 签收后 7 天内可无理由退货。"),
+        _hit("[区别] 质量问题 30 天内；无理由 7 天。"),
+        _hit("[地区] 德国站适用 14 天法定撤回权，质量问题 30 天。"),
+    ]
+
+    result = repair_citations("质量问题 30 天内可退 [0]", hits)
+
+    assert result.fixes == []
+
+
+def test_repair_refuses_a_sentence_with_several_markers() -> None:
+    """一句里有**两个编号** → "该改哪一个"说不清，不动。"""
+    answer = "家具主体 1 年、布艺件 6 个月 [1][2]"
+
+    result = repair_citations(answer, _REPAIR_HITS)
+
+    assert result.fixes == []
+
+
+def test_repair_requires_the_new_chunk_to_support_every_atom() -> None:
+    """新编号必须支持这句的**全部**原子，不是"把缺的那个补上就行"。
+
+    `1 年` 只在第 3 块有、`$59` 只在第 1 块有 ⟹ 没有哪一块能同时支持两个 ⟹ 不动。
+    """
+    answer = "包邮门槛 $59，家具主体保修 1 年 [2]"
+
+    result = repair_citations(answer, _REPAIR_HITS)
+
+    assert result.fixes == []
+
+
+def test_repair_does_not_touch_sentences_supported_by_order_facts() -> None:
+    """订单事实（`extra_evidence`）支持的数字不该触发改编号。
+
+    "已签收 8 天" 既不在第 1 块也不在第 3 块 —— 但它由订单快照支持，
+    所以这句**本来就不该被判错**，更不该被改到某一块上去。
+    """
+    hits = [_hit("[总则] 签收后 7 天内可无理由退货。"), _hit("[保修] 家具主体 1 年。")]
+
+    result = repair_citations(
+        "该单已签收 8 天，超过 7 天窗口 [1]",
+        hits,
+        extra_evidence="SF10001 delivered 2026-10-17 8 实木床架",
+    )
+
+    assert result.text == "该单已签收 8 天，超过 7 天窗口 [1]"
+    assert result.fixes == []
+
+
+def test_streaming_repair_matches_the_whole_text_repair() -> None:
+    """流式逐字喂 vs 整段修 —— **结果必须一模一样**（否则发出去的和核对的对不上）。"""
+    answer = "- 布艺与填充件：6 个月 [2]\n- 家具主体：1 年 [3]\n"
+    buffer = StreamingRepair(_REPAIR_HITS)
+
+    out = "".join(buffer.feed(char) for char in answer)
+    out += buffer.flush()
+
+    assert out == repair_citations(answer, _REPAIR_HITS).text
+    assert out.count("[3]") >= 2
+    assert buffer.raw_text == answer, "原文必须能原样取回（量模型串号率要用它）"
+    assert len(buffer.fixes) == 1
+
+
+def test_streaming_repair_holds_until_the_sentence_ends() -> None:
+    """句末到之前**一个字都不发** —— 这正是"改在发出去之前"的机制。"""
+    buffer = StreamingRepair(_REPAIR_HITS)
+
+    assert buffer.feed("布艺与填充件：6 个") == ""
+    assert buffer.feed("月 [2]") == ""
+    assert buffer.feed("。") == "布艺与填充件：6 个月 [3]。"
+
+
+def test_streaming_repair_gives_up_rather_than_stalling_the_stream() -> None:
+    """攒太久（没有句末的巨长句）→ **原样发**，不许把流式卡住。"""
+    buffer = StreamingRepair(_REPAIR_HITS, max_hold=20)
+
+    out = buffer.feed("很长很长的一段没有任何句号的话一直到超出上限")
+
+    assert out == "很长很长的一段没有任何句号的话一直到超出上限"
+    assert buffer.fixes == []
