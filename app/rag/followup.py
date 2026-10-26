@@ -20,6 +20,12 @@
 
 ⚠️ 只影响**检索**。提示词里永远是用户这一问的原话 ——
    把「德国呢」改写成别的句子塞给模型，等于替用户重述问题。
+
+> ⚠️ **LEGACY（2026-10-26 起）：只服务 `pipeline`（含 agent 的回落路径），agent 路径不用它。**
+> agent 的多轮记忆靠 `conversations.meta.scratchpad`（那是"真记住查到的事实"），
+> 不靠“用规则猜上一句”。
+> ⚠️ **为什么不删**：回落路径还在用，删了就是“最坏情况比今天还差”，
+>    直接破坏 `PLAN §13.3` 的兜底承诺。退役条件见 `CANDIDATES.md` W16。
 """
 
 from __future__ import annotations

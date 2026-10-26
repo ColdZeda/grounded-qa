@@ -42,6 +42,10 @@ MAX_CANDIDATES = 5
 def extract_order_candidates(text: str) -> list[str]:
     """从任意文字里捞出**可能是单号**的串（去重、转大写、保序）。
 
+    ⚠️ **LEGACY（2026-10-26 起）：只服务 `pipeline`（含 agent 的回落路径）。**
+        agent 路径不猜单号 —— 它用 `get_order` 工具直接查（模型自己决定查哪张）。
+        ⚠️ 为什么不删：回落路径还在用。退役条件见 `CANDIDATES.md` W16。
+
     ⚠️ 这里**只做形态筛选，不做校验** —— 是不是真的单号由数据库回答。
         多捞几个不花钱（一次 `IN` 查询），漏捞才会让"我的单呢"答不上来。
     """

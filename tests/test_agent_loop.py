@@ -315,13 +315,14 @@ async def test_max_steps_falls_back_to_pipeline(session: AsyncSession, make_acco
     answer = _answers(events)[0]
 
     assert pipeline.called == 1
-    assert answer.text.endswith("（本次用了快速模式）")
+    # ⚠️ 2026-10-26：那句“（本次用了快速模式）”**不再进正文**，
+    #    改成结构化的 `extra["degraded"]` 由界面画角标。
+    #    “不静默降级”这条纪律不变，变的只是它出现的地方。
+    assert "快速模式" not in answer.text
     assert answer.extra["degraded"] == "步骤用完了"
     assert answer.extra["agent_steps"] == 2
     # 回落时也把 agent 走过的轨迹带上，否则事后查不出"为什么退化"
     assert answer.extra["agent_trace"]
-    # 降级说明必须**以 Delta 的形式也发一份**，否则落库文本和流式看到的不一致
-    assert any(isinstance(item, Delta) and "快速模式" in item.text for item in events)
 
 
 @pytest.mark.integration

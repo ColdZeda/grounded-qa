@@ -128,6 +128,8 @@ function dispatch(frame: SseFrame, handlers: StreamHandlers): void {
         confidence: asNumber(payload.confidence),
         latency_ms: asNumber(payload.latency_ms) ?? 0,
         citation_audit: audit,
+        degraded: asString(payload.degraded) || undefined,
+        agent_steps: asNumber(payload.agent_steps) ?? undefined,
       })
       break
     }

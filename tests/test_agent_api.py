@@ -227,10 +227,13 @@ async def test_agent_fallback_is_marked_and_recorded(
     _status, events = await _ask_mode(client, token, conversation["id"], "家具保修多久")
 
     streamed = "".join(item["text"] for item in events_of(events, "delta"))
-    assert "（本次用了快速模式）" in streamed
+
+    # 正文不再带那句话；降级改由 `done` 事件 + `messages.meta.degraded` 表达（界面画角标）
+    assert "快速模式" not in streamed
+    done = events_of(events, "done")[0]
+    assert done["degraded"] == "模型调用失败", "降级原因必须跟着收尾事件出去"
 
     message = await _last_assistant_message(session, conversation["id"])
-    assert "（本次用了快速模式）" in message.content, "落库文本必须与流式看到的一致"
     assert (message.meta or {}).get("degraded") == "模型调用失败"
 
 

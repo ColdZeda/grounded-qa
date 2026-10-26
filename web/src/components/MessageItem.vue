@@ -21,6 +21,11 @@ import type { UiMessage } from '@/types/ui'
 
 const props = defineProps<{ message: UiMessage }>()
 
+/** 降级原因的人话说法（hover 显示）。后端给的是中文短语，这里只补一句“意味着什么”。 */
+const degradedTitle = computed(
+  () => `这次的回答是回落到固定流水线生成的：${props.message.degraded}`,
+)
+
 /**
  * 「看原文」一路往上抛到 `ChatView`。
  * ⚠️ 抽屉只有**一个**（在页面级）：一条消息 10 条来源就挂 10 个抽屉是错的设计，
@@ -182,6 +187,49 @@ function onBodyClick(event: MouseEvent): void {
         />
       </details>
     </section>
+
+    <!--
+      ⚠️ **降级角标（而不是正文里一句话）**。
+          原来它是答案末尾的“（本次用了快速模式）”：混在正文里像答案的一部分，
+          用户要读到句尾才知道降级了。现在搬到这里：扫一眼就知道，而且能看到原因。
+          用灰色而不是红色 —— 它**不是错误**，答案仍是好的，只是走的是老路。
+    -->
+    <div v-if="message.degraded" class="degraded" :title="degradedTitle">
+      ⚡ 快速模式<span v-if="message.agentSteps"> · 走了 {{ message.agentSteps }} 步后回落</span>
+    </div>
+
+    <!-- agent 轨迹：点开回放“它当时为什么这么做”（只有 agent 跑过才有） -->
+    <details v-if="(message.agentTrace?.length ?? 0) > 0" class="trace">
+      <summary class="trace__title">
+        agent 轨迹 · {{ message.agentTrace?.length }} 条<span
+          v-if="message.agentRetries"
+        >
+          · 自愈 {{ message.agentRetries }} 次</span
+        >
+      </summary>
+      <ol class="trace__list">
+        <li
+          v-for="(step, index) in message.agentTrace"
+          :key="index"
+          :class="['trace__item', `trace__item--${step.kind}`]"
+        >
+          <span class="trace__step">#{{ step.step }}</span>
+          <template v-if="step.kind === 'tool'">
+            <strong>{{ step.name }}</strong>
+            <span v-if="step.ok === false" class="trace__bad">失败</span>
+            <span class="trace__ms">{{ step.ms }} ms</span>
+            <span class="trace__summary">{{ step.summary }}</span>
+          </template>
+          <template v-else-if="step.kind === 'model'">
+            选了 {{ (step.tool_calls ?? []).join('、') || '不调工具' }}
+          </template>
+          <template v-else-if="step.kind === 'ask_user'">反问：{{ step.question }}</template>
+          <template v-else-if="step.kind === 'budget'">预算/{步数}用完（{{ step.reason }}）→ 回落</template>
+          <template v-else-if="step.kind === 'model_error'">模型报错 → 回落</template>
+          <template v-else-if="step.kind === 'refused'">阈值拒答（{{ step.reason }}）</template>
+        </li>
+      </ol>
+    </details>
 
     <section v-else-if="message.citations.length > 0" class="sources">
       <h4 class="sources__title">参考来源 · {{ message.citations.length }} 条</h4>
@@ -406,5 +454,48 @@ function onBodyClick(event: MouseEvent): void {
   to {
     visibility: hidden;
   }
+}
+</style>
+
+<style scoped>
+.degraded {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: #f1f3f5;
+  color: #868e96;
+  font-size: 12px;
+  cursor: help;
+}
+.trace {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.trace__title {
+  cursor: pointer;
+}
+.trace__list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.trace__item {
+  margin: 2px 0;
+}
+.trace__step {
+  color: #adb5bd;
+  margin-right: 6px;
+}
+.trace__ms {
+  margin-left: 6px;
+  color: #adb5bd;
+}
+.trace__summary {
+  margin-left: 8px;
+}
+.trace__bad {
+  margin-left: 6px;
+  color: #e03131;
 }
 </style>

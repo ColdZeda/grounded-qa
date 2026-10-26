@@ -592,6 +592,12 @@ async def _stream(
                 audit = event.extra.get("citation_audit")
                 if isinstance(audit, dict) and audit.get("checked"):
                     done_payload["citation_audit"] = audit
+                # ⚠️ agent 的降级原因要**跟着收尾事件出去**：界面靠它画那个角标。
+                #    不发的话，只有刷新页面（从 `messages.meta` 重建）才能看到 —— 而正在等答案的人恰恰看不到。
+                degraded = event.extra.get("degraded")
+                if isinstance(degraded, str) and degraded:
+                    done_payload["degraded"] = degraded
+                    done_payload["agent_steps"] = int(event.extra.get("agent_steps") or 0)
                 yield _sse("done", done_payload)
     except Exception as exc:
         # ⚠️ 这里**不能**再抛 HTTP 异常：响应头早就发出去了，改不了状态码。

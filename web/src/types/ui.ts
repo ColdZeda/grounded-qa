@@ -10,6 +10,8 @@ import type { Citation } from './api'
  *     · `streaming` / `error` / `cancelled` 是纯界面状态
  *     硬要把两者合成一个类型，就会被迫给 `id` 加 `?`，然后每个用到的地方都要判空。
  */
+import type { AgentStep } from './api'
+
 export interface UiMessage {
   id: string
   role: 'user' | 'assistant'
@@ -49,4 +51,16 @@ export interface UiMessage {
    *    （他明明只打了一句「德国呢」）。
    */
   followupPrev?: string | null
+
+  /**
+   * 降级原因（非空 = 这次是回落 pipeline 答的）。
+   * ⚠️ 它不是“错误”，也不影响答案质量 —— 只是告诉坐席“这条不是 agent 答的”。
+   *    所以用**灰色角标**，不用红色报错样式。
+   */
+  degraded?: string | null
+  /** agent 走了几步 / 自愈几次。 */
+  agentSteps?: number | null
+  agentRetries?: number | null
+  /** 全轨迹（点开能回放“它当时为什么这么做”）。 */
+  agentTrace?: AgentStep[] | null
 }

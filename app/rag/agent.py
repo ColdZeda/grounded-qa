@@ -367,18 +367,14 @@ class AgentRunner:
         pipeline = self._fallback_factory()
         async for event in pipeline.answer(question=self._question, history=self._history):
             if isinstance(event, Answer):
-                if event.refused:
-                    # 拒答文案是固定的，加一句"用了快速模式"会让它变得莫名其妙。
-                    yield replace(
-                        event,
-                        extra={**event.extra, "degraded": reason, "agent_steps": self._steps},
-                    )
-                    continue
-                tail = "\n\n（本次用了快速模式）"
-                yield Delta(text=tail)
+                # ⚠️ **2026-10-26：不再往正文里加那句"（本次用了快速模式）"。**
+                #    原因三条：① 它混在答案里，像答案的一部分；
+                #    ② 界面上没有视觉标记，坐席要读到句尾才发现；
+                #    ③ 把结构化信息写成了自然语言，想统计回落率还要去正文里 grep。
+                #    现在只传 `extra["degraded"]`（已经在），由开头那个角标去告诉用户。
+                # ⚠️ **但"不静默降级"这条纪律一字未改** —— 只是把它从正文搬到了结构化字段上。
                 yield replace(
                     event,
-                    text=event.text + tail,
                     extra={
                         **event.extra,
                         "degraded": reason,

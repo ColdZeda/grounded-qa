@@ -158,6 +158,35 @@ export interface MessageMeta {
    */
   followup_prev?: string | null
   orders?: OrderSnapshot[]
+  // ---- 以下只有**助手消息**且 agent 跑过才有 ----
+  /** agent 走了几步。 */
+  agent_steps?: number
+  /** 自愈（“白查”后重新检索）几次。 */
+  agent_retries?: number
+  /** 降级原因：步数用完 / 总预算用完 / 模型调用失败。**非空 = 这次是回落 pipeline 答的**。 */
+  degraded?: string
+  /** 轮到 agent 反问的那句话。 */
+  awaiting?: string
+  /** 全轨迹（模型每步选了什么、工具返回了什么）。 */
+  agent_trace?: AgentStep[]
+}
+
+/** agent 轨迹里的一步（`app/rag/agent.py::_trace`）。 */
+export interface AgentStep {
+  step: number
+  /** `model` = 模型这一轮说了什么；`tool` = 工具执行；其余是结局类事件。 */
+  kind: 'model' | 'tool' | 'budget' | 'model_error' | 'refused' | 'ask_user'
+  name?: string
+  args?: string
+  ok?: boolean
+  ms?: number
+  summary?: string
+  content?: string
+  tool_calls?: string[]
+  reason?: string
+  question?: string
+  error?: string
+  finish_reason?: string
 }
 
 export interface MessageOut {
@@ -488,6 +517,10 @@ export interface DoneEvent {
    * 拒答 / 闭卷 / 整句全是名词 → 没有这个字段（不是 `null`）。
    */
   citation_audit?: CitationAudit
+  /** 非空 = 这次是回落 pipeline 答的（降级原因）。 */
+  degraded?: string
+  /** 回落时 agent 走了几步。 */
+  agent_steps?: number
 }
 
 /** `event: error` —— 流开始**之后**出的错，只能这样告诉前端（改不了状态码了）。 */

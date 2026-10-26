@@ -295,6 +295,12 @@ function toUi(message: MessageOut): UiMessage {
     role: message.role === 'user' ? 'user' : 'assistant',
     content: message.content,
     citations: message.citations,
+    // ⚠️ agent 的痕迹在 `meta` 里（只有助手消息可能有）。
+    //    不映射的话，刷新页面后角标和轨迹就都消失了 —— 而“为什么回落”恰恰是事后才要查的。
+    degraded: message.meta?.degraded ?? null,
+    agentSteps: message.meta?.agent_steps ?? null,
+    agentRetries: message.meta?.agent_retries ?? null,
+    agentTrace: message.meta?.agent_trace ?? null,
     refused: message.refused,
     latencyMs: message.latency_ms,
     // 2026-10-15 起置信度**落库了**（`architecture.md` §9.19）→ 刷新后徽标不再消失。
@@ -500,6 +506,9 @@ async function send(): Promise<void> {
           pending.refused = event.refused
           pending.confidence = event.confidence
           pending.latencyMs = event.latency_ms
+          // ⚠️ 降级要**当场**告诉用户，不能等刷新页面才从 meta 里看到
+          pending.degraded = event.degraded ?? null
+          pending.agentSteps = event.agent_steps ?? null
         },
         onError: (event) => {
           pending.error = event.detail
