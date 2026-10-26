@@ -78,9 +78,21 @@ class Row:
     question: str
     pipeline: ArmResult = field(default_factory=ArmResult)
     agent: ArmResult = field(default_factory=ArmResult)
-    hit_pipeline: bool = False
-    hit_agent: bool = False
+    #: **每次重复各记一条**（`--repeat N`）。
+    #: ⚠️ 2026-10-26 实测：同一套题跑两次，个别题会翻（C02 ✗→✓、A04 ✓→✗）
+    #:    —— **单跑一次的差值不能当结论**。
+    pipeline_hits: list[bool] = field(default_factory=list)
+    agent_hits: list[bool] = field(default_factory=list)
     tools_ok: bool | None = None
+
+    @property
+    def hit_pipeline(self) -> bool:
+        """多次重复时取**多数** —— 一道题的结论不该被一次偶然带偏。"""
+        return _majority(self.pipeline_hits)
+
+    @property
+    def hit_agent(self) -> bool:
+        return _majority(self.agent_hits)
 
 
 def _load_questions() -> list[dict[str, Any]]:
@@ -113,6 +125,16 @@ def _hit(item: dict[str, Any], answer: ArmResult) -> bool:
         return False
     norm = _norm(_strip_citation_marks(answer.text))
     return all(_point_hit(point, norm)[0] for point in points)
+
+
+def _majority(values: list[bool]) -> bool:
+    """多数决（空则 False）。"""
+    return bool(values) and sum(values) * 2 > len(values)
+
+
+def _rate(values: list[bool]) -> float:
+    """命中率（空则 0）。"""
+    return sum(values) / len(values) if values else 0.0
 
 
 def _pct(value: float) -> str:
@@ -211,21 +233,29 @@ async def _run(args: argparse.Namespace) -> int:
             tenant_id = await _tenant_id(session, args.tenant)
             for item in questions:
                 row = Row(id=item["id"], kind=item["kind"], question=item["question"])
-                if args.arm in ("both", "pipeline"):
-                    row.pipeline = await _run_pipeline(
-                        session, tenant_id=tenant_id, question=item["question"], clients=clients
-                    )
-                    row.hit_pipeline = _hit(item, row.pipeline)
-                if args.arm in ("both", "agent"):
-                    row.agent = await _run_agent(
-                        session, tenant_id=tenant_id, question=item["question"], clients=clients
-                    )
-                    row.hit_agent = _hit(item, row.agent)
-                    row.tools_ok = _tools_match(item.get("expect_tools") or [], row.agent.tools)
+                for round_index in range(max(1, args.repeat)):
+                    if args.arm in ("both", "pipeline"):
+                        result = await _run_pipeline(
+                            session, tenant_id=tenant_id, question=item["question"], clients=clients
+                        )
+                        row.pipeline_hits.append(_hit(item, result))
+                        if round_index == 0:
+                            row.pipeline = result
+                    if args.arm in ("both", "agent"):
+                        result = await _run_agent(
+                            session, tenant_id=tenant_id, question=item["question"], clients=clients
+                        )
+                        row.agent_hits.append(_hit(item, result))
+                        if round_index == 0:
+                            row.agent = result
+                            row.tools_ok = _tools_match(
+                                item.get("expect_tools") or [], result.tools
+                            )
                 rows.append(row)
+                spread_p = "".join("✓" if hit else "✗" for hit in row.pipeline_hits) or "-"
+                spread_a = "".join("✓" if hit else "✗" for hit in row.agent_hits) or "-"
                 print(
-                    f"{row.id:5s} {row.kind:12s} pipeline={'✓' if row.hit_pipeline else '✗'} "
-                    f"agent={'✓' if row.hit_agent else '✗'} "
+                    f"{row.id:5s} {row.kind:12s} pipeline={spread_p} agent={spread_a} "
                     f"steps={row.agent.steps} tools={','.join(row.agent.tools) or '-'}"
                 )
     finally:
@@ -283,13 +313,20 @@ def _report(rows: list[Row], *, arm: str) -> None:
         group = [row for row in rows if row.kind == kind]
         if not group:
             continue
-        hit_p = sum(row.hit_pipeline for row in group)
-        hit_a = sum(row.hit_agent for row in group)
         total = len(group)
-        delta = (hit_a - hit_p) / total * 100
+        rate_p = sum(_rate(row.pipeline_hits) for row in group) / total
+        rate_a = sum(_rate(row.agent_hits) for row in group) / total
+        spread = ""
+        rounds = max((len(row.agent_hits) for row in group), default=0)
+        if rounds > 1:
+            per_round = [
+                sum(row.agent_hits[index] for row in group if len(row.agent_hits) > index) / total
+                for index in range(rounds)
+            ]
+            spread = f"  agent 逐轮 {min(per_round):.0%}~{max(per_round):.0%}"
         print(
-            f"{kind:12s} n={total:2d}  pipeline {hit_p}/{total} ({_pct(hit_p / total)})  "
-            f"agent {hit_a}/{total} ({_pct(hit_a / total)})  Δ {delta:+5.1f} pt"
+            f"{kind:12s} n={total:2d}  pipeline {_pct(rate_p)}  agent {_pct(rate_a)}  "
+            f"Δ {(rate_a - rate_p) * 100:+5.1f} pt{spread}"
         )
 
     if arm == "both":
@@ -358,6 +395,12 @@ def _report(rows: list[Row], *, arm: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="agent 配对评测（pipeline vs agent）")
     parser.add_argument("--limit", type=int, default=0, help="只跑前 N 题")
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="每道题跑几次（模型非确定性 ⇒ 建议 3）",
+    )
     parser.add_argument("--kind", choices=KINDS, help="只跑某一题型")
     parser.add_argument("--arm", choices=("both", "pipeline", "agent"), default="both")
     parser.add_argument("--tenant", default="default", help="租户 slug（默认 default）")
