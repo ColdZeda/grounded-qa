@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -175,12 +176,41 @@ def render_order_facts(orders: Sequence[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+async def order_context(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    text: str,
+    extra_order_no: str | None = None,
+) -> tuple[list[dict[str, Any]], str, list[Any]]:
+    """从一句话里捞单号 → 查库 → 返回（事实卡、提示词块、下单时间）。
+
+    **Web 与飞书共用这一份**。为什么要抽出来：2026-10-26 前它只长在
+    `api/chat.py` 里，结果**顾客侧（飞书）压根不查订单** —— 顾客问“我的单到哪了”
+    只能得到一段政策。两边各写一份的话，下次又会只改一边。
+
+    ⚠️ 过滤口径与 `find_order` 一致（**只按租户**，D5）。
+    ⚠️ `extra_order_no` 是“上一轮已确认过的单号”（agent 的 scratchpad）；
+       句子里没有单号时才用它兜底。
+    """
+    orders = await resolve_orders(session, tenant_id=tenant_id, text=text)
+    # ⚠️ **这条就是 PLAN §13.6 的“回落路径也要读 scratchpad”**：
+    #    顾客说“那保修呢”时，句子里没单号，但上一轮查过。
+    if not orders and extra_order_no:
+        found = await find_order(session, tenant_id=tenant_id, order_no=extra_order_no)
+        orders = [found] if found is not None else []
+    now = datetime.now(UTC)
+    snapshots = [order_snapshot(order, now=now) for order in orders]
+    return snapshots, render_order_facts(snapshots), [order.placed_at for order in orders]
+
+
 __all__ = [
     "MAX_CANDIDATES",
     "days_since_delivery",
     "extract_order_candidates",
     "find_order",
     "format_amount",
+    "order_context",
     "order_snapshot",
     "render_order_facts",
     "resolve_orders",

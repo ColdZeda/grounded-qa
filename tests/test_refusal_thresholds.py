@@ -86,3 +86,21 @@ def test_none_confidence_never_refuses() -> None:
     """
     pipe = _pipeline()
     assert pipe._should_refuse(_hits(), None, "none") is False
+
+
+def test_order_facts_keep_it_answering_when_the_kb_is_empty() -> None:
+    """**查到了订单，就不能因“没检索到知识库”而拒答。**
+
+    ⚠️ 2026-10-26 加的例外：顾客问“SF10001 到哪了”时，知识库里本来就没有
+        这个答案（它在订单表里）。订单事实是**可核对的硬数据**，不是模型编的；
+        拒了它，“顾客问自己的单”就会变成“客服说不知道”。
+    ⚠️ 但**没查到订单时行为一字不变** —— 这一条同样重要。
+    """
+    pipe = _pipeline()
+
+    # 没事实 → 拒（和以前一样）
+    assert pipe._should_refuse([], None, "none") is True
+
+    # 有订单事实 → 不拒
+    pipe._order_facts = "- 订单号 SF10001：已签收；距今 4 天"
+    assert pipe._should_refuse([], None, "none") is False

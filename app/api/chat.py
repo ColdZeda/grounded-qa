@@ -31,7 +31,7 @@ from app.db.models.conversation import Channel, Conversation, Message, MessageRo
 from app.db.models.image import Image
 from app.db.models.user import User, UserRole
 from app.db.repository import TenantScopedRepository
-from app.orders import find_order, order_snapshot, render_order_facts, resolve_orders
+from app.orders import order_context
 from app.rag import followup as followup_module
 from app.rag.agent import AgentRunner, ToolEvent
 from app.rag.pipeline import Answer, Delta, RagPipeline, Sources, build_clients
@@ -177,25 +177,12 @@ async def _order_context(
 ) -> tuple[list[dict[str, object]], str, list[datetime]]:
     """从这段文字里捞单号 → 查库 → 事实卡片 ＋ 提示词块 ＋ 下单时间。
 
-    ⚠️ 查库**很便宜**（一次 SQL），所以每轮都可以做 —— 贵的是模型调用。
-        用户追问"我的单到哪了"时，重新从这句话里抽单号再查一次就行，不需要缓存。
-
-    ⚠️ 第三个返回值（下单时间）是给 **v1.3 B2 的 `ref_time`** 用的：老订单要以
-        **当年生效的条款**为准。订单只能在这里查（要 `user_id`），pipeline 只有
-        `tenant_id` —— 所以把结果传下去，而不是让 pipeline 自己去查。
+    ⚠️ 2026-10-26 起**实现搬到了 `app/orders.py::order_context`** —— 因为飞书那边
+        也要查订单了（之前只有 Web 查）。这里只保留一层壳，调用点不动。
     """
-    # ⚠️ 过滤口径：**只按租户**（决策 D5）—— 坐席能查本租户任意单号，
-    #    跨租户仍然查不到。见 `app/orders.py::find_order` 的说明。
-    orders = await resolve_orders(session, tenant_id=user.tenant_id, text=text)
-    # ⚠️ **这条就是 `PLAN §13.6` 的"回落路径也要读 scratchpad"**：
-    #    agent 上一轮查到了单号，这一轮用户只说"那保修呢"（句子里没单号）。
-    #    agent 超预算一回落 pipeline，如果不补这一下，多轮记忆就断在那一步。
-    if not orders and extra_order_no:
-        found = await find_order(session, tenant_id=user.tenant_id, order_no=extra_order_no)
-        orders = [found] if found is not None else []
-    now = datetime.now(UTC)
-    snapshots = [order_snapshot(order, now=now) for order in orders]
-    return snapshots, render_order_facts(snapshots), [order.placed_at for order in orders]
+    return await order_context(
+        session, tenant_id=user.tenant_id, text=text, extra_order_no=extra_order_no
+    )
 
 
 # ------------------------------------------------------------

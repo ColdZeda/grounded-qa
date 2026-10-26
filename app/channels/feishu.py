@@ -43,6 +43,7 @@ from app.db.models.conversation import Channel, Conversation, Message, MessageRo
 from app.db.models.user import User
 from app.db.repository import TenantScopedRepository
 from app.db.session import get_session_factory
+from app.orders import order_context
 from app.rag import mdtext
 from app.rag.pipeline import Answer, RagPipeline, Sources
 from app.rag.providers import ChatClient, EmbeddingClient, RerankClient
@@ -360,6 +361,14 @@ class FeishuChannel:
                 ensure(await self._guard.chat_rate(user.id))
                 ensure(await self._guard.quota(user.id))
 
+            # ⚠️ **2026-10-26：顾客侧终于能查订单了**。
+            #    之前这条路**完全不查订单**（`resolve_orders` 只在 Web 的 `chat.py` 里调），
+            #    于是顾客问“我的单到哪了”只能得到一段政策—— 答非所问。
+            #    口径与 Web **完全一致**（同一个 `order_context`，只按租户）。
+            _snapshots, order_facts, order_placed_at = await order_context(
+                session, tenant_id=user.tenant_id, text=event.text
+            )
+
             pipeline = RagPipeline(
                 session=session,
                 tenant_id=user.tenant_id,
@@ -367,6 +376,10 @@ class FeishuChannel:
                 embedder=self._embedder,
                 reranker=self._reranker,
                 settings=self._settings,
+                # 没查到就是空串 —— **不给“没查到订单”这种句子**（给了模型会顺着编）
+                order_facts=order_facts,
+                # 查到就以**下单时间**为时间基准（老订单按当年条款）
+                order_placed_at=order_placed_at,
             )
 
             final: Answer | None = None

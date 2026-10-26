@@ -478,7 +478,15 @@ class RagPipeline:
             合并那一行会让读者以为"rerank 一挂就不判了"，
             而真实行为是"**照样判，只是拿错了尺子**" —— 后者才是要知道的事。
         """
-        return should_refuse(hits, confidence, score_kind, settings=self._settings)
+        return should_refuse(
+            hits,
+            confidence,
+            score_kind,
+            settings=self._settings,
+            # 查到了订单（不管是正文里捞的还是 scratchpad 里带的）就不拒答
+            # getattr：部分单测用类未调 __init__，拿不到这个属性
+            has_order_facts=bool(getattr(self, "_order_facts", "")),
+        )
 
 
 def should_refuse(
@@ -487,6 +495,7 @@ def should_refuse(
     score_kind: str,
     *,
     settings: Settings,
+    has_order_facts: bool = False,
 ) -> bool:
     """判拒答的**唯一实现**（agent 也调它，见 `agent.py`）。
 
@@ -497,7 +506,11 @@ def should_refuse(
         ⚠️ 判据本身**一个字没改**：上面的长说明（四种情况 / 两把尺子）仍是权威。
     """
     if not hits:
-        return True
+        # ⚠️ **2026-10-26：查到了订单就不能因“没检索到知识库”而拒答。**
+        #    订单事实（状态 / 签收天数 / 金额）是**可核对的硬数据**，不是模型编的；
+        #    拒了它，“顾客问自己的单”就会变成“客服说不知道”。
+        #    没查到订单时行为**一字不变**（照旧拒答）。
+        return not has_order_facts
     if confidence is None:
         # 纯全文命中（没有 embedding / 没开 rerank）→ 没有可信的置信度。
         # 宁可答（并在引用里给出处让人核对），也不要用一个无意义的数字假装判断过。
