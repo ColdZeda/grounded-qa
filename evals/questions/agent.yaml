@@ -18,32 +18,37 @@
 # ---------------- 多跳（6）：不先查订单就检索不到 ---------------
 - id: A01
   kind: multi_hop
-  question: "我上周买的那张床架想退货，还来得及吗？"
-  required_points: ["7 天"]
+  question: "我前几天买的那个床架，现在想退货还来得及吗？"
+  # ⚠️ 要点里必须有**只有订单才知道的事实**（签收 4 天）。
+  #    只写"7 天"的话，一段通用的退货政策回答就能蒙对 —— 那样测的不是多跳。
+  required_points: ["4 天", "7 天"]
   expect_tools: ["get_order", "search_kb"]
 
 - id: A02
   kind: multi_hop
-  question: "SF10001 这单的床架要是坏了，保修多久？"
-  required_points: ["2 年"]
+  question: "我那张床头柜还在无理由退货期内吗？"
+  # 签收 6 天；结论依赖"总则 7 天"与"签收天数"两个事实相比
+  required_points: ["6 天", "7 天"]
   expect_tools: ["get_order", "search_kb"]
 
 - id: A03
   kind: multi_hop
-  question: "SF10005 的退款到账要多久？"
-  required_points: ["工作日"]
+  question: "我那张三人沙发发货了吗？发往德国要多久？"
+  # 订单状态 SHIPPED（只有订单知道）+ 德国时效
+  required_points: ["已发货", "10~18 天"]
   expect_tools: ["get_order", "search_kb"]
 
 - id: A04
   kind: multi_hop
-  question: "SF10002 的床头柜现在还能无理由退吗？"
-  required_points: ["7 天"]
+  question: "我正在退款的那张餐边柜，钱什么时候能到账？"
+  required_points: ["退款", "工作日"]
   expect_tools: ["get_order", "search_kb"]
 
 - id: A05
   kind: multi_hop
-  question: "我刚下的单 SF10003 发到德国要多久？"
-  required_points: ["10~18 天"]
+  question: "我三周前买的那单，现在还能按质量问题退吗？"
+  # 签收 18 天 → 在 30 天窗口内；要点要的是"已签收多少天"这个事实
+  required_points: ["18 天", "30 天"]
   expect_tools: ["get_order", "search_kb"]
 
 # 版本维度：问句里的年份要变成 ref_time，才能拿到当年那版条款

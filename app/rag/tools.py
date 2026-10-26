@@ -94,8 +94,10 @@ MAX_CHARS_PER_CHUNK = 1200
 #: `search_kb` 一次最多给几条（模型可以传更小的 `top_k`，但不能超过这个）。
 MAX_TOP_K = 20
 
-#: `get_order(recent=True)` 给几张。3 张够模型判断"是不是这张"，5 张就开始走神。
-RECENT_ORDERS = 3
+#: `get_order(recent=True)` 给几张。
+#: ⚠️ 2026-10-26 评测打出来的：给 3 张时，顾客说"上周那个床架"模型**分不清是哪张 → 干脆反问**。
+#:    给 5 张让它能靠商品名对上（床架 / 床头柜 / 书桌……）。
+RECENT_ORDERS = 5
 
 #: 枚举值的**对客说法** —— 给模型看中文，接口对外仍然是英文枚举（与 `orders._STATUS_ZH` 同一口径）。
 _CONTENT_STATUS_HINT: dict[str, str] = {
@@ -782,7 +784,13 @@ class ToolRuntime:
         return ToolResult(
             name=GET_ORDER,
             ok=True,
-            payload={"ok": True, "orders": snapshots},
+            payload={
+                "ok": True,
+                "orders": snapshots,
+                # ⚠️ 这句不是客套话：不说的话模型会为了“确认是哪一张”而反问，
+                #    而反问是**终止工具** —— 一个能答的题就变成了一句反问。
+                "hint": "这是该顾客最近的订单。商品名能和顾客描述对上就直接用，不要为了确认而反问。",
+            },
             summary=f"{summary} · {len(snapshots)} 张",
         )
 

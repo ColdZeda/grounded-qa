@@ -14,12 +14,55 @@
 import { computed, ref } from 'vue'
 
 import CitationList from './CitationList.vue'
+import { submitFeedback, type FeedbackVerdict } from '@/api/feedback'
 import ImageThumb from './ImageThumb.vue'
 import { renderAnswer } from '@/lib/markdown'
 import { isDetailed } from '@/stores/prefs'
 import type { UiMessage } from '@/types/ui'
 
 const props = defineProps<{ message: UiMessage }>()
+
+/**
+ * 纠错反馈的本地状态。
+ *
+ * ⚠️ **不做点赞**：点踩只产生一个数字，对治理没用。这里要的是"哪里不对 + 当时的答案"，
+ *    所以点开是个三选一 + 一句话，而不是一个大拇指朝下的图标。
+ */
+const feedbackOpen = ref(false)
+const feedbackDone = ref(false)
+const feedbackBusy = ref(false)
+const feedbackVerdict = ref<FeedbackVerdict | null>(null)
+const feedbackNote = ref('')
+const feedbackError = ref('')
+
+const canFeedback = computed(
+  () => props.message.role === 'assistant' && !props.message.streaming && !props.message.error,
+)
+
+async function sendFeedback(): Promise<void> {
+  const verdict = feedbackVerdict.value
+  if (verdict === null || feedbackBusy.value) return
+  if (verdict === 'other' && feedbackNote.value.trim() === '') {
+    feedbackError.value = '选「其他」时请写一句说明'
+    return
+  }
+  feedbackBusy.value = true
+  feedbackError.value = ''
+  try {
+    await submitFeedback({
+      message_id: props.message.id,
+      verdict,
+      note: feedbackNote.value.trim() || null,
+    })
+    feedbackDone.value = true
+    feedbackOpen.value = false
+  } catch (err) {
+    // ⚠️ 失败要说出来：坐席以为记下了、其实没记下，是最糟的一种静默
+    feedbackError.value = (err as Error).message
+  } finally {
+    feedbackBusy.value = false
+  }
+}
 
 /** 降级原因的人话说法（hover 显示）。后端给的是中文短语，这里只补一句“意味着什么”。 */
 const degradedTitle = computed(
@@ -165,6 +208,44 @@ function onBodyClick(event: MouseEvent): void {
       <summary>📷 读图结果</summary>
       <p class="image-note__body">{{ message.imageNote }}</p>
     </details>
+
+    <!-- 纠错反馈：报告的入口（内部工作台才有） -->
+    <div v-if="canFeedback" class="fb">
+      <button v-if="!feedbackOpen && !feedbackDone" type="button" class="fb__btn" @click="feedbackOpen = true">
+        ⚑ 这条答得不对
+      </button>
+      <span v-else-if="feedbackDone" class="fb__done">已记录，谢谢</span>
+
+      <div v-if="feedbackOpen" class="fb__panel">
+        <div class="fb__chips">
+          <button
+            v-for="option in [
+              { value: 'wrong_answer', label: '答案错了' },
+              { value: 'wrong_citation', label: '引用引错了' },
+              { value: 'other', label: '其他' },
+            ]"
+            :key="option.value"
+            type="button"
+            :class="{ on: feedbackVerdict === option.value }"
+            @click="feedbackVerdict = option.value as FeedbackVerdict"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+        <input
+          v-model="feedbackNote"
+          class="fb__note"
+          type="text"
+          maxlength="1000"
+          placeholder="一句话说明（选「其他」时必填）"
+        />
+        <div class="fb__actions">
+          <button type="button" :disabled="feedbackBusy" @click="sendFeedback">提交</button>
+          <button type="button" @click="feedbackOpen = false">取消</button>
+        </div>
+        <p v-if="feedbackError" class="fb__error">{{ feedbackError }}</p>
+      </div>
+    </div>
 
     <!--
       ⚠️ **拒答时不能直接叫"参考来源"。**
@@ -497,5 +578,58 @@ function onBodyClick(event: MouseEvent): void {
 .trace__bad {
   margin-left: 6px;
   color: #e03131;
+}
+</style>
+
+<style scoped>
+.fb {
+  margin-top: 8px;
+  font-size: 12px;
+}
+.fb__btn,
+.fb__actions button,
+.fb__chips button {
+  border: 1px solid var(--line);
+  background: transparent;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.fb__chips {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.fb__chips button.on {
+  border-color: var(--brand, #3b5bdb);
+  color: var(--brand, #3b5bdb);
+  font-weight: 600;
+}
+.fb__panel {
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.fb__note {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.fb__actions {
+  display: flex;
+  gap: 6px;
+}
+.fb__error {
+  color: #e03131;
+  margin: 6px 0 0;
+}
+.fb__done {
+  color: #2f9e44;
 }
 </style>

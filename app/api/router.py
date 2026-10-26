@@ -14,6 +14,7 @@ from app.api import (
     chat,
     conversations,
     documents,
+    feedback,
     images,
     monitoring,
     orders,
@@ -25,6 +26,7 @@ api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(conversations.router)
 api_router.include_router(chat.router)
+api_router.include_router(feedback.router)
 api_router.include_router(documents.router)
 # 订单：**只读**、仅本人。它存在的理由只有一个 —— 让图里的单号有处可去。
 api_router.include_router(orders.router)
