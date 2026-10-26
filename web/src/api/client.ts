@@ -23,11 +23,20 @@ export const API_BASE = '/api/v1'
 /** 后端返回的错误。`status` 留着是为了让调用方能区分 401 / 404 / 422。 */
 export class ApiError extends Error {
   readonly status: number
+  /**
+   * 原始 `detail`（**不总是字符串**）。
+   *
+   * ⚠️ 2026-10-27 加：发布草稿时后端会把**冲突清单**塞进 `detail`
+   *    （`{message, conflicts}`）。调用方要拿到那几条原文才能显示"到底哪里打架"；
+   *    只留一句 message 的话界面只能说"有冲突"，等于把证据丢了。
+   */
+  readonly detail: unknown
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, detail?: unknown) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.detail = detail
   }
 }
 
@@ -52,16 +61,19 @@ export function authHeaders(): Record<string, string> {
 /**
  * 把失败响应翻成 `ApiError`。
  *
- * ⚠️ FastAPI 的 `detail` 有**两种形状**，都要认：
+ * ⚠️ FastAPI 的 `detail` 有**三种形状**，都要认：
  *     · 我们自己 `raise HTTPException(detail="会话不存在")` → `detail` 是**字符串**
  *     · Pydantic 参数校验失败（422）→ `detail` 是**对象数组** `[{loc, msg, type}]`
- *     只处理字符串的话，422 会显示成 `[object Object]`，等于没有报错信息。
+ *     · 需要携带结构化证据时（发布草稿的冲突体检）→ `detail` 是**对象** `{message, conflicts}`
+ *     只处理字符串的话，另外两种会显示成 `[object Object]`，等于没有报错信息。
  */
 async function toApiError(resp: Response): Promise<ApiError> {
   let message = `请求失败（HTTP ${resp.status}）`
+  let payload: unknown
   try {
     const body: unknown = await resp.json()
     const detail = (body as { detail?: unknown } | null)?.detail
+    payload = detail
     if (typeof detail === 'string') {
       message = detail
     } else if (Array.isArray(detail)) {
@@ -69,11 +81,14 @@ async function toApiError(resp: Response): Promise<ApiError> {
         .map((item) => (item as { msg?: unknown })?.msg)
         .filter((msg): msg is string => typeof msg === 'string')
       if (parts.length > 0) message = parts.join('；')
+    } else if (detail !== null && typeof detail === 'object') {
+      const nested = (detail as { message?: unknown }).message
+      if (typeof nested === 'string' && nested) message = nested
     }
   } catch {
     // 响应不是 JSON（网关的 502 页面之类）→ 保留状态码兜底文案
   }
-  return new ApiError(resp.status, message)
+  return new ApiError(resp.status, message, payload)
 }
 
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {

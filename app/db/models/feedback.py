@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import enum
 import uuid
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ForeignKey, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -61,6 +62,28 @@ class AnswerFeedback(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
     citations_snapshot: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, default=list
     )
+
+    # ---------- W22：「采纳入库」的草稿 → 人工发布（D11）----------
+    # ⚠️ **为什么状态挂在反馈上、不新开一张表**：一条反馈的一生就是
+    #    「被指出 → 被采纳成草稿 → 被发布」，它本来就是一个流程，
+    #    拆成两张表会让"这条反馈处理到哪一步了"变成一次 join。
+    #: 采纳后生成的那份**草稿文档**（`documents` 里 `content_status=draft`）。
+    adopted_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        # ⚠️ 文档被硬删时把指针置空，而不是把反馈一起删 —— 反馈本身仍是 badcase 记录。
+        ForeignKey("documents.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    #: 谁采纳的 / 谁发布的（D11「全程留操作人」）。用户被删则置空，记录仍在。
+    adopted_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    adopted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    #: 发布时间。`content_status` 翻成 `active` 的那一刻才有值。
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 __all__ = ["AnswerFeedback", "FeedbackVerdict"]

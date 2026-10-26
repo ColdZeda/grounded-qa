@@ -42,6 +42,14 @@ const NAV = [
     paths: ['M4 19.5A2.5 2.5 0 0 1 6.5 17H20', 'M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z'],
   },
   {
+    // 反馈与采纳（W22 / D11）：badcase → 草稿 → 人工发布。
+    // 图标用「旗标」—— 与会话里那个「⚑ 上报错误」是同一个语义，看到就联得上。
+    name: 'feedback',
+    label: '反馈',
+    adminOnly: true,
+    paths: ['M5 21V4', 'M5 4h13l-2 3.5L18 11H5'],
+  },
+  {
     name: 'members',
     label: '成员',
     adminOnly: true,

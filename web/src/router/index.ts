@@ -1,8 +1,7 @@
 /**
  * 路由。
  *
- * 六个页面：登录 → 会话列表 → 聊天 ／ 知识库 ／ 评测报告 ／ 运维看板（仅管理员）。
- * **刻意不做多标签页布局** —— 面试演示时"点进去、看到答案、看到引用来源"这条动线越短越好。
+ * 页面：登录 → 会话列表 → 聊天 ／ 知识库 ／ 反馈与采纳（仅管理员）／ 评测报告 ／ 配额 ／ 运维（仅管理员）。 * **刻意不做多标签页布局** —— 面试演示时"点进去、看到答案、看到引用来源"这条动线越短越好。
  *
  * 全部用**动态 import**（懒加载）：登录页不该为了渲染一个表单
  * 先把聊天页的代码也下载下来。
@@ -56,6 +55,14 @@ const router = createRouter({
       path: '/documents',
       name: 'documents',
       component: () => import('@/views/DocumentsView.vue'),
+    },
+    {
+      // 反馈与采纳（W22 / D11）：badcase 的出口 —— 采纳成**草稿**、人工发布。
+      // ⚠️ 只有管理员能进；后端三个接口也都拦（`require_admin` / `AdminWriter`）。
+      path: '/feedback',
+      name: 'feedback',
+      component: () => import('@/views/FeedbackView.vue'),
+      meta: { adminOnly: true },
     },
     {
       // 成员管理（走查阶段 P0-①）：**唯一的"加人"入口**，没有开放注册。

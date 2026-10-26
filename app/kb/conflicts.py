@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -513,11 +513,22 @@ def _plain(text: str) -> str:
     return text.replace("**", "")
 
 
-async def collect(session: AsyncSession, *, tenant_id: uuid.UUID) -> list[DocumentText]:
+async def collect(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    promote: Collection[uuid.UUID] = (),
+) -> list[DocumentText]:
     """从库里取当前租户**所有文档的全文**（按 `ordinal` 拼回整篇）。
 
     ⚠️ 走 `TenantScopedRepository`（约定 12）—— 这里读的是全租户的知识库，
         不按用户过滤：冲突是**知识的属性**，不是某个人的。
+
+    ⚠️ `promote` = **假装这些文档已经是 `active` 的**。「发布前体检」用它（D11）：
+        草稿本身 `content_status=draft`，不参与配对 —— 照原样跑的话，
+        "发布会不会引入冲突"这个**唯一想问的问题**永远答"不会"。
+        把待发布的那篇临时当成 active 来配，才是真正的体检。
+        （只改这一份内存副本，**不写库**。）
     """
     document_repo = TenantScopedRepository(session, tenant_id=tenant_id, model=Document)
     documents = list((await session.scalars(document_repo.select())).all())
@@ -534,10 +545,11 @@ async def collect(session: AsyncSession, *, tenant_id: uuid.UUID) -> list[Docume
     for chunk in (await session.scalars(stmt)).all():
         texts[chunk.document_id].append(chunk.content)
 
+    promoted = set(promote)
     return [
         DocumentText(
             filename=document.filename,
-            content_status=document.content_status.value,
+            content_status=("active" if document.id in promoted else document.content_status.value),
             text="\n".join(texts[document.id]),
         )
         for document in documents
