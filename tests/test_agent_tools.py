@@ -239,6 +239,40 @@ async def test_self_check_blocks_only_once() -> None:
     assert runtime.last_audit["unsupported"] >= 1
 
 
+@pytest.mark.integration
+async def test_ask_user_is_refused_right_after_an_order_was_found(
+    session: AsyncSession, make_account
+) -> None:
+    """**已经查到订单了，就别再问顾客确认是哪一单。**
+
+    ⚠️ 评测里真实发生过：agent 跑完 `get_order + search_kb` 之后去 `ask_user`
+        “请确认是哪一单”，而 `ask_user` 是**终止工具** ——
+        一道能答的题变成了一句反问。对内部坐席而言，他手里就有这张单。
+    ⚠️ **只拦一次**：确实存在“查到了单，但顾客问的是另一件事”，彻底禁止会让它只能硬答。
+    """
+    account = await make_account(label="tools")
+    await _seed_order(
+        session,
+        tenant_id=account.tenant_id,
+        user_id=account.user_id,
+        order_no="SF50001",
+        placed_at=datetime.now(UTC) - timedelta(days=5),
+        delivered_at=datetime.now(UTC) - timedelta(days=3),
+    )
+    runtime = _db_runtime(session, tenant_id=account.tenant_id, question="能退吗")
+
+    order = await runtime.dispatch(tools.GET_ORDER, {"order_no": "SF50001"})
+    assert order.payload["orders"]
+
+    blocked = await runtime.dispatch(tools.ASK_USER, {"question": "请问是哪一单？"})
+    assert blocked.ok is False
+    assert "SF50001" in str(blocked.payload.get("orders_at_hand"))
+    assert blocked.terminal is False, "被拦不能当成反问成功"
+
+    again = await runtime.dispatch(tools.ASK_USER, {"question": "请问是哪一单？"})
+    assert again.ok is True, "只拦一次：真不行就让它问"
+
+
 # ------------------------------------------------------------
 # ③ 集成：真库
 # ------------------------------------------------------------

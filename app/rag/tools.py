@@ -477,6 +477,13 @@ class ToolRuntime:
         self.retry_count = 0
         #: 交卷自查用过没有（**只许拦一次**，拦第二次就可能死循环）。
         self._self_check_used = False
+        #: “已查到订单却还反问”这件事拦过没有（**同样只拦一次**）。
+        #: ⚠️ 为什么只拦一次：确实存在“查到了单，但顾客问的是另一件事”的情况，
+        #:    彻底禁止会让它只能硬答。拦一次 = 强制它先试着用手里的订单回答；
+        #:    真不行，它第二次调 `ask_user` 照样能过。
+        self._asked_after_order_blocked = False
+        #: 顾客**明确给了单号**时查到的那张单（`recent` 不算）。
+        self._explicit_order_no: str | None = None
         #: 最近一次交卷自查的结果（`Answer.extra["citation_audit"]`）。
         self.last_audit: Any = None
 
@@ -748,6 +755,10 @@ class ToolRuntime:
         if order_no:
             order = await find_order(self._session, tenant_id=self._tenant_id, order_no=order_no)
             found = [order] if order is not None else []
+            if order is not None:
+                # ⚠️ 只有**顾客亲口报的单号**才算“你已经知道是哪一单”。
+                #    `recent=True` 拿到的几张是**猜**的，那时反问仍然合理。
+                self._explicit_order_no = order.order_no
             summary = f"查订单 {order_no}"
         elif recent:
             found = await self._recent_orders()
@@ -813,6 +824,24 @@ class ToolRuntime:
         ⚠️ 为什么要卡死"一次"：不卡的话模型会退化成"问一句、等一句"的聊天机器人，
             而顾客那边只看到一串反问。真正该做的是**问一次拿到关键信息，然后自己查完**。
         """
+        # ⚠️ 2026-10-26（评测打出来的一条行为规则）：
+        #    它已经用 `get_order` 查到了订单，却去问顾客“请确认是哪一单”。
+        #    对**内部坐席**而言这是废话：他手里就有这张单。
+        #    所以先拦一次、要求它用现有事实回答。
+        if self._explicit_order_no and not self._asked_after_order_blocked:
+            self._asked_after_order_blocked = True
+            return ToolResult(
+                name=ASK_USER,
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": "你已经查到订单了，不该再问顾客确认",
+                    "orders_at_hand": self._explicit_order_no,
+                    "hint": f"先基于已查到的订单事实给答案（必要时再 {SEARCH_KB} 查条款），然后 {FINISH}。",
+                },
+                summary="反问被拒绝（已查到订单）",
+            )
+
         if self._asked:
             return ToolResult(
                 name=ASK_USER,
