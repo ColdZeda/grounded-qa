@@ -1,0 +1,148 @@
+# agent 配对评测题集（阶段 7 · PLAN §13.4）
+#
+# 用法：uv run python evals/agent_paired.py            # 全跑（22 题 × 2 条路）
+#       uv run python evals/agent_paired.py --limit 3  # 先试水
+#
+# ⚠️ **难度必须加在 agent 的轴上**，不是"更难的检索题"：
+#    · multi_hop      需要**先查订单**才知道要检索什么（pipeline 抽不到单号就退化）
+#    · multi_intent   一句话两个诉求（pipeline 一次只能检索一条 query）
+#    · insufficient   缺关键信息，正确行为是**反问**（pipeline 只会硬答或硬拒）
+#    · single_hop     对照组 —— pipeline 本来就强，agent **不许明显退化**
+#
+# ⚠️ 每条要点都**机器可核对**（数字＋单位 / 拉丁词硬命中，中文看二元组覆盖），
+#    判定器复用 `evals/run.py::_point_hit`，不另写一套。
+#
+# ⚠️ `expect_tools` 是**人工金标准轨迹**，只用来算"工具选择准确率"，
+#    不参与"答对没答对"。轨迹对了但答案错，和轨迹错但碰巧答对，是两件事。
+
+# ---------------- 多跳（6）：不先查订单就检索不到 ---------------
+- id: A01
+  kind: multi_hop
+  question: "我上周买的那张床架想退货，还来得及吗？"
+  required_points: ["7 天"]
+  expect_tools: ["get_order", "search_kb"]
+
+- id: A02
+  kind: multi_hop
+  question: "SF10001 这单的床架要是坏了，保修多久？"
+  required_points: ["2 年"]
+  expect_tools: ["get_order", "search_kb"]
+
+- id: A03
+  kind: multi_hop
+  question: "SF10005 的退款到账要多久？"
+  required_points: ["工作日"]
+  expect_tools: ["get_order", "search_kb"]
+
+- id: A04
+  kind: multi_hop
+  question: "SF10002 的床头柜现在还能无理由退吗？"
+  required_points: ["7 天"]
+  expect_tools: ["get_order", "search_kb"]
+
+- id: A05
+  kind: multi_hop
+  question: "我刚下的单 SF10003 发到德国要多久？"
+  required_points: ["10~18 天"]
+  expect_tools: ["get_order", "search_kb"]
+
+# 版本维度：问句里的年份要变成 ref_time，才能拿到当年那版条款
+- id: A06
+  kind: multi_hop
+  question: "我 2024 年买的那把椅子，保修期是多久？"
+  required_points: ["1 年"]
+  expect_tools: ["search_kb"]
+
+# ---------------- 多诉求（5）：一句话两个问题，要一步查完 ---------------
+- id: B01
+  kind: multi_intent
+  question: "SF10001 能退吗？顺便问下这床架保修多久。"
+  required_points: ["7 天", "2 年"]
+  expect_tools: ["get_order", "search_kb"]
+
+- id: B02
+  kind: multi_intent
+  question: "退款多久能到账？退回的运费谁出？"
+  required_points: ["工作日", "运费"]
+  expect_tools: ["search_kb"]
+
+- id: B03
+  kind: multi_intent
+  question: "德国客户能退货吗？退货运费要自己付吗？"
+  required_points: ["14 天", "运费"]
+  expect_tools: ["search_kb"]
+
+- id: B04
+  kind: multi_intent
+  question: "会员积分怎么算？能抵现金吗？"
+  required_points: ["1%", "20%"]
+  expect_tools: ["search_kb"]
+
+- id: B05
+  kind: multi_intent
+  question: "上门安装要多少钱？临时改期收不收费？"
+  required_points: ["99", "50"]
+  expect_tools: ["search_kb"]
+
+# ---------------- 信息不足（5）：正确行为是反问**一次** ---------------
+- id: C01
+  kind: insufficient
+  question: "我退款怎么还没到账？"
+  expect_clarify: true
+
+- id: C02
+  kind: insufficient
+  question: "这个能退吗？"
+  expect_clarify: true
+
+- id: C03
+  kind: insufficient
+  question: "东西坏了怎么办？"
+  expect_clarify: true
+
+- id: C04
+  kind: insufficient
+  question: "运费多少？"
+  expect_clarify: true
+
+- id: C05
+  kind: insufficient
+  question: "保修还有多久？"
+  expect_clarify: true
+
+# ---------------- 单跳对照组（6）：pipeline 已经很强 ---------------
+- id: D01
+  kind: single_hop
+  question: "退货有多少天？"
+  required_points: ["7 天"]
+  expect_tools: ["search_kb"]
+
+- id: D02
+  kind: single_hop
+  question: "保修期各部件分别多久？"
+  required_points: ["2 年", "6 个月"]
+  expect_tools: ["search_kb"]
+
+- id: D03
+  kind: single_hop
+  question: "德国的退货政策是什么？"
+  required_points: ["14 天"]
+  expect_tools: ["search_kb"]
+
+- id: D04
+  kind: single_hop
+  question: "退款到账要多久？"
+  required_points: ["3~5 个工作日"]
+  expect_tools: ["search_kb"]
+
+- id: D05
+  kind: single_hop
+  question: "安装本身有质保吗？多久？"
+  required_points: ["90 天"]
+  expect_tools: ["search_kb"]
+
+- id: D06
+  kind: single_hop
+  question: "积分有效期多久？"
+  required_points: ["12 个月"]
+  expect_tools: ["search_kb"]

@@ -98,6 +98,8 @@ _SYSTEM_PROMPT = """你是电商客服助手的**调度者**。你不直接回�
 2. 「保修多久」「能不能退」这类**结论性**问题必须先 `search_kb`，再 `finish` 并引用。
 3. 顾客没说单号而问题又依赖订单（"我的退款到账没"）→ **要么** `get_order(recent=true)` 先看看，
    **要么** `ask_user` 问一次。问了就不要再问第二次。
+   ⚠️ **缺关键信息（单号 / 商品 / 地区）且工具查不到时，就用 `ask_user` 问一句，
+   不要拿一大堆通用政策去猜——那叫答非所问。
 4. 检索结果里 `content_status` 是"已被新版取代"的，只有**问的是当年那笔订单**时才能用，
    并在答案里说明"按当时条款"。
 5. 一次可以调多个工具（比如同时查退款和保修），这比串两步快。
@@ -181,8 +183,13 @@ class AgentRunner:
 
             step_timeout = min(self._settings.agent_step_timeout_seconds, remaining)
             try:
+                # ⚠️ **`usage` 必须传进去**（2026-10-26 评测打出来的 bug）：
+                #    不传的话客户端拿不到一个可填的字典，
+                #    每一步的 token 都会记成 0 —— 而那本账正是配额扣费的依据，
+                #    等于 agent 跑多少都**不扣额度**，而且看板上看不出来。
+                step_usage: dict[str, int] = {}
                 result = await self._chat.complete_with_tools(
-                    messages, TOOL_SCHEMAS, request_timeout=step_timeout
+                    messages, TOOL_SCHEMAS, usage=step_usage, request_timeout=step_timeout
                 )
             except ModelAPIError as exc:
                 logger.warning("agent 第 %s 步模型调用失败：%s", self._steps + 1, exc)
@@ -193,7 +200,7 @@ class AgentRunner:
                 return
 
             self._steps += 1
-            self._add_usage(result.usage)
+            self._add_usage(result.usage or step_usage)
             index = self._steps
             self._trace.append(
                 {

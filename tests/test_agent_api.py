@@ -50,6 +50,7 @@ class AgentFakeChat:
         messages: Sequence[dict[str, Any]],
         tools: Sequence[dict[str, Any]],
         *,
+        usage: dict[str, int] | None = None,
         request_timeout: float | None = None,
         tool_choice: str = "auto",
     ) -> ToolChatResult:
@@ -59,6 +60,10 @@ class AgentFakeChat:
         item = self._turns.pop(0)
         if isinstance(item, Exception):
             raise item
+        if usage is not None:
+            usage.clear()
+            usage.update(item.usage)
+            return item
         return item
 
     async def stream(

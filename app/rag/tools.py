@@ -471,6 +471,8 @@ class ToolRuntime:
         #: 查一次 + 允许改写重试一次（`PLAN §13.3` 的自愈）。
         #: ⚠️ 卡上限的是**代码**不是提示词 —— 否则模型会在"再查一次也许就有了"里耗光预算。
         self._max_searches = max_searches or (self._settings.agent_max_retries + 1)
+        #: **白查过几次**（空结果 / 分数不够）。自愈的分母是它，不是总检索次数。
+        self.retry_count = 0
         #: 交卷自查用过没有（**只许拦一次**，拦第二次就可能死循环）。
         self._self_check_used = False
         #: 最近一次交卷自查的结果（`Answer.extra["citation_audit"]`）。
@@ -544,7 +546,14 @@ class ToolRuntime:
 
     async def _search_kb(self, query: str, *, top_k: int | None = None) -> ToolResult:
         settings = self._settings
-        if self._max_searches and self.search_count >= self._max_searches:
+        # ⚠️ **卡的是"白查了几次"，不是"查了几次"。**
+        #    2026-10-26 评测实测：多诉求题（"退款多久到 + 运费谁出"）合理地要查
+        #    **两次不同的话**，按总次数卡会把第二次正常检索当成重试拦掉，
+        #    模型只好去 `ask_user` —— 一个该答的题被拦成了反问。
+        if (
+            self._settings.agent_max_retries >= 0
+            and self.retry_count > self._settings.agent_max_retries
+        ):
             return ToolResult(
                 name=SEARCH_KB,
                 ok=False,
@@ -591,6 +600,7 @@ class ToolRuntime:
         self.last_score_kind = score_kind
 
         if not hits:
+            self.retry_count += 1
             return ToolResult(
                 name=SEARCH_KB,
                 ok=True,
@@ -639,6 +649,7 @@ class ToolRuntime:
             "results": [item.as_payload() for item in fresh],
         }
         if confidence is not None and confidence < settings.answer_min_score and fresh:
+            self.retry_count += 1
             payload["hint"] = (
                 "这批结果的相关度偏低。可以换个说法再查一次，或者用 ask_user 请顾客补充信息。"
             )

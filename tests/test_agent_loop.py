@@ -66,6 +66,7 @@ class ScriptedChat:
         messages: Sequence[dict[str, object]],
         tools: Sequence[dict[str, object]],
         *,
+        usage: dict[str, int] | None = None,
         request_timeout: float | None = None,
         tool_choice: str = "auto",
     ) -> ToolChatResult:
@@ -77,6 +78,10 @@ class ScriptedChat:
         item = self._turns.pop(0)
         if isinstance(item, Exception):
             raise item
+        if usage is not None:
+            usage.clear()
+            usage.update(item.usage)
+            return item
         return item
 
 
