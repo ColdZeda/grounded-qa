@@ -219,7 +219,7 @@ function relative(iso: string): string {
               <input v-model="editing.title" class="form__input" type="text" maxlength="120" />
             </label>
             <label class="form__label">
-              更正后的说法（**这段会进知识库**，请写成对外口径，不要写"我原来答错了"）
+              更正后的说法（这段会进知识库，请写成对外口径，别写"我原来答错了"）
               <textarea v-model="editing.content" class="form__area" rows="8"></textarea>
             </label>
             <div class="form__ops">
