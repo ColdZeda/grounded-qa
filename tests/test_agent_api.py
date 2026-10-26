@@ -23,15 +23,18 @@ from app.api.chat import get_clients
 from app.core.config import Settings
 from app.db.models.conversation import Conversation, Message
 from app.db.models.order import Order, OrderStatus
+from app.db.models.user import User
 from app.rag.providers import ModelAPIError, ToolCall, ToolChatResult
 from app.rag.tools import FINISH, GET_ORDER, SEARCH_KB
 from tests.test_chat_api import (
+    PREFIX,
     UNIT_VECTOR,
     FakeEmbedder,
     _ask,
     _new_conversation,
     _seed_chunk,
     events_of,
+    parse_sse,
 )
 
 
@@ -74,6 +77,20 @@ class AgentFakeChat:
         yield self._text
 
 
+async def _ask_mode(
+    client: Any, token: str, conversation_id: str, question: str, *, mode: str = "agent"
+) -> tuple[int, list[tuple[str, dict[str, Any]]]]:
+    """带模式的提问。⚠️ 用户默认是「快速」，想验 agent 必须显式传。"""
+    async with client.stream(
+        "POST",
+        f"{PREFIX}/conversations/{conversation_id}/messages",
+        json={"question": question, "mode": mode},
+        headers={"Authorization": f"Bearer {token}"},
+    ) as response:
+        body = "".join([piece async for piece in response.aiter_text()])
+    return response.status_code, parse_sse(body)
+
+
 def _turn(calls: Sequence[ToolCall]) -> ToolChatResult:
     return ToolChatResult(
         content="",
@@ -93,7 +110,7 @@ def _call(name: str, arguments: dict[str, object]) -> ToolCall:
 
 
 def _agent_settings(monkeypatch: pytest.MonkeyPatch, **overrides: object) -> Settings:
-    settings = Settings().model_copy(update={"answer_mode": "agent", **overrides})
+    settings = Settings().model_copy(update={"open_agent_mode": True, **overrides})
     monkeypatch.setattr("app.api.chat.get_settings", lambda: settings)
     return settings
 
@@ -139,7 +156,7 @@ async def test_agent_mode_emits_tool_frames_and_persists_trace(
 
     token = await login(account.email, account.password)
     conversation = await _new_conversation(client, token)
-    status_code, events = await _ask(client, token, conversation["id"], "家具保修多久")
+    status_code, events = await _ask_mode(client, token, conversation["id"], "家具保修多久")
 
     assert status_code == 200
 
@@ -174,7 +191,7 @@ async def test_pipeline_mode_has_no_tool_frames_and_no_agent_meta(
 
     token = await login(account.email, account.password)
     conversation = await _new_conversation(client, token)
-    status_code, events = await _ask(client, token, conversation["id"], "家具保修多久")
+    status_code, events = await _ask_mode(client, token, conversation["id"], "家具保修多久")
 
     assert status_code == 200
     assert events_of(events, "tool") == []
@@ -207,7 +224,7 @@ async def test_agent_fallback_is_marked_and_recorded(
 
     token = await login(account.email, account.password)
     conversation = await _new_conversation(client, token)
-    _status, events = await _ask(client, token, conversation["id"], "家具保修多久")
+    _status, events = await _ask_mode(client, token, conversation["id"], "家具保修多久")
 
     streamed = "".join(item["text"] for item in events_of(events, "delta"))
     assert "（本次用了快速模式）" in streamed
@@ -258,7 +275,7 @@ async def test_scratchpad_is_saved_and_reused_next_turn(
 
     token = await login(account.email, account.password)
     conversation = await _new_conversation(client, token)
-    await _ask(client, token, conversation["id"], "SF40001 到了吗")
+    await _ask_mode(client, token, conversation["id"], "SF40001 到了吗")
 
     stored = await session.scalar(
         select(Conversation).where(Conversation.id == uuid.UUID(conversation["id"]))
@@ -267,3 +284,96 @@ async def test_scratchpad_is_saved_and_reused_next_turn(
     scratchpad = (stored.meta or {}).get("scratchpad") or {}
     assert scratchpad.get("order_no") == "SF40001"
     assert "云朵单人沙发" in (scratchpad.get("items") or [])
+
+
+# ------------------------------------------------------------
+# ④ 三层开关：总闸 / 用户偏好 / 请求显式指定
+# ------------------------------------------------------------
+
+
+async def test_switch_off_forces_fast_even_if_user_asks_agent(
+    client: Any, app: Any, make_account, login, session: AsyncSession
+) -> None:
+    """**总闸关掉时，用户传 `mode=agent` 也不生效。**
+
+    ⚠️ 这是三层开关里最容易出错的一条：如果不相与，用户会以为自己在用 agent，
+        而实际走的是 pipeline —— 那样两边的数据全都是假的。
+    """
+    account = await make_account(label="switch")
+    await _seed_chunk(
+        session, tenant_id=account.tenant_id, content="家具主体保修 2 年。", embedding=UNIT_VECTOR
+    )
+    chat = AgentFakeChat(
+        [_turn([_call(SEARCH_KB, {"query": "不该被调用"})])], text="保修 2 年[1]。"
+    )
+    app.dependency_overrides[get_clients] = lambda: (chat, FakeEmbedder(UNIT_VECTOR), None)
+
+    token = await login(account.email, account.password)
+    conversation = await _new_conversation(client, token)
+    _status, events = await _ask_mode(client, token, conversation["id"], "家具保修多久")
+
+    assert events_of(events, "tool") == [], "总闸关着就不该出现 tool 帧"
+    assert chat.tool_calls == [], "总闸关着就不该调 agent 循环"
+
+
+async def test_agent_choice_is_remembered_for_next_time(
+    client: Any,
+    app: Any,
+    make_account,
+    login,
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """用户选了 agent → 记进 `users.preferences`；下次不传 mode 也走 agent。"""
+    _agent_settings(monkeypatch)
+    account = await make_account(label="switch")
+    await _seed_chunk(
+        session, tenant_id=account.tenant_id, content="家具主体保修 2 年。", embedding=UNIT_VECTOR
+    )
+    chat = AgentFakeChat(
+        [
+            _turn([_call(SEARCH_KB, {"query": "家具保修多久"})]),
+            _turn([_call(FINISH, {"answer": "保修 2 年[1]。", "citations": [1]})]),
+            _turn([_call(SEARCH_KB, {"query": "家具保修多久"})]),
+            _turn([_call(FINISH, {"answer": "保修 2 年[1]。", "citations": [1]})]),
+        ]
+    )
+    app.dependency_overrides[get_clients] = lambda: (chat, FakeEmbedder(UNIT_VECTOR), None)
+
+    token = await login(account.email, account.password)
+    conversation = await _new_conversation(client, token)
+    await _ask_mode(client, token, conversation["id"], "家具保修多久")
+
+    await session.rollback()
+    stored = await session.get(User, account.user_id)
+    assert stored is not None
+    assert (stored.preferences or {}).get("chat_mode") == "agent", "选了就该记住"
+
+    # 第二次不传 mode：偏好已是 agent → 仍然走循环
+    _status, events = await _ask(client, token, conversation["id"], "家具保修多久")
+    assert events_of(events, "tool"), "偏好已记住，不传 mode 也该走 agent"
+
+
+async def test_default_is_fast(
+    client: Any,
+    app: Any,
+    make_account,
+    login,
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """没选过、也没传 mode → **默认快速**（总闸开着也一样）。"""
+    _agent_settings(monkeypatch)
+    account = await make_account(label="switch")
+    await _seed_chunk(
+        session, tenant_id=account.tenant_id, content="家具主体保修 2 年。", embedding=UNIT_VECTOR
+    )
+    chat = AgentFakeChat([], text="保修 2 年[1]。")
+    app.dependency_overrides[get_clients] = lambda: (chat, FakeEmbedder(UNIT_VECTOR), None)
+
+    token = await login(account.email, account.password)
+    conversation = await _new_conversation(client, token)
+    _status, events = await _ask(client, token, conversation["id"], "家具保修多久")
+
+    assert events_of(events, "tool") == []
+    assert chat.tool_calls == []

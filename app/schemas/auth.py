@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -47,6 +48,12 @@ class UserOut(BaseModel):
     #: 是不是一键演示账号（**只读管理员**：看得到全部页面，写操作一律 403）。
     #: 前端据此隐藏「上传 / 替换 / 删除 / 建成员」这些按钮，别让人点了才吃 403。
     is_demo: bool = False
+    #: 界面偏好（目前只有 `chat_mode`）。前端用它回显上次选的模式。
+    preferences: dict[str, object] | None = None
+    #: ：agent 模式可不可用（= 系统总闸 `open_agent_mode`）。
+    #: ⚠️ 前端据此把模式开关**置灰**；不给这个信号的话，
+    #:    用户会以为自己切到了 agent，而实际走的是 pipeline。
+    agent_available: bool = False
 
 
 class PasswordChange(BaseModel):
@@ -69,3 +76,13 @@ class Capabilities(BaseModel):
     """
 
     demo_login: bool
+
+
+class PreferencesIn(BaseModel):
+    """更新界面偏好。目前只有一项：下次提问默认用哪条路。
+
+    ⚠️ 只收白名单字段：`preferences` 是 JSONB，不限制的话会变成“什么都能往里塞”的黑洞，
+        而界面偏好里一旦混进权限 / 计费字段，就是一个提权漏洞。
+    """
+
+    chat_mode: Literal["fast", "agent"] | None = None

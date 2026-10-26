@@ -13,6 +13,7 @@ import enum
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.config import DEMO_EMAIL
@@ -61,6 +62,13 @@ class User(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
     role: Mapped[UserRole] = mapped_column(
         pg_enum(UserRole, "user_role"), default=UserRole.MEMBER, nullable=False
     )
+    #: 用户个人偏好（JSONB）。当前只用一个键：
+    #: `{"chat_mode": "fast" | "agent"}` —— 下次提问默认用哪条路。
+    #:
+    #: ⚠️ 为什么用 JSONB 而不是开一列：这类“界面小偏好”会一直长（主题/密度/默认渠道…），
+    #:    每长一个就要一次迁移。但**只放界面偏好**，权限与计费相关的东西绝不进这里。
+    preferences: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     # ⚠️ `lazy="raise"`：async 下"顺手访问关系属性"会触发隐式 IO，

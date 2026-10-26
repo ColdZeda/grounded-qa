@@ -166,11 +166,15 @@ class Settings(BaseSettings):
     history_messages: int = 12
 
     # ---------- agent（阶段 7，`PLAN §13`）----------
-    #: 问答走哪条路。**默认 pipeline** —— agent 是待验证的路径，
-    #: 配对评测证明它更强之前不许当默认（`PLAN §13.4` 验收标准 4）。
-    #: ⚠️ `pipeline` 时必须与加入 agent 之前**逐字节一致**：分支只能出现在
-    #:    `chat.py` 拿到 question 之后、进 `RagPipeline` 之前，别的什么都不许动。
-    answer_mode: Literal["pipeline", "agent"] = "pipeline"
+    #: **agent 模式总闸**（最高级开关）。`true` = 允许用户选择 agent；`false` = 全站强制走 pipeline。
+    #:
+    #: ⚠️ **代码默认 `False`，但部署两边的 `.env` 都置 `true`**（产品默认是开）。
+    #:    为什么代码默认不写 `True`：测试跑的就是仓库默认值，默认开会把
+    #:    **500+ 个 pipeline 用例全部改道**；而新拉代码的人不填 env 就默认跑 agent，
+    #:    也不是他想要的。“产品默认开”由 **env** 表达，代码默认保守。
+    #: ⚠️ 它只是**总闸**：实际走哪条 = `open_agent_mode AND 用户选了 agent`。
+    #:    用户偏好默认「快速」（见 `chat.py` 的 `_resolve_mode`）。
+    open_agent_mode: bool = False
     #: 最多几步。**一次模型返回算一步**（带多个 `tool_calls` 也只算一步 ——
     #: 并行调用是省步数的，不该反过来罚它）。
     agent_max_steps: int = 6

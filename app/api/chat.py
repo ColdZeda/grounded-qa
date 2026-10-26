@@ -24,7 +24,7 @@ from sqlalchemy import func, select, update
 
 from app import images as image_store
 from app.api.deps import CurrentUser, LimitsRedisDep, SessionDep
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.limits import LimitGuard, ensure
 from app.core.metrics import record_chat_outcome, record_image_analysis
 from app.db.models.conversation import Channel, Conversation, Message, MessageRole
@@ -201,6 +201,27 @@ async def _order_context(
 # ------------------------------------------------------------
 # 会话归属：与 conversations.py 同一套规则（租户 + 租户内按用户）
 # ------------------------------------------------------------
+def _preferred_mode(user: User) -> str:
+    """这个用户上次选的模式（没选过就是**快速**）。"""
+    raw = (user.preferences or {}).get("chat_mode")
+    return raw if raw in ("fast", "agent") else "fast"
+
+
+def _resolve_mode(payload: AskRequest, user: User, settings: Settings) -> str:
+    """这次提问**实际走哪条路**。
+
+    三层开关的合成规则（必须写在一个地方，否则迟早出现“到底听谁的”）：
+
+        实际模式 = open_agent_mode AND （请求显式指定 → 用户偏好 → 快速）
+
+    ⚠️ **总闸关掉时，请求里传 `agent` 也不生效** —— 而且要告诉用户（前端把开关置灰）。
+        最坏的情况是“用户以为在用 agent，实际走的 pipeline”—— 那样评测数据和用户体验全都是假的。
+    """
+    if not settings.open_agent_mode:
+        return "fast"
+    return payload.mode or _preferred_mode(user)
+
+
 def _scratchpad_of(conversation: Conversation) -> dict[str, object]:
     """取这个会话的**跨轮事实**（agent 写的）。没有就是空字典。
 
@@ -402,9 +423,15 @@ async def ask(
     #    `agent` 才把同一个 pipeline 当作**回落目标**交给 `AgentRunner`。
     #    ⚠️ 分支只能出现在这里：往前靠一步就会把 agent 的东西渗进老路径，
     #       `PLAN §13.4` 要求 pipeline 模式与加之前逐字节一致。
-    mode = get_settings().answer_mode
+    settings_now = get_settings()
+    chosen = _resolve_mode(payload, current_user, settings_now)
+    if payload.mode is not None and payload.mode != _preferred_mode(current_user):
+        # 记住"上次选了啥"，下次进来自动回显（**以请求为准，表里只记偏好**）
+        current_user.preferences = {**(current_user.preferences or {}), "chat_mode": payload.mode}
+        await session.commit()
+
     source: RagPipeline | _AgentSource = pipeline
-    if mode == "agent":
+    if chosen == "agent":
         source = _AgentSource(
             AgentRunner(
                 session=session,
@@ -414,7 +441,7 @@ async def ask(
                 fallback=lambda: pipeline,
                 embedder=embedder,
                 reranker=reranker,
-                settings=get_settings(),
+                settings=settings_now,
                 history=history,
                 user_id=current_user.id,
                 scratchpad=scratchpad,

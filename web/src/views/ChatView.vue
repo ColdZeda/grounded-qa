@@ -15,6 +15,7 @@ import ContextDrawer from '@/components/ContextDrawer.vue'
 import MessageItem from '@/components/MessageItem.vue'
 import { ApiError } from '@/api/client'
 import { streamAnswer } from '@/api/chat'
+import { currentUser, setChatMode } from '@/stores/auth'
 import { createConversation, getConversation, listMessages } from '@/api/conversations'
 import {
   IMAGE_ACCEPT,
@@ -69,6 +70,31 @@ const phase = ref<'idle' | 'retrieving' | 'generating'>('idle')
  *    不告诉他"正在查订单"，就只剩下一个转圈的等待。
  */
 const toolLabel = ref('')
+
+/**
+ * 这次提问走哪条路。**默认快速**（人已经答定的产品选择）。
+ *
+ * ⚠️ 三层开关里它只管第二层：这里选什么都不作数，还要与服务端总闸相与。
+ *    总闸关掉时，按钮直接**置灰**（不是隐藏）—— 让人知道“有这个功能，但管理员关了”。
+ */
+const chatMode = ref<'fast' | 'agent'>(
+  currentUser.value?.preferences?.chat_mode === 'agent' ? 'agent' : 'fast',
+)
+
+/** 服务端总闸是不是开着（`GET /auth/me` 里的 `agent_available`）。 */
+const agentAvailable = computed(() => currentUser.value?.agent_available === true)
+const agentHint = computed(() =>
+  agentAvailable.value
+    ? '更准（会自己查订单/改写检索），但慢 2~4 倍'
+    : '管理员已关闭 Agent 模式',
+)
+
+/** 切模式：本地立即生效（不等网络），同步记到后端供下次回显。 */
+function pickMode(mode: 'fast' | 'agent'): void {
+  if (mode === 'agent' && !agentAvailable.value) return
+  chatMode.value = mode
+  void setChatMode(mode)
+}
 const abort = ref<AbortController | null>(null)
 
 const scroller = ref<HTMLElement | null>(null)
@@ -481,6 +507,7 @@ async function send(): Promise<void> {
       },
       controller.signal,
       image?.imageId ?? null,
+      chatMode.value,
     )
   } catch (err) {
     if (controller.signal.aborted) {
@@ -600,6 +627,26 @@ onBeforeUnmount(() => {
         >
           ＋ 图片
         </button>
+        <div class="mode-switch" role="group" aria-label="提问模式">
+          <button
+            type="button"
+            :class="{ on: chatMode === 'fast' }"
+            :disabled="phase !== 'idle'"
+            title="固定流水线，快（约 4 秒）"
+            @click="pickMode('fast')"
+          >
+            快速
+          </button>
+          <button
+            type="button"
+            :class="{ on: chatMode === 'agent' }"
+            :disabled="phase !== 'idle' || !agentAvailable"
+            :title="agentHint"
+            @click="pickMode('agent')"
+          >
+            Agent
+          </button>
+        </div>
         <span v-if="phaseLabel" class="phase">{{ phaseLabel }}</span>
       </div>
 
@@ -752,6 +799,31 @@ onBeforeUnmount(() => {
   margin: 0 auto 8px;
 }
 
+.mode-switch {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+.mode-switch button {
+  border: 0;
+  background: transparent;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.mode-switch button.on {
+  background: var(--brand-weak, #eef2ff);
+  color: var(--brand, #3b5bdb);
+  font-weight: 600;
+}
+.mode-switch button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
 .phase {
   /* 阶段提示靠右，和左边的"＋ 图片"分开 —— 它们是两类信息 */
   margin-left: auto;

@@ -162,6 +162,7 @@ export async function streamAnswer(
   handlers: StreamHandlers,
   signal?: AbortSignal,
   imageId?: string | null,
+  mode?: 'fast' | 'agent',
 ): Promise<void> {
   const response = await apiFetch(`/conversations/${conversationId}/messages`, {
     method: 'POST',
@@ -174,7 +175,9 @@ export async function streamAnswer(
     },
     // ⚠️ `image_id` 显式给 `null`（而不是省略字段）：这是"我这条消息不带图"的
     //    明确表态，和"忘了传"区分开。
-    body: JSON.stringify({ question, image_id: imageId ?? null }),
+    // ⚠️ `mode` **只在用户真的选过时才传**：传 `undefined` 时后端走“用户偏好 → 默认快速”，
+    //    不会把用户的选择写脏。
+    body: JSON.stringify({ question, image_id: imageId ?? null, mode: mode ?? null }),
     signal,
   })
 

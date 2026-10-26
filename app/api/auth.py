@@ -27,7 +27,7 @@ from app.core.security import (
 )
 from app.db.models.tenant import Tenant
 from app.db.models.user import User, UserRole
-from app.schemas.auth import Capabilities, PasswordChange, TokenOut, UserOut
+from app.schemas.auth import Capabilities, PasswordChange, PreferencesIn, TokenOut, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -86,7 +86,11 @@ async def read_me(current_user: CurrentUser) -> User:
     ⚠️ 这个端点看着"没什么用"，其实是**前端鉴权的探针**：
         页面加载时调一次，401 就去登录页，200 就拿到 `role` 决定显示不显示管理入口。
     """
-    return current_user
+    # ⚠️ `agent_available` 不存在 users 表里，它是**进程级配置** —— 这里现场补上。
+    #    前端靠它决定模式开关要不要置灰（总闸关了就不该让人点）。
+    return UserOut.model_validate(current_user).model_copy(
+        update={"agent_available": get_settings().open_agent_mode}
+    )
 
 
 @router.post(
@@ -204,3 +208,31 @@ async def demo_login(session: SessionDep) -> TokenOut:
         role=user.role.value,
     )
     return TokenOut(access_token=token, expires_in=expires_in)
+
+
+@router.patch(
+    "/me/preferences",
+    response_model=UserOut,
+    summary="更新界面偏好（目前只有提问默认模式）",
+)
+async def update_preferences(
+    payload: PreferencesIn,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> User:
+    """更新**当前用户自己**的界面偏好。
+
+    ⚠️ 只能改自己的 —— 从 `current_user` 取人，**不接受 user_id 参数**：
+        多个参数就多一条越权面（参考约定 14：越权一律 404。这里干脆不给机会）。
+    ⚠️ 不改邮箱 / 角色 / 租户 —— 那些走管理端。
+    """
+    merged = dict(current_user.preferences or {})
+    if payload.chat_mode is not None:
+        merged["chat_mode"] = payload.chat_mode
+    current_user.preferences = merged
+    session.add(current_user)
+    await session.commit()
+    await session.refresh(current_user)
+    return UserOut.model_validate(current_user).model_copy(
+        update={"agent_available": get_settings().open_agent_mode}
+    )

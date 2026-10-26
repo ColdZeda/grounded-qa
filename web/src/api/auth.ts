@@ -1,7 +1,7 @@
 /** 鉴权接口（对应 `app/api/auth.py`）。 */
 
 import { apiFetch, apiJson } from './client'
-import type { TokenOut, UserOut } from '@/types/api'
+import type { ChatPreferences, TokenOut, UserOut } from '@/types/api'
 
 /**
  * 登录，换 JWT。
@@ -68,4 +68,12 @@ export function fetchCapabilities(): Promise<Capabilities> {
  */
 export function demoLogin(): Promise<TokenOut> {
   return apiJson<TokenOut>('/auth/demo-login', { method: 'POST' })
+}
+
+/** 记住用户选的提问模式（下次进来回显）。 */
+export async function updatePreferences(prefs: ChatPreferences): Promise<UserOut> {
+  return apiJson<UserOut>('/auth/me/preferences', {
+    method: 'PATCH',
+    body: JSON.stringify(prefs),
+  })
 }

@@ -31,7 +31,23 @@ export interface UserOut {
   tenant_id: string
   /** 一键演示账号（**只读管理员**）：页面都能看，写操作一律被后端 403。 */
   is_demo?: boolean
+  /** 界面偏好（目前只有提问默认模式）。 */
+  preferences?: ChatPreferences | null
+  /**
+   * agent 模式是否可用（= 服务端总闸）。
+   * ⚠️ 为 false 时必须把模式开关**置灰** —— 否则用户以为自己切到了 agent。
+   */
+  agent_available?: boolean
 }
+
+/** 用户界面偏好（`users.preferences`）。 */
+export interface ChatPreferences {
+  /** 下次提问默认用哪条路。 */
+  chat_mode?: 'fast' | 'agent'
+}
+
+/** 提问时的模式：`fast` = pipeline（快）；`agent` = 模型自己选工具（准，慢 2~4 倍）。 */
+export type ChatMode = 'fast' | 'agent'
 
 // ------------------------------------------------------------
 // 会话与消息（app/schemas/conversation.py / chat.py）

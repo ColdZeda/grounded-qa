@@ -74,3 +74,20 @@ export async function ensureUser(): Promise<void> {
     userLoaded.value = true
   }
 }
+
+/**
+ * 用户改了提问模式 → 记到后端并同步本地。
+ *
+ * ⚠️ 失败**不报错也不回滚界面**：模式本身已经随请求发出去了，
+ *    记不住只影响下次的默认值 —— 为这个弹一个错误提示只会让人困惑。
+ */
+export async function setChatMode(mode: 'fast' | 'agent'): Promise<void> {
+  if (user.value) {
+    user.value = { ...user.value, preferences: { ...(user.value.preferences ?? {}), chat_mode: mode } }
+  }
+  try {
+    user.value = await authApi.updatePreferences({ chat_mode: mode })
+  } catch {
+    // 静默失败：下次进来可能还是老值，但本次使用不受影响。
+  }
+}

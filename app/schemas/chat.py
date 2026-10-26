@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,6 +20,10 @@ class AskRequest(BaseModel):
     """
 
     question: str = Field(min_length=1, max_length=2000)
+    #: 这次提问走哪条路。**`None` = 跟用户偏好 / 默认「快速」**。
+    #: ⚠️ 这是“这次提问”的属性，不是身份属性 —— 所以**以请求为准**，用户表只记“上次选了啥”。
+    #: ⚠️ **还要与 `open_agent_mode` 相与**：总闸关了时，这里传 `agent` 也不生效（见 `chat.py::_resolve_mode`）。
+    mode: Literal["fast", "agent"] | None = None
     #: 可选：先 `POST /api/v1/images` 拿到 `image_id`，再在这里带上它提问。
     #: ⚠️ **图不塞进这个 JSON**（base64 会撑爆请求体、还会进访问日志）；
     #:    走"先上传拿 id、再引用"两步。
