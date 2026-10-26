@@ -20,9 +20,15 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
+
+# ⚠️ **测试不该取决于开发机器的 `.env`。**
+# 本地为了演示把 `OPEN_AGENT_MODE` 打开了，而百多个 pipeline 用例默认要走 pipeline。
+# 环境变量优先级**高于** `.env`，所以这里强制写死；要测 agent 的用例自己 monkeypatch。
+os.environ["OPEN_AGENT_MODE"] = "false"
 
 import pytest
 from fastapi import FastAPI

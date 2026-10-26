@@ -841,6 +841,13 @@ class ToolRuntime:
 
         ⚠️ `hits` 的顺序必须与 `[n]` 编号一致 —— `ref` 天然就是
             1..N 连续编号（`_search_kb` 里同一次追加时分配），所以直接按序取。
+
+        ⚠️ **订单事实也是证据，但它不占 `[n]` 编号**。
+            2026-10-26 本地端到端实测打出来：答案写"签收日 2026-10-17，
+            目前签收 8 天[1][2]"，两个数字都来自订单快照，却被判成“串号”——
+            因为核对器只看引用的 chunk。后果不只是界面上多一条噪音：
+            交卷自查会**因为这个误报把正确答案退回去重写**。
+            所以把它作为**不占编号的附加证据**传进去（`extra_evidence`）。
         """
         hits = [
             RetrievedChunk(
@@ -852,7 +859,29 @@ class ToolRuntime:
             )
             for item in self._evidence
         ]
-        return citation_module.audit(answer, hits)
+        facts = ""
+        if self._orders:
+            lines: list[str] = []
+            for hit in self._orders:
+                item = hit.snapshot
+                names = " ".join(str(entry.get("name", "")) for entry in (item.get("items") or []))
+                lines.append(
+                    " ".join(
+                        str(value)
+                        for value in (
+                            item.get("order_no"),
+                            item.get("status"),
+                            item.get("placed_at"),
+                            item.get("delivered_at"),
+                            item.get("days_since_delivery"),
+                            item.get("amount"),
+                            names,
+                        )
+                        if value not in (None, "")
+                    )
+                )
+            facts = " ".join(lines)
+        return citation_module.audit(answer, hits, extra_evidence=facts)
 
     def _finish(self, answer: str, citations: list[int]) -> ToolResult:
         """交卷。**引用必须能对上** —— 对不上就退回去让它重来（循环只给一次机会）。

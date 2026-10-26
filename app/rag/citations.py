@@ -133,12 +133,22 @@ class CitationAudit:
         }
 
 
-def audit(answer_text: str, hits: Sequence[RetrievedChunk]) -> CitationAudit:
+def audit(
+    answer_text: str,
+    hits: Sequence[RetrievedChunk],
+    *,
+    extra_evidence: str = "",
+) -> CitationAudit:
     """核对回答里每个 `[n]`：它后面那句话里的数字，真的在第 n 段里吗？
 
     Args:
         answer_text: 模型的完整回答（**流式拼完之后**）。
         hits: 用来拼【参考资料】的那批 chunk，**顺序必须与 `[n]` 编号一致**。
+        extra_evidence: **不占编号**的附加证据（agent 留给订单事实用）。
+
+            ⚠️ 为什么要有这个参数：订单事实（签收日 2026-10-17、签收 8 天）
+            确实是证据，但它**不是知识库块、也不该占 `[n]`**。
+            并进 `hits` 会把编号整个错位；不并又会把正确答案判成串号。
 
     Returns:
         计数 ＋ 明细。`hits` 为空（闭卷 / 拒答）时返回全零。
@@ -163,6 +173,9 @@ def audit(answer_text: str, hits: Sequence[RetrievedChunk]) -> CitationAudit:
             continue
         checked += 1
         pool = "".join(contents[m - 1] for m in markers if 1 <= m <= len(contents))
+        if extra_evidence:
+            # 不占编号（不可被 `[n]` 引用），但**参与核对**。
+            pool += _norm(extra_evidence)
         missing = tuple(atom for atom in atoms if atom not in pool)
         if missing:
             issues.append(CitationIssue(markers=markers, atoms=missing, sentence=segment.strip()))
