@@ -6,16 +6,24 @@
 同一批知识库）之后，**差值**才是 agent 的净效果；否则"agent 分低"可能只是
 "这次跑的时候检索恰好差一点"。
 
-## 四条验收标准（写死，防止无尽调优）
+## 验收标准（写死，防止无尽调优 · 2026-10-26 按 W19 结论改过一次）
 
-1. 多跳 / 澄清组：要点命中 **≥ pipeline +20 pt**
-2. 单跳对照组：不劣于 **−1 题**
-3. 平均步数 **≤ 2.5**，p50 / p95 延迟与 token 有数
-4. `ANSWER_MODE=pipeline` 与今天逐字节一致（由单测守着，不在这里跑）
+1. **主指标 · 澄清组**（`insufficient`）：反问命中 **≥ pipeline +20 pt**
+   —— pipeline 结构上做不到反问，这一条量的是 agent 独有的能力。
+2. **护栏 · 多跳 / 多诉求组**：不劣于 **−1 题**（各 6 / 5 题，题干都是要点命中）
+3. **单跳对照组**：不劣于 **−1 题**
+4. 平均步数 **≤ 2.5**，p50 / p95 延迟与 token 有数
+5. 关掉开关（`open_agent_mode=false` 或用户选「快速」）时行为与加入 agent 之前逐字节一致
+   → 由单测守着，不在这里跑
+
+⚠️ **为什么①从"多跳/澄清组"改成"澄清组"**：原先把两组混成一个指标，而这两组要求
+**相反的行为**（多跳要推断、信息不足要反问），agent 只能选一边 —— 混着算等于用一半题
+去惩罚另一半。取舍与三轮实测数字 → `CANDIDATES.md` W19 / `docs/architecture.md` §9.51。
 
 ## 怎么跑
 
     uv run python evals/agent_paired.py                 # 全跑（22 题 × 2 条路，要花 token）
+    uv run python evals/agent_paired.py --repeat 3      # ⚠️ **报数就该用这个**：单跑一次不可信
     uv run python evals/agent_paired.py --limit 3       # 先试水
     uv run python evals/agent_paired.py --kind insufficient
     uv run python evals/agent_paired.py --arm agent     # 只跑一路（省一半钱）
@@ -84,6 +92,8 @@ class Row:
     pipeline_hits: list[bool] = field(default_factory=list)
     agent_hits: list[bool] = field(default_factory=list)
     tools_ok: bool | None = None
+    #: 这道题**至少**该检索几次（多跳组的"多步行为"证据，不参与判分）。
+    min_search: int = 0
 
     @property
     def hit_pipeline(self) -> bool:
@@ -232,7 +242,12 @@ async def _run(args: argparse.Namespace) -> int:
         async with factory() as session:
             tenant_id = await _tenant_id(session, args.tenant)
             for item in questions:
-                row = Row(id=item["id"], kind=item["kind"], question=item["question"])
+                row = Row(
+                    id=item["id"],
+                    kind=item["kind"],
+                    question=item["question"],
+                    min_search=int(item.get("min_search") or 0),
+                )
                 for round_index in range(max(1, args.repeat)):
                     if args.arm in ("both", "pipeline"):
                         result = await _run_pipeline(
@@ -271,7 +286,7 @@ async def _run(args: argparse.Namespace) -> int:
             "llm_model": settings.llm_model,
             "rerank_model": settings.rerank_model,
             "embedding_model": settings.embedding_model,
-            "answer_mode_default": settings.answer_mode,
+            "answer_mode_default": settings.open_agent_mode,
             "rows": [
                 {
                     "id": row.id,
@@ -284,6 +299,8 @@ async def _run(args: argparse.Namespace) -> int:
                     "pipeline_hits": row.pipeline_hits,
                     "agent_hits": row.agent_hits,
                     "tools_ok": row.tools_ok,
+                    "min_search": row.min_search,
+                    "search_count": row.agent.tools.count("search_kb"),
                     "pipeline": _as_dict(row.pipeline),
                     "agent": _as_dict(row.agent),
                 }
@@ -337,32 +354,54 @@ def _report(rows: list[Row], *, arm: str) -> None:
         print("\n" + "=" * 78)
         print("验收标准（PLAN §13.4）")
         print("=" * 78)
-        hard = [row for row in rows if row.kind in ("multi_hop", "multi_intent", "insufficient")]
-        single = [row for row in rows if row.kind == "single_hop"]
-        if hard:
-            hp = sum(row.hit_pipeline for row in hard)
-            ha = sum(row.hit_agent for row in hard)
-            delta = (ha - hp) / len(hard) * 100
+        # ① 主指标：澄清组（pipeline 结构上做不到"反问"）
+        clarify = [row for row in rows if row.kind == "insufficient"]
+        if clarify:
+            hp = sum(row.hit_pipeline for row in clarify)
+            ha = sum(row.hit_agent for row in clarify)
+            delta = (ha - hp) / len(clarify) * 100
             verdict = "✅ 达标" if delta >= 20 else "❌ 未达标"
             print(
-                f"① 多跳/澄清组 ≥ +20 pt：Δ {delta:+.1f} pt（{ha}/{len(hard)} vs {hp}/{len(hard)}）{verdict}"
+                f"① 主指标 · 澄清组 ≥ +20 pt：Δ {delta:+.1f} pt"
+                f"（agent {ha}/{len(clarify)} vs pipeline {hp}/{len(clarify)}）{verdict}"
             )
+        # ② 护栏：多跳 / 多诉求组（要点命中，答错就是答错，不许比 pipeline 更差）
+        depth = [row for row in rows if row.kind in ("multi_hop", "multi_intent")]
+        if depth:
+            hp = sum(row.hit_pipeline for row in depth)
+            ha = sum(row.hit_agent for row in depth)
+            verdict = "✅ 达标" if ha >= hp - 1 else "❌ 退化过多"
+            print(
+                f"② 护栏 · 多跳/多诉求不劣于 −1 题：agent {ha}/{len(depth)} vs pipeline "
+                f"{hp}/{len(depth)}（{ha - hp:+d} 题）{verdict}"
+            )
+        # ③ 单跳对照组
+        single = [row for row in rows if row.kind == "single_hop"]
         if single:
             hp = sum(row.hit_pipeline for row in single)
             ha = sum(row.hit_agent for row in single)
             verdict = "✅ 达标" if ha >= hp - 1 else "❌ 退化过多"
             print(
-                f"② 单跳对照组不劣于 −1 题：agent {ha}/{len(single)} vs pipeline {hp}/{len(single)} {verdict}"
+                f"③ 单跳对照组不劣于 −1 题：agent {ha}/{len(single)} vs pipeline {hp}/{len(single)} {verdict}"
             )
 
         steps = [row.agent.steps for row in rows if row.agent.steps]
         if steps:
             avg = statistics.fmean(steps)
             verdict = "✅ 达标" if avg <= 2.5 else "❌ 步数偏多"
-            print(f"③ 平均步数 ≤ 2.5：{avg:.2f} {verdict}")
+            print(f"④ 平均步数 ≤ 2.5：{avg:.2f} {verdict}")
         retries = [row.agent.retries for row in rows if row.agent.steps]
         if retries:
             print(f"   自愈重试率：{sum(1 for item in retries if item) / len(retries) * 100:.1f}%")
+
+        # 多步检索的证据：多跳题要求它真的检索了 ≥2 次（不是一步蒙对）
+        multi = [item for item in rows if item.kind == "multi_hop"]
+        if multi:
+            deep = sum(
+                1 for row in multi if row.agent.tools.count("search_kb") >= (row.min_search or 2)
+            )
+            counts = ",".join(f"{row.id}:{row.agent.tools.count('search_kb')}" for row in multi)
+            print(f"   多跳组真的检索 ≥2 次的：{deep}/{len(multi)}（{counts}）")
 
         lat_p = [row.pipeline.latency_ms for row in rows if row.pipeline.latency_ms]
         lat_a = [row.agent.latency_ms for row in rows if row.agent.latency_ms]
