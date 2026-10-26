@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.config import Settings, get_settings
 from app.db.models.knowledge import Chunk, Document
@@ -340,6 +340,27 @@ def _print_report(reports: Sequence[AblationReport], *, top_k: int, total: int) 
         print()
 
 
+async def _corpus_snapshot(
+    session: Any, tenant_id: uuid.UUID, *, kb: str, paths: DocumentPaths
+) -> dict[str, Any]:
+    """口径卡里的「语料版本」：**篇数 ＋ 块数**（`evals/README.md` §2）。
+
+    ⚠️ 光记篇数不够 —— 切分参数一调块数就变，而块数才是改动的直接载体。
+    ⚠️ 三处（检索 / 生成拒答 / 读图）都要记：只记一处的话，
+        "这份结果是加料前还是加料后"仍然要靠文件名日期去猜（D12 那个病）。
+    """
+    chunk_total = await session.scalar(
+        select(func.count())
+        .select_from(Chunk)
+        .join(Document, Document.id == Chunk.document_id)
+        .where(
+            Document.tenant_id == tenant_id,
+            Document.filename.startswith(f"{kb}/"),
+        )
+    )
+    return {"kb": kb, "documents": paths.document_count, "chunks": chunk_total}
+
+
 def _dump(
     reports: Sequence[AblationReport],
     *,
@@ -351,6 +372,7 @@ def _dump(
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
     out = RESULTS_DIR / f"retrieval-{stamp}.json"
+    out = _unique_path(out)
     payload = {
         "kind": "retrieval",
         "generated_at": stamp,
@@ -425,6 +447,7 @@ async def _run_retrieval(args: argparse.Namespace) -> int:
         async with factory() as session:
             tenant_id = await _resolve_tenant_id(session, settings.default_tenant_id)
             paths = await _document_paths(session, tenant_id, kb=args.kb)
+            corpus = await _corpus_snapshot(session, tenant_id, kb=args.kb, paths=paths)
             # ⚠️ 评测直接建 retriever，**不走 pipeline** —— 所以 scope 必须在这里显式传，
             #    否则 `--scope` 只改了配置、这里仍然用构造函数的默认值（静默失效，2026-10-22 踩中）。
             #    `ref_time` 同理：`--ref-time` 不往这里传 = 这个开关等于没加。
@@ -462,7 +485,7 @@ async def _run_retrieval(args: argparse.Namespace) -> int:
         reports,
         top_k=args.top_k,
         settings=settings,
-        meta={"kb": args.kb, "questions": len(questions), "ablations": list(names)},
+        meta={"kb": args.kb, "questions": len(questions), "ablations": list(names), **corpus},
         ref_time=args.ref_time,
     )
     print(f"全文门槛 fulltext_min_similarity = {ft_min}")
@@ -819,6 +842,8 @@ async def _run_answer_layer(
         async with factory() as session:
             tenant_id = await _resolve_tenant_id(session, settings.default_tenant_id)
             paths = await _document_paths(session, tenant_id, kb=args.kb)
+            #: 口径卡里的「语料版本」（`evals/README.md` §2）。
+            args.corpus = await _corpus_snapshot(session, tenant_id, kb=args.kb, paths=paths)
             print(f"题库 {len(items)} 题 · 层 {layer} · 知识库 {args.kb}")
             pool: list[RetrievedChunk] = []
             if mode == "random":
@@ -944,6 +969,21 @@ async def _run_answer_layer(
     return results
 
 
+def _unique_path(path: Path) -> Path:
+    """同名结果文件已存在时加后缀，**绝不覆盖**。
+
+    ⚠️ 结果文件是"当时那个库 + 那支尺子"的唯一证据。覆盖 = 悄悄销毁一条对照，
+       而且**不报错** —— 正是本项目反复栽的那类静默失效。
+    """
+    if not path.exists():
+        return path
+    for index in range(2, 100):
+        candidate = path.with_name(f"{path.stem}-{index}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise SystemExit(f"结果文件重名太多次，放弃：{path}")
+
+
 def _report_answer_layer(
     results: Sequence[AnswerResult],
     *,
@@ -1003,6 +1043,9 @@ def _report_answer_layer(
                 print(f"  ⚠️ {r.id} 本该拒答却调了生成模型 {r.llm_calls} 次")
 
     out = RESULTS_DIR / f"{layer}-{mode}-{started.strftime('%Y%m%dT%H%M%SZ')}.json"
+    # ⚠️ 文件名取**开始时刻**，两路同时跑很容易撞在同一秒 ⟹ 后完成的**静默覆盖**前者。
+    #    2026-10-27 真踩到过（同一层跑 all/current，只剩一份文件）。
+    out = _unique_path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
         json.dumps(
@@ -1013,6 +1056,21 @@ def _report_answer_layer(
                 "kb": args.kb,
                 "questions": args.questions or f"{layer}.yaml",
                 "llm_model": settings.llm_model,
+                # 口径卡（`evals/README.md` §2，D12）。⚠️ 这一段是**补上的**：
+                #   在此之前 generation / refusal 的结果**一个字都没记尺子**，
+                #   于是"开关卷差几分"这种事事后无法归因。
+                "config": {
+                    "retrieval_scope": settings.retrieval_scope,
+                    "ref_time": args.ref_time.isoformat() if args.ref_time else None,
+                    "retrieve_top_k": settings.retrieve_top_k,
+                    "rerank_enabled": settings.rerank_enabled,
+                    "rerank_top_n": settings.rerank_top_n,
+                    "answer_min_score": settings.answer_min_score,
+                    "answer_min_cosine": settings.answer_min_cosine,
+                    "embedding_model": settings.embedding_model,
+                    "rerank_model": settings.rerank_model,
+                    "corpus": getattr(args, "corpus", None),
+                },
                 "results": [
                     {
                         "id": r.id,
@@ -1425,6 +1483,7 @@ async def _run_image_answers(
     async with factory() as session:
         tenant_id = await _resolve_tenant_id(session, settings.default_tenant_id)
         paths = await _document_paths(session, tenant_id, kb=args.kb)
+        args.corpus = await _corpus_snapshot(session, tenant_id, kb=args.kb, paths=paths)
         for row in cases:
             use_image = mode == "image"
             pipeline = RagPipeline(
@@ -1477,11 +1536,21 @@ async def _run_image_answers(
             )
 
     stamp = started.strftime("%Y%m%dT%H%M%SZ")
-    out = RESULTS_DIR / f"image-{mode}-{stamp}.json"
+    out = _unique_path(RESULTS_DIR / f"image-{mode}-{stamp}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
         json.dumps(
-            {"kind": "image-answer", "mode": mode, "rows": results}, ensure_ascii=False, indent=2
+            {
+                "kind": "image-answer",
+                "mode": mode,
+                "config": {
+                    "retrieval_scope": get_settings().retrieval_scope,
+                    "corpus": getattr(args, "corpus", None),
+                },
+                "rows": results,
+            },
+            ensure_ascii=False,
+            indent=2,
         )
         + "\n",
         encoding="utf-8",

@@ -48,6 +48,9 @@ from app.kb.ingest import classify_content_status
         ("senyu/40-服务/40-保修与维修.md", ContentStatus.ACTIVE),
         # 知识库 A（公开文档）落在 active
         ("fastapi/tutorial/path-params.md", ContentStatus.ACTIVE),
+        # 50 / 60：2026-10-27 加的常识篇目（W22）—— 与 00~40 同性质
+        ("senyu/50-交易与交付/01-发票与开票.md", ContentStatus.ACTIVE),
+        ("senyu/60-产品与养护/05-产品溯源与防伪.md", ContentStatus.ACTIVE),
         # Windows 风格分隔符也要认（有人会这么传）
         ("senyu\\90-干扰-历史版本\\01-2023版退货政策（已废止）.md", ContentStatus.SUPERSEDED),
     ],
@@ -72,6 +75,26 @@ def test_legacy_policy_has_effective_range() -> None:
 
 def test_current_policy_starts_2026() -> None:
     status, start, end = classify_content_status("senyu/40-服务/40-保修与维修.md")
+    assert status is ContentStatus.ACTIVE
+    assert start == date(2026, 1, 1)
+    assert end is None
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "senyu/50-交易与交付/01-发票与开票.md",
+        "senyu/60-产品与养护/05-产品溯源与防伪.md",
+    ],
+)
+def test_w22_common_sense_docs_are_active_since_2026(filename: str) -> None:
+    """50 / 60（2026-10-27 加的常识篇目）与 00~40 同性质：对外政策页，从新政策起点算。
+
+    ⚠️ 漏加前缀的后果是**静默**的：这几份会落到 `(None, None)` 区间，
+       在 `--scope current` 下仍然召回得到，但"生效区间"这条判据对它们失效 ——
+       不报错、数字也不会立刻变，等哪天有人问"2024 年这版发票规则"才会发现。
+    """
+    status, start, end = classify_content_status(filename)
     assert status is ContentStatus.ACTIVE
     assert start == date(2026, 1, 1)
     assert end is None

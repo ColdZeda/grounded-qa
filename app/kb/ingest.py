@@ -145,7 +145,12 @@ def classify_content_status(filename: str) -> tuple[ContentStatus, date | None, 
     if status_ is ContentStatus.SUPERSEDED:
         # 90 目录下没被例外放行的（理论上只剩变更公告），有效期从新政策起点算
         return status_, _CURRENT_FROM, None
-    if any(f"/{prefix}" in f"/{normalized}" for prefix in ("00-", "10-", "20-", "30-", "40-")):
+    if any(
+        f"/{prefix}" in f"/{normalized}"
+        # 50 / 60 是 2026-10-27 加的「常识篇目」目录（发票、支付、包装、养护…）。
+        # 它们与 00~40 一样是**对外政策页**，所以同样从新政策起点算。
+        for prefix in ("00-", "10-", "20-", "30-", "40-", "50-", "60-")
+    ):
         return status_, _CURRENT_FROM, None
     return status_, None, None
 
@@ -169,11 +174,18 @@ async def prepare_document(
     filename: str,
     data: bytes,
     replace: bool = False,
+    content_status: ContentStatus | None = None,
 ) -> Prepared:
     """判重 + 建行（`status=PENDING`）。**不切分、不嵌入。**
 
     ⚠️ `tenant_id` 是**必传的位置性参数**，调用方只能从服务端解析出的身份里拿
         （路由里是 `current_admin.tenant_id`）—— 绝不能来自请求体。
+
+    ⚠️ `content_status` 是**覆盖**（默认走 `classify_content_status` 按目录映射）。
+        「采纳入库」的草稿用它钉成 `DRAFT`（D11）：**在那一行被建出来的瞬间**就不可召回。
+        不这么做的话，`prepare_document` 与后续插入 `content_status=draft` 之间存在一个
+        **几百毫秒的窗口** —— 那一刻这份未审阅的草稿是 `active` 的，能被真实用户搜到。
+        这种窗口不会报错，只会偶尔答出一句"知识库里还没人能确认的话"。
 
     ⚠️ **失败过的文档一律可以被顶掉**（不管按名字还是按 hash 撞上）：
         否则用户改完文件重传、或者纯粹想重试，都会被一句"已入库过"挡住 ——
@@ -210,7 +222,9 @@ async def prepare_document(
 
     # ⚠️ 内容有效性**在建行时就定下来**（按路径映射），不留到检索时猜 ——
     #    见 `classify_content_status`：判错了不会报错，只会让不该引的文档混进候选集。
-    content_status, effective_from, effective_to = classify_content_status(filename)
+    classified, effective_from, effective_to = classify_content_status(filename)
+    if content_status is not None:
+        classified = content_status
     document = Document(
         tenant_id=tenant_id,
         filename=filename,
@@ -220,7 +234,7 @@ async def prepare_document(
         # ⚠️ 先落 PENDING 并**提交**：这样"文档在库里"这件事在算向量之前就成立，
         #    失败时还能把它标成 FAILED 被列表看见（状态机见 knowledge.py 的 docstring）。
         status=DocumentStatus.PENDING,
-        content_status=content_status,
+        content_status=classified,
         effective_from=effective_from,
         effective_to=effective_to,
     )
@@ -371,10 +385,19 @@ async def ingest_bytes(
     settings: Settings,
     replace: bool = False,
     on_progress: ProgressFn | None = None,
+    content_status: ContentStatus | None = None,
 ) -> IngestResult:
-    """判重 → 切分 → 嵌入 → 写库。CLI 每个文件调一次。"""
+    """判重 → 切分 → 嵌入 → 写库。CLI 每个文件调一次。
+
+    `content_status` 见 `prepare_document` 的同名参数（草稿用它钉成 `DRAFT`）。
+    """
     prepared = await prepare_document(
-        session, tenant_id=tenant_id, filename=filename, data=data, replace=replace
+        session,
+        tenant_id=tenant_id,
+        filename=filename,
+        data=data,
+        replace=replace,
+        content_status=content_status,
     )
     if not prepared.created:
         return IngestResult(filename, "skip", note=prepared.note)

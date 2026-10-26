@@ -54,10 +54,18 @@ from app.db.models.tenant import Tenant
 from app.db.session import dispose_engine, get_session_factory
 from app.rag.agent import AgentRunner
 from app.rag.pipeline import RagPipeline, build_clients
-from evals.run import _norm, _point_hit, _strip_citation_marks
+from evals.run import (
+    _corpus_snapshot,
+    _document_paths,
+    _norm,
+    _point_hit,
+    _strip_citation_marks,
+)
 
 QUESTION_FILE = Path(__file__).with_name("questions") / "agent.yaml"
 RESULT_DIR = Path(__file__).with_name("results")
+#: 题集对应的语料库（`agent.yaml` 全部落在知识库 B 上）。
+CORPUS_KB = "senyu"
 
 KINDS = ("multi_hop", "multi_intent", "insufficient", "single_hop")
 
@@ -275,10 +283,16 @@ async def _run(args: argparse.Namespace) -> int:
     clients = build_clients(settings)
     factory = get_session_factory()
     rows: list[Row] = []
+    #: 口径卡（`evals/README.md` §2）：**语料版本**。
+    #: ⚠️ 2026-10-27 补上 —— 在此之前这份 dump 记了三个模型名，
+    #:    却**一个字都没记"哪个库"**，于是"agent 分掉了"永远归因不出来（D12）。
+    corpus: dict[str, Any] = {}
 
     try:
         async with factory() as session:
             tenant_id = await _tenant_id(session, args.tenant)
+            paths = await _document_paths(session, tenant_id, kb=CORPUS_KB)
+            corpus = await _corpus_snapshot(session, tenant_id, kb=CORPUS_KB, paths=paths)
             for item in questions:
                 row = Row(
                     id=item["id"],
@@ -325,6 +339,9 @@ async def _run(args: argparse.Namespace) -> int:
             "rerank_model": settings.rerank_model,
             "embedding_model": settings.embedding_model,
             "answer_mode_default": settings.open_agent_mode,
+            "retrieval_scope": settings.retrieval_scope,
+            "corpus": corpus,
+            "repeat": max(1, args.repeat),
             "rows": [
                 {
                     "id": row.id,
