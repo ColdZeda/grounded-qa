@@ -179,7 +179,12 @@ async def test_agent_mode_emits_tool_frames_and_persists_trace(
 async def test_pipeline_mode_has_no_tool_frames_and_no_agent_meta(
     client: Any, app: Any, make_account, login, session: AsyncSession
 ) -> None:
-    """**默认 pipeline 一个字都不变**：没有 `tool` 帧、消息上没有 agent 轨迹。"""
+    """**默认 pipeline 的 agent 行为一个字都不变**：没有 `tool` 帧、消息上没有 agent 轨迹。
+
+    ⚠️ 2026-10-27 起 `meta` **不再是 `None`**：`citation_audit` 两种模式都要落库
+        （以前它只随 SSE 帧发一次，刷新即消失、事后统计为 0 —— `architecture §9.53 ④`）。
+        所以这里改成断言"**没有 agent 痕迹**、但有核对结果"。
+    """
     account = await make_account(label="agentapi")
     await _seed_chunk(
         session, tenant_id=account.tenant_id, content="家具主体保修 2 年。", embedding=UNIT_VECTOR
@@ -197,7 +202,10 @@ async def test_pipeline_mode_has_no_tool_frames_and_no_agent_meta(
     assert events_of(events, "tool") == []
     assert chat.tool_calls == [], "pipeline 模式绝不许走 agent 的循环"
     message = await _last_assistant_message(session, conversation["id"])
-    assert message.meta is None
+    assert "agent_trace" not in (message.meta or {}), "pipeline 模式不该有 agent 轨迹"
+    assert "agent_steps" not in (message.meta or {})
+    # 核对结果要落库（否则"刷新就没了、事后统计为 0"）
+    assert (message.meta or {}).get("citation_audit") is not None
 
 
 # ------------------------------------------------------------

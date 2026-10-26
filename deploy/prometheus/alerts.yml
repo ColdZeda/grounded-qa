@@ -40,3 +40,20 @@ groups:
           metric: gq_limit_failopen_total
         annotations:
           summary: 限流 / 配额因 Redis 不可用而放行（计量不再可信）
+
+      # ---------- ③ 检索降级（2026-10-27 加） ----------
+      # 判据：**只要发生过一次** embedding / rerank 调不通就响。
+      # ⚠️ 为什么门槛这么低（> 0 而不是某个比例）：降级是**静默**的 ——
+      #    2026-10-26 阿里云百炼预算耗尽那次，检索悄悄退化成纯全文
+      #    （hit@5 从 0.98 掉到 0.57），**拒答闸门也跟着失效**，
+      #    而接口一切正常、日志当时甚至没打。看见一次就该有人去看。
+      # ⚠️ 两种 kind 分开报：向量路挂了通常意味着 embedding 预算/额度没了，
+      #    精排挂了只影响排序 —— 处理方式完全不同。
+      - alert: RetrievalDegraded
+        expr: increase(gq_retrieval_degraded_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          metric: gq_retrieval_degraded_total
+        annotations:
+          summary: 检索降级（embedding 或 rerank 调不通，回答质量在静默变差）

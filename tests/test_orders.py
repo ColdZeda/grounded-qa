@@ -235,6 +235,50 @@ def test_days_since_delivery_counts_calendar_days() -> None:
     assert days_since_delivery(order, now=_now()) == 45
 
 
+#: 生产实算的那一对时刻（走查-第二次 2026-10-26 16:03Z 抓到的）。
+#: ⚠️ 这两个时间**时分秒不同**，正是它把"24 小时整日"和"自然日"区分开的。
+_DELIVERED = datetime(2026, 10, 17, 17, 5, 14, tzinfo=UTC)
+
+
+def _delivered_order() -> Order:
+    order = _order()
+    order.delivered_at = _DELIVERED
+    return order
+
+
+def test_days_since_delivery_uses_calendar_days_not_24_hour_windows() -> None:
+    """⭐ **生产实算那一例**：10-17 17:05 签收，10-26 16:03 提问。
+
+    24 小时整日 = 8（**错**），自然日 = 9（**对**）。
+    边界日上这 1 天会直接把"还能退"答成"不能退"。
+    """
+    now = datetime(2026, 10, 26, 16, 3, 0, tzinfo=UTC)
+
+    assert days_since_delivery(_delivered_order(), now=now) == 9
+
+
+def test_days_since_delivery_boundaries_around_the_seven_day_window() -> None:
+    """`7 个自然日` 的窗口边界：签收当天 = 第 0 天，第 7 天还能退，第 8 天不能。
+
+    ⚠️ 这里刻意让**时刻**偏早（09:00），若按 24 小时算会少一天 —— 正是要守住的那条缝。
+    """
+    order = _delivered_order()
+
+    same_day = datetime(2026, 10, 17, 23, 30, tzinfo=UTC)
+    day7 = datetime(2026, 10, 24, 9, 0, tzinfo=UTC)
+    day8 = datetime(2026, 10, 25, 9, 0, tzinfo=UTC)
+
+    assert days_since_delivery(order, now=same_day) == 0
+    assert days_since_delivery(order, now=day7) == 7
+    assert days_since_delivery(order, now=day8) == 8
+
+
+def test_days_since_delivery_never_goes_negative() -> None:
+    """时钟漂移 / 数据写错导致"未来签收"时给 0，不要给负数（提示词里会很难看）。"""
+    now = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+    assert days_since_delivery(_delivered_order(), now=now) == 0
+
+
 def test_days_since_delivery_is_none_when_not_delivered() -> None:
     order = _order(status=OrderStatus.SHIPPED)
     order.delivered_at = None

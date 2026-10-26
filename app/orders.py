@@ -120,10 +120,26 @@ def days_since_delivery(order: Order, *, now: Any) -> int | None:
     ⚠️ 为什么把天数算好再给模型：让模型自己减日期很容易算错一天，
         而"30 天"是有政策边界的硬阈值 —— 差一天结论就反了。
         ⚠️ 但也**只给天数**：该不该退是知识库条款的事，不在这里下结论。
+
+    ⚠️ **必须按自然日算（`date - date`），不能按 24 小时整日**。
+        2026-10-27 真机实测：`SF10001` 在 `10-17 17:05Z` 签收、`10-26 16:03Z` 提问，
+        `(now - delivered_at).days` 给 **8**，而自然日是 **9**。
+        后果不是"少一天"这么轻 —— 政策写的是"7 **个自然日**内"，
+        在第 7 天晚上问"还来得及吗"，24 小时算法会把**还能退**答成**不能退**，
+        **结论直接反了**。日历上过了几天就是几天，跟时分秒无关。
     """
     if order.delivered_at is None:
         return None
-    delta = now - order.delivered_at
+    delivered = order.delivered_at
+    # ⚠️ 两个时刻**可能不在同一个时区**：`delivered_at` 从库里出来是 UTC，
+    #    而调用方的 `now` 可能是本地时区（`tools.py` 用的是 `datetime.now().astimezone()`）。
+    #    直接各自 `.date()` 相减会在跨日的那几小时里差一天 —— 又是"差一天结论就反"。
+    #    所以先统一到 `now` 的时区，再比日历。
+    #    📌 **日历基准 = `now` 的时区**（生产容器是 UTC）。要做到"按北京时间算"
+    #       得给容器设 `TZ`，那会连带影响日志时间戳 —— 记在 `architecture §9.53 ②`，本轮不做。
+    if now.tzinfo is not None and delivered.tzinfo is not None:
+        delivered = delivered.astimezone(now.tzinfo)
+    delta = now.date() - delivered.date()
     return max(delta.days, 0)
 
 

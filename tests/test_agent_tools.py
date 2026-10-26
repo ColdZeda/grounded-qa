@@ -415,13 +415,18 @@ async def test_get_order_returns_fact_card_without_pii(session: AsyncSession, ma
     """订单事实卡：状态 / 时间 / 距今几天 / 商品 / 金额 —— **没有任何手机号字段**。"""
     account = await make_account(label="tools")
     now = datetime.now(UTC)
+    # ToolRuntime.now 用的是 datetime.now().astimezone()（本地时区），
+    # 所以两个时刻必须落在同一个日历上，否则跨日那几小时会差一天。
+    # 做法：本地时区的「当天正午」往前推 10 天 —— 与运行时刻无关，也不会跨日。
+    local_noon = datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0)
+    delivered = local_noon - timedelta(days=10)
     await _seed_order(
         session,
         tenant_id=account.tenant_id,
         user_id=account.user_id,
         order_no="SF10001",
         placed_at=now - timedelta(days=40),
-        delivered_at=now - timedelta(days=10, hours=3),
+        delivered_at=delivered,
     )
 
     runtime = _db_runtime(session, tenant_id=account.tenant_id, question="能退吗")

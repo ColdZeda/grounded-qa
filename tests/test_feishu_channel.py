@@ -14,7 +14,6 @@ from app.channels.feishu import (
     MAX_REPLY_CHARS,
     FeishuChannel,
     FeishuEvent,
-    citation_hint,
     parse_event,
     render_reply,
     split_reply,
@@ -180,51 +179,29 @@ def _answer_with_audit(unsupported: int, checked: int = 2) -> Answer:
     )
 
 
-def test_citation_hint_only_says_we_could_not_verify() -> None:
-    """串号降级 = **末尾加一行提示**（v1.4 A1，`PLAN §8.7` D1）。
+def test_render_reply_never_shows_the_audit_hint_to_a_customer() -> None:
+    """⭐ **2026-10-27 用户定**：飞书是**顾客侧**，不展示串号提示（也不展示来源）。
 
-    ⚠️ 措辞只陈述"我们没核对上"，**不说"答案是错的"** —— 检查器自己会误报
-       （判据刻意宽松），替用户下结论比不给提示更糟。
+    ⚠️ 这不是"少一行字"的取舍：以前飞书会追一句「本次有 1 处引用未能核对上」——
+        那句话是**给内部人看的**，顾客读到只会怀疑整条回答，而他又没有任何办法去核对。
+        `architecture §9.53 ①`：**顾客侧只给结论和"能不能办"。**
     """
-    hint = citation_hint(_answer_with_audit(unsupported=1))
+    answer = _answer_with_audit(unsupported=1)
 
-    assert hint is not None
-    assert "1 处" in hint
-    assert "未能核对上" in hint
-    assert "错" not in hint
-
-
-def test_citation_hint_is_absent_when_every_marker_checks_out() -> None:
-    """核对全通过 → **不提示**。
-
-    ⚠️ 没有审计字段（拒答 / 闭卷 / 老回答）也要安静 —— 提示是异常信号，
-       常态下每次回答都挂一句警告，用户很快就会当成水印不再读。
-    """
-    assert citation_hint(_answer_with_audit(unsupported=0)) is None
-    assert (
-        citation_hint(
-            Answer(text="好的", refused=True, citations=[], confidence=None, latency_ms=5)
-        )
-        is None
-    )
+    for show in (True, False):
+        rendered = render_reply(answer, show_sources=show)
+        assert "未能核对上" not in rendered
+        assert "⚠️" not in rendered
+        # 正文照常（连 `[1]` 都原样留着，一个字都没动）
+        assert rendered.startswith("家具主体保修 2 年[1]")
 
 
-def test_render_reply_appends_hint_at_the_end_without_touching_body() -> None:
-    rendered = render_reply(_answer_with_audit(unsupported=1), show_sources=True)
-
-    # 正文一个字不动（含 `[1]` `[2]` 原样保留）
-    assert rendered.startswith("家具主体保修 2 年[1]，布艺 6 个月[2]。")
-    # 提示在**最后一行**，且在来源区之后
-    assert rendered.splitlines()[-1].startswith("⚠️ 本次有 1 处引用未能核对上")
-    assert rendered.index("参考来源") < rendered.index("⚠️")
-
-
-def test_render_reply_keeps_hint_when_sources_are_hidden() -> None:
-    """关掉来源 ≠ 关掉降级提示 —— **没有来源可点**时这行提示恰恰更重要。"""
+def test_render_reply_hides_sources_leaving_only_the_body() -> None:
+    """关掉来源时**只剩正文**：没有"参考来源"小标题，也没有空行尾巴。"""
     rendered = render_reply(_answer_with_audit(unsupported=1), show_sources=False)
 
-    assert rendered.endswith("请以原文为准。")
     assert "参考来源" not in rendered
+    assert rendered == rendered.strip()
 
 
 def test_to_feishu_markdown_downgrades_table_to_bullets() -> None:

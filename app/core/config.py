@@ -180,11 +180,19 @@ class Settings(BaseSettings):
     agent_max_steps: int = 6
     #: 整轮问答的总预算（秒）。超了 → **立刻回落确定性 pipeline**。
     #: ⚠️ 这个数字就是"把最多花多少的权力留在代码里"那句话的实体（`architecture §9.48`）。
-    agent_total_budget_seconds: float = 20.0
+    #: 📌 20 → **30**（2026-10-27 走查：用户接受更慢一点，但不愿看到"走了 1 步就回落"）。
+    agent_total_budget_seconds: float = 30.0
     #: 单步预算（秒）—— 等模型一次返回的上限。卡住的某一步不该吃掉整轮预算。
-    agent_step_timeout_seconds: float = 8.0
+    #: 📌 8 → **10**，同上。
+    agent_step_timeout_seconds: float = 10.0
     #: 检索落空 / 置信度不够时，允许"换个说法再查一次"几次（自愈）。
     agent_max_retries: int = 1
+    #: **模型调用失败**（供应商抖动 / 连接断）时的重试次数。
+    #: ⚠️ 与 `agent_max_retries` **是两件事**，别合成一个：那个管"检索没查到再查",
+    #:    这个管"这次调用根本没拿到回复"。2026-10-27 走查的真因就是这个 ——
+    #:    用户看到"走了 1 步就回落"，日志是 `对话 API 连接失败`，
+    #:    **调预算救不了它**（详见 `architecture §9.53 ③`）。
+    agent_model_retries: int = 1
     # 外部模型 API 超时（秒）。2C2G 上不能让一个卡住的请求把连接池占死。
     model_request_timeout_seconds: float = 60.0
 
@@ -366,7 +374,11 @@ class Settings(BaseSettings):
     #:    那是另一件事。单账号够把链路跑通、也够演示；多用户映射写进 `CANDIDATES.md`。
     feishu_channel_email: str = ""
     #: 回复要不要带上引用来源（纯文本编号列表）。飞书里点不了 `[1]`，所以给的是**文字版**。
-    feishu_show_sources: bool = True
+    #: ⚠️ **默认关**（2026-10-27 用户定）：飞书是**顾客侧**，顾客不需要知道
+    #:    "我们知识库里有哪几篇"，那一串 `[1] 《退换货总则》…` 只会让人怀疑答案是不是抄的。
+    #:    内部核对去 Web（那边默认折叠、还能点「看原文」）。
+    #:    判据一句话：**顾客侧只给结论和"能不能办"，内部侧给全部证据**（`architecture §9.53 ①`）。
+    feishu_show_sources: bool = False
 
     # ---------- 可观测 ----------
     metrics_enabled: bool = True

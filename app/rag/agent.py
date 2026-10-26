@@ -184,19 +184,47 @@ class AgentRunner:
                 return
 
             step_timeout = min(self._settings.agent_step_timeout_seconds, remaining)
-            try:
-                # ⚠️ **`usage` 必须传进去**（2026-10-26 评测打出来的 bug）：
-                #    不传的话客户端拿不到一个可填的字典，
-                #    每一步的 token 都会记成 0 —— 而那本账正是配额扣费的依据，
-                #    等于 agent 跑多少都**不扣额度**，而且看板上看不出来。
-                step_usage: dict[str, int] = {}
-                result = await self._chat.complete_with_tools(
-                    messages, TOOL_SCHEMAS, usage=step_usage, request_timeout=step_timeout
-                )
-            except ModelAPIError as exc:
-                logger.warning("agent 第 %s 步模型调用失败：%s", self._steps + 1, exc)
-                index = len(self._trace) + 1
-                self._trace.append({"step": index, "kind": "model_error", "error": str(exc)[:200]})
+            # 模型调用失败**重试一次**（`agent_model_retries`）。
+            # ⚠️ 2026-10-27 走查的图5 就是这个：用户看到"走了 1 步就回落"，
+            #    而日志是 `对话 API 连接失败` —— **供应商抖动**，调预算救不了。
+            #    重试比放宽预算便宜得多：成功时一次都不多花。
+            # ⚠️ 每次重试都要重新看预算：重试不该把整轮预算吃穿。
+            attempts = max(self._settings.agent_model_retries, 0) + 1
+            result = None
+            for attempt in range(1, attempts + 1):
+                left = deadline - time.perf_counter()
+                if left <= 0.05:
+                    break
+                step_timeout = min(self._settings.agent_step_timeout_seconds, left)
+                try:
+                    # ⚠️ **`usage` 必须传进去**（2026-10-26 评测打出来的 bug）：
+                    #    不传的话客户端拿不到一个可填的字典，
+                    #    每一步的 token 都会记成 0 —— 而那本账正是配额扣费的依据，
+                    #    等于 agent 跑多少都**不扣额度**，而且看板上看不出来。
+                    step_usage = {}
+                    result = await self._chat.complete_with_tools(
+                        messages, TOOL_SCHEMAS, usage=step_usage, request_timeout=step_timeout
+                    )
+                    break
+                except ModelAPIError as exc:
+                    logger.warning(
+                        "agent 第 %s 步模型调用失败（第 %s/%s 次）：%s",
+                        self._steps + 1,
+                        attempt,
+                        attempts,
+                        exc,
+                    )
+                    index = len(self._trace) + 1
+                    self._trace.append(
+                        {
+                            "step": index,
+                            "kind": "model_error",
+                            "attempt": attempt,
+                            "error": str(exc)[:200],
+                        }
+                    )
+
+            if result is None:
                 async for event in self._fallback("模型调用失败"):
                     yield event
                 return

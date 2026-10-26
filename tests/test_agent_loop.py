@@ -326,10 +326,60 @@ async def test_max_steps_falls_back_to_pipeline(session: AsyncSession, make_acco
 
 
 @pytest.mark.integration
-async def test_model_error_falls_back_to_pipeline(session: AsyncSession, make_account) -> None:
-    """模型 API 炸了 → 回落，不是 500。"""
+async def test_model_error_is_retried_once_before_falling_back(
+    session: AsyncSession, make_account
+) -> None:
+    """⭐ **2026-10-27 走查图5 的解药**：模型调用失败要**重试一次**，不是立刻回落。
+
+    真机日志是 `对话 API 连接失败`（供应商抖动）—— 调预算救不了它，
+    重试才救得了，而且成功时一次都不会多花。
+    """
     account = await make_account(label="agent")
-    chat = ScriptedChat([ModelAPIError("连接失败")])
+    await _seed_doc(
+        session,
+        tenant_id=account.tenant_id,
+        filename="a.md",
+        content="家具主体保修 2 年。",
+        effective_from=date(2026, 1, 1),
+    )
+    chat = ScriptedChat(
+        [
+            ModelAPIError("对话 API 连接失败"),  # 第 1 步：第一次抖动
+            _model_turn([_call(SEARCH_KB, {"query": "保修"})]),  # 重试成功
+            _model_turn([_call(FINISH, {"answer": "保修 2 年[1]。", "citations": [1]})]),
+        ]
+    )
+    pipeline = FakePipeline()
+    runner = _runner(
+        session,
+        tenant_id=account.tenant_id,
+        chat=chat,
+        question="保修多久",
+        pipeline=pipeline,
+    )
+
+    events = await _drain(runner)
+    answer = _answers(events)[0]
+
+    # 重试成了 ⟹ **不回落**，用户拿到的就是 agent 的答案
+    assert pipeline.called == 0
+    assert answer.extra.get("degraded") is None
+    assert "保修 2 年" in answer.text
+    # 抖动这件事要留在轨迹里（事后要能看出"这回是重试救回来的"）
+    errors = [item for item in answer.extra["agent_trace"] if item.get("kind") == "model_error"]
+    assert len(errors) == 1
+    assert errors[0]["attempt"] == 1
+    # 两次调用都真的发出去了
+    assert len(chat.seen) == 3
+
+
+@pytest.mark.integration
+async def test_model_error_falls_back_to_pipeline(session: AsyncSession, make_account) -> None:
+    """模型 API 炸了（重试也没救回来）→ 回落，不是 500。"""
+    account = await make_account(label="agent")
+    # ⚠️ 要给**两次**：脚本只给一条的话，第二次会以"脚本用完了"再抛一次 ——
+    #    那测的就不是这里想测的东西了。
+    chat = ScriptedChat([ModelAPIError("连接失败"), ModelAPIError("连接失败")])
     pipeline = FakePipeline()
     runner = _runner(
         session, tenant_id=account.tenant_id, chat=chat, question="保修多久", pipeline=pipeline

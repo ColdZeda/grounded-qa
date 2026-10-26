@@ -253,6 +253,29 @@ def _agent_meta(final: Answer | None) -> dict[str, object] | None:
     return meta
 
 
+#: 这些 `extra` 字段**两种模式都要落库**（不只是 agent 的）。
+#: ⚠️ `citation_audit` 只随 SSE `done` 帧发一次，不落库的话**刷新即消失、事后统计为 0**
+#:    —— 2026-10-27 走查就是这样：`gq_citation_support_total` 有数，库里一条都查不到。
+#:    详见 `architecture §9.53 ④`「只在一帧里的证据等于没有」。
+_PERSISTED_EXTRA = ("citation_audit", "citation_repairs")
+
+
+def _persisted_extra(final: Answer) -> dict[str, object]:
+    """两种模式共用的"要落库的 extra"。**没有就返回空字典**（不写空值）。"""
+    return {key: final.extra[key] for key in _PERSISTED_EXTRA if key in final.extra}
+
+
+def _merged_meta(final: Answer) -> dict[str, object] | None:
+    """`messages.meta` 最终写什么：**agent 痕迹 ＋ 两种模式都该落的核对结果**。
+
+    ⚠️ 两边都空时返回 `None`（而不是 `{}`）—— 老数据里没有这个字段，
+        新数据也别塞空对象，否则做统计的人要同时处理两种空。
+    """
+    meta: dict[str, object] = dict(_agent_meta(final) or {})
+    meta.update(_persisted_extra(final))
+    return meta or None
+
+
 async def _load_conversation(
     session: SessionDep, user: User, conversation_id: uuid.UUID
 ) -> Conversation:
@@ -622,7 +645,9 @@ async def _persist_answer(
         confidence=final.confidence,
         latency_ms=final.latency_ms,
         # ⚠️ agent 跑过才有；无痕迹时保持 `None`，不给老数据增加空字段。
-        meta=_agent_meta(final),
+        # ⚠️ 2026-10-27：`citation_audit` / `citation_repairs` **两种模式都要落** ——
+        #    它们以前只随 SSE 帧出去，库里查不到，等于"看不见的证据"（§9.53 ④）。
+        meta=_merged_meta(final),
     )
     session.add(message)
 

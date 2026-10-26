@@ -67,9 +67,10 @@ _HISTORY_LIMIT = 20
 #: 内存去重的容量：近期消息 id 足够，旧的自然淘汰。
 _SEEN_CAPACITY = 512
 
-#: 引用对不上时补的那一行（v1.4 A1）。措辞只陈述"**我们没核对上**"，
-#: 不说"答案是错的" —— 检查器会误报，替用户下结论比不给提示更糟。
-_CITATION_HINT = "⚠️ 本次有 {count} 处引用未能核对上，请以原文为准。"
+#: ⚠️ **2026-10-27 起这里没有「串号提示」了**：那句「本次有 N 处引用未能核对上」
+#:    是**给内部人看的**，顾客读到只会怀疑整条回答、又没有任何办法去核对。
+#:    内部侧照旧能看到（Web 引用区 ＋ `messages.meta.citation_audit`）。
+#:    判据：`architecture §9.53 ①` —— 顾客侧只给结论和「能不能办」。
 
 
 @dataclass(frozen=True)
@@ -213,46 +214,27 @@ def to_feishu_markdown(text: str) -> str:
 def render_reply(answer: Answer, *, show_sources: bool) -> str:
     """把 `Answer` 变成飞书里看到的文字（**已经是 `lark_md`**）。
 
-    ⚠️ 飞书里点不了 `[1]`，所以来源给的是**文字版**（编号 + 摘要 + 分数口径），
+    ⚠️ 飞书里点不了 `[1]`，所以来源若真要给，给的是**文字版**（编号 + 摘要 + 分数口径），
        而且**分数必须带口径**（`精排分` / `余弦`）—— 同一个数字不同含义，
        和 Web 端是同一纪律（`architecture.md` §9.21）。
+
+    ⚠️ **2026-10-27 起默认什么都不附**（`show_sources=False` + 不再追串号提示）：
+        飞书是**顾客侧**。顾客不需要知道"我们知识库里有哪几篇"，也不该看到
+        "1 处引用对不上" —— 他只会觉得这条答案可疑，而那句话**本来就没打算给他说**。
+        判断一句话：**顾客侧只给结论和"能不能办"；证据和内部口径留给 Web**（`architecture §9.53 ①`）。
     """
     body = to_feishu_markdown(answer.text.strip())
     if not body:
         body = "（没有生成出内容）"
-    hint = citation_hint(answer)
     if not show_sources or not answer.citations:
-        return f"{body}\n\n{hint}" if hint else body
+        return body
 
     lines = [body, "", "**—— 参考来源 ——**"]
     for cite in answer.citations:
         lines.append(
             f"**[{cite.index}]** {_snippet(cite.snippet)}（{cite.score_kind} {cite.score:.3f}）"
         )
-    if hint:
-        # ⚠️ 提示放**最后一行**：正文一个字都不动（理由见 `citation_hint`）。
-        lines.extend(["", hint])
     return "\n".join(lines)
-
-
-def citation_hint(answer: Answer) -> str | None:
-    """引用对不上时**追加在末尾**的那一行（v1.4 A1 / `PLAN §8.7` D1）。
-
-    ⚠️ **只追加、不改正文、不把 `[n]` 换成 `[?]`**：
-        · 回答是流式**已经发出去**的，事后改写会让用户看到前后两个版本；
-        · `[?]` 看起来像坏了，而用户真正需要的是"这一条我没把握，你去原文核一下"；
-        · 检查器自己也会误报（`app/rag/citations.py` 的判据刻意宽松），
-          加一行提示是**把决定权交回用户**，删引用则是替他做决定。
-
-    ⚠️ 措辞只陈述"**我们没核对上**"，不说"答案是错的" —— 这两件事不一样。
-    """
-    audit = answer.extra.get("citation_audit")
-    if not isinstance(audit, dict):
-        return None
-    unsupported = audit.get("unsupported")
-    if not isinstance(unsupported, int) or unsupported <= 0:
-        return None
-    return _CITATION_HINT.format(count=unsupported)
 
 
 def _snippet(text: str, limit: int = 60) -> str:
