@@ -90,6 +90,24 @@ def record_citation_support(ok: bool) -> None:
     citation_support.labels(result="ok" if ok else "unsupported").inc()
 
 
+#: **检索降级**：embedding / rerank 调不通时，链路会"照样答，只是变差"。
+#: ⚠️ 2026-10-26 被真实事故逼出来的：阿里云百炼的**预算耗尽**（`BudgetLimitExceeded`），
+#:    向量路与精排路**同时**挂掉 ⟹ 检索退化成纯全文（hit@5 从 0.98 掉到 0.57），
+#:    而**拒答闸门也跟着失效**（`confidence is None` → 不拒答）。
+#:    最糟的是**一点声音都没有**：pipeline 那条路当时连日志都不打。
+#: ⟹ 降级必须**同时**留三个痕迹：日志（这一条请求）+ 这个计数器（比例）+ 看板。
+retrieval_degraded = Counter(
+    "gq_retrieval_degraded_total",
+    "检索降级（kind=embedding 向量路不可用 / rerank 精排不可用）",
+    ["kind"],
+)
+
+
+def record_retrieval_degraded(kind: str) -> None:
+    """记一次检索降级（embedding / rerank）。"""
+    retrieval_degraded.labels(kind=kind).inc()
+
+
 class MetricsMiddleware:
     """把每个 HTTP 请求记成「计数 + 耗时」。
 

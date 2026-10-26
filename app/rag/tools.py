@@ -61,6 +61,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.core.metrics import record_retrieval_degraded
 from app.db.models.knowledge import ContentStatus, Document
 from app.db.models.order import Order
 from app.db.repository import TenantScopedRepository
@@ -591,6 +592,7 @@ class ToolRuntime:
                 query_embedding = vectors[0] if vectors else None
             except ModelAPIError:
                 logger.warning("search_kb：embedding 失败，退化为纯全文检索")
+                record_retrieval_degraded("embedding")
 
         hits, vector_scores = await retriever.search(
             query=query,
@@ -690,6 +692,8 @@ class ToolRuntime:
                     query, [hit.content for hit in hits], top_n=settings.rerank_top_n
                 )
             except ModelAPIError:
+                logger.warning("search_kb：rerank 失败，本次退化为 RRF 顺序 + 余弦置信度")
+                record_retrieval_degraded("rerank")
                 ranked = []
             if ranked:
                 scores = {

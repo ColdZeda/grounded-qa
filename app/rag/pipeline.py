@@ -30,7 +30,7 @@ from datetime import date, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
-from app.core.metrics import record_citation_support
+from app.core.metrics import record_citation_support, record_retrieval_degraded
 from app.rag import citations as citation_module
 from app.rag import followup as followup_module
 from app.rag import prompt as prompt_module
@@ -242,6 +242,10 @@ class RagPipeline:
             except ModelAPIError:
                 # ⚠️ **embedding 挂了不该让问答挂掉**：退化成纯全文检索，
                 #    照样能答（只是召回差一些）。可用性 > 功能齐全。
+                # ⚠️ 但**不许静默**（2026-10-26 事故）：这里原来一句都不留，于是
+                #    "向量路死了"和"知识库里确实没有"在外部看起来一模一样。
+                logger.warning("检索降级：embedding 调用失败，本次退化为纯全文检索")
+                record_retrieval_degraded("embedding")
                 query_embedding = None
 
         hits, vector_scores = await retriever.search(
@@ -264,6 +268,10 @@ class RagPipeline:
                 )
             except ModelAPIError:
                 # ⚠️ 同上：精排是**锦上添花**，不是必需品。挂了就退回 RRF 顺序。
+                # ⚠️ 同样**不许静默** —— 精排一挂，置信度就从 rerank 分退回余弦
+                #   （量纲换了，拒答阈值也跟着换了另一把尺子，见 `should_refuse`）。
+                logger.warning("检索降级：rerank 调用失败，本次退化为 RRF 顺序 + 余弦置信度")
+                record_retrieval_degraded("rerank")
                 ranked = []
             if ranked:
                 # ⚠️ RRF 的顺序在这里被**完全丢弃** —— 这正是精排的意义：
