@@ -119,3 +119,119 @@ def test_term_values_are_still_checked() -> None:
     """日历分量豁免了，**条款数值不能跟着一起豁免** —— 那是串号的正题。"""
     assert audit("家具主体保修 2 年 [3]", _HITS).unsupported == 1
     assert audit("布艺与填充件 6 个月 [2]", _HITS).unsupported == 1
+
+
+# ---------------------------------------------------------------- 2026-10-27 校尺
+#: 下面几条全部来自串号抽样的真实答案（240 句里 14/16 的误报是这几种）。
+#: ⚠️ 它们断言的是**不能报** —— 校尺的方向是"宁可放过，不可误杀"。
+
+
+def test_list_ordinals_are_layout_not_data() -> None:
+    """`2. 补拍照片 [1][4]` —— "2" 是列表序号（2026-10-22 真机误报）。"""
+    answer = "2. 补拍破损处的清晰照片/视频（含连接处整体与细节），供客服认定等级 [1][2]"
+
+    result = audit(answer, _HITS)
+
+    assert (result.checked, result.unsupported) == (0, 0)
+
+
+def test_heading_ordinals_are_layout_not_data() -> None:
+    """`**3. 有效期** [2]` —— "3" 是标题序号（2026-10-27 抽样，一条答案连报三处）。"""
+    for heading in ("**3. 有效期** [2]", "### 4. 积分怎么来 [2]", "| 5. 退款顺序 | [2]"):
+        result = audit(heading, _HITS)
+        assert (result.checked, result.unsupported) == (0, 0), heading
+
+
+def test_decimal_point_is_not_mistaken_for_an_ordinal() -> None:
+    """`3.5 米` 里的 `3.` **不是**序号 —— 剥序号不能把小数也剥掉。"""
+    hits = [_hit("[示例] 层高 3.5 米，超出部分另计。")]
+
+    result = audit("层高 3.5 米以内不另收费 [1]", hits)
+
+    assert result.checked == 1
+    assert result.unsupported == 0, result.issues
+
+
+def test_unit_written_only_in_the_table_header_is_not_flagged() -> None:
+    """原文表格写 `日本 8`（"天"在列头），模型渲染成 `8 天` —— 原文确实支持。
+
+    2026-10-26 真机误报两处就是这个（`_HITS` 之外单独造一条，贴近语料原样）。
+    """
+    hits = [
+        _hit(
+            "[无理由与质量问题的区别 > 一句话决策法] 没有 → 无理由，7 天（美国 30 / 德国 14 / 日本 8）。"
+        )
+    ]
+
+    for answer in (
+        "此外，日本站为 **8 天**[1]。",
+        "一句话判断：美国 30 天、德国 14 天、日本 8 天 [1]。",
+    ):
+        result = audit(answer, hits)
+        assert result.unsupported == 0, (answer, result.issues)
+
+
+def test_order_days_written_with_unit_are_not_flagged() -> None:
+    """订单快照里是裸值 `8`，模型写"已签收 8 天" —— **不占编号的证据也要认得出来**。
+
+    ⚠️ 这条不只是"少一条噪音"：agent 的交卷自查拿这个审计当闸门，
+        误报会让它**把正确答案退回去重写一次**（多花一轮 token）。
+    """
+    hits = [
+        _hit(
+            "[退换货总则 > 七天无理由退货] 自签收之日起 7 个自然日内可申请无理由退货。"
+            "⚠️ 7 天是总则下限。质量问题为 30 个自然日内。"
+        )
+    ]
+
+    result = audit(
+        "该单已签收 8 天，若属无理由退货已超出窗口，若属质量问题仍在 30 天内 [1]。",
+        hits,
+        extra_evidence="SF10001 delivered 2026-10-17 8 实木床架",
+    )
+
+    assert result.unsupported == 0, result.issues
+
+
+def test_bare_value_does_not_glue_to_a_neighbouring_number() -> None:
+    """⚠️ **2026-10-27 校尺时实测踩到的真 bug**：归一化把空白也删掉之后，
+    `2026-10-17 8 件` 会粘成 `2026-10-178件`，于是订单快照里的裸值 `8`
+    被判成"原文里没有" —— 订单事实类回答**照样**误报。
+    数字必须按"独立出现"判：`8` 也不许去匹配 `18` / `80`。
+    """
+    hits = [_hit("[订单] 签收后 7 天内可申请无理由退货。")]
+
+    glued = audit("已签收 8 天 [1]。", hits, extra_evidence="placed 2026-10-17 8")
+    decoy = audit("已签收 8 天 [1]。", hits, extra_evidence="placed 2026-10-17 18")
+
+    assert glued.unsupported == 0, glued.issues
+    assert decoy.unsupported == 1, "18 不许当 8 用"
+
+
+def test_iso_dates_are_not_checked_as_term_values() -> None:
+    """`2026-10-17` 会被拆成 2026 / 10 / 17 三个原子 —— 它是订单日期，不是条款数值。"""
+    hits = [_hit("[退换货总则] 自签收之日起 7 个自然日内可申请无理由退货。")]
+
+    result = audit("2026-10-17 签收，退款需质检通过后再发起 [1]。", hits)
+
+    assert (result.checked, result.unsupported) == (0, 0)
+
+
+def test_a_wrong_number_in_the_same_shaped_sentence_is_still_caught() -> None:
+    """放宽单位之后，**数字本身照样要核** —— 这是校尺不能退的那条底线。"""
+    hits = [_hit("[保修期限] 家具主体 1 年；布艺与填充件 6 个月。")]
+
+    assert audit("家具主体保修 3 年 [1]", hits).unsupported == 1
+    assert audit("布艺与填充件 9 个月 [1]", hits).unsupported == 1
+
+
+def test_swapped_unit_is_deliberately_tolerated() -> None:
+    """⚠️ **已知代价，故意留着**：数字对、单位错（把"48 小时"说成"48 个月"）会放过。
+
+    换掉的是"单位没连写"那一大类误报（占抽样误报的四分之一），
+    而"单位写错"型串号在 240 句里**一例都没有**。要收紧回来，
+    得先让语料里的表格把单位写进每个格子 —— 那是批次 B 精加语料的活。
+    """
+    hits = [_hit("[客服 SLA] 超时返工 3 个月内免费；售后邮箱 48 小时内回复。")]
+
+    assert audit("售后邮箱 48 个月内回复 [1]", hits).unsupported == 0

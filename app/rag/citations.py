@@ -21,6 +21,30 @@
       拿它们判"支不支持"会把正确的引用判成错的；
     · 一句里标了多个编号时，只要原子出现在**其中任一**被引段落里就算通过
       （一句话用两段资料各支撑一半，是合法写法）。
+
+⚠️ **2026-10-27 校尺（串号抽样之后改的，别改回去）**：
+    真机抽了 240 句可核句子（历史 70 条消息 ＋ 20 道题跑两轮 ＋ 单题复现），
+    本模块报了 16 句"对不上"，**逐条复核后只有 2 句是真串号（0.83%）**，
+    其余 14 句全是**尺子自己造的**：
+
+        ① 列表/标题序号被当成数据 —— "2. 补拍照片 [1][4]"、"**3. 有效期** [2]"（6 例）
+        ② 单位附着差异 —— 原文表格写"日本 8"（"天"在列头），模型渲染成"8 天"（4 例）
+        ③ 订单事实 —— 订单快照里是裸值 `8`，模型写"已签收 8 天"（3 例，且 agent 的
+           交卷自查会因此**误退正确答案重写一次**，白花一轮 token）
+        ④ 模型自数 —— "已开通地区（5 个）"里的 5 是它数出来的，原文没有这个数（1 例）
+
+    ⟹ 判据从"数字＋单位连在一起"改成 **"数字必核、单位只作辅助"**：
+       原子通过的条件是 `原子完整出现` **或** `数字出现在原文里、且单位也在这一块里出现过`。
+       **代价是"单位写错"（把 7 天写成 7 个月）会被放过** —— 这是**故意**的取舍：
+       那个数字仍然要核，而"错块号"型串号（真串号唯一的形态）照样抓得住。
+       抽样里"单位写错"**一例都没有**，"单位没连写"却占误报的四分之一。
+
+    ⟹ 另外两类不再当数据：**列表/标题的序号**、**ISO 日期**（`2026-10-17` 会被拆成
+       2026 / 10 / 17 三个原子，而它来自订单系统，不是条款数值 —— 和 `_CALENDAR`
+       豁免 `2024 年 3 月` 是同一个理由）。
+
+    📌 **已知残留误报**：模型自己数出来的数量（"共 5 个"）核不了，仍会被报。
+       宁可留着 —— 它比"把正确引用删掉"轻得多。
 """
 
 from __future__ import annotations
@@ -36,6 +60,17 @@ _MARKER = re.compile(r"\[(\d{1,2})\]")
 
 #: 句子的切分点。**保留分隔符**，否则引用标记可能被切到下一句里。
 _SENTENCE = re.compile(r"[^。！？!?\n]*[。！？!?\n]?")
+
+#: **行首的列表 / 标题序号**（`2. 补拍…`、`**3. 有效期**`、`### 4. 积分`）。
+#: ⚠️ 这是**排版**，不是数据 —— 不剥掉的话，每一条编号列表都会被判串号
+#:    （2026-10-27 抽样：16 处报警里 6 处是它）。
+#: ⚠️ 末尾 `(?!\d)` 是留给小数的：`3.5 米` 里的 `3.` 后面是数字，不算序号。
+_LEADING_ORDINAL = re.compile(r"^[\s>*_#|]*\d{1,2}\s*[.、)）](?!\d)\s*")
+
+#: ISO 日期（`2026-10-17`）。**整段抹掉**，否则会被拆成 2026 / 10 / 17 三个原子。
+#: ⚠️ 它来自订单系统或用户原话，不是条款数值 —— 和 `_CALENDAR` 豁免 `2024 年 3 月`
+#:    是同一个理由：**不排除的话，任何带具体日期的回答都会被判串号**。
+_ISO_DATE = re.compile(r"\d{4}-\d{1,2}-\d{1,2}")
 
 #: "最不可替换"的原子：数字 + 可选单位。单位表按语料实际出现过的收，
 #: 收不全没关系 —— 没单位的数字照样会被抓成原子。
@@ -53,6 +88,16 @@ def _norm(text: str) -> str:
         而且改动发生在**证据**那一侧时，会让一个原本不支持的引用"看起来通过"。
     """
     return text.replace(",", "").replace(" ", "").replace("\u3000", "").lower()
+
+
+def _norm_spaced(text: str) -> str:
+    """只抹千分位逗号、**保留空白** —— 专供"某个数字是不是独立出现"那一步。
+
+    ⚠️ **不能复用 `_norm`**：它连空白一起删，`2026-10-17 8 件` 会粘成 `2026-10-178件`，
+        于是订单快照里的裸值 `8` 被判成"原文里没有"（2026-10-27 校尺时实测踩到）。
+        数字粘连是这一整类判定的天敌：`8` 也不能去匹配 `18` / `80`。
+    """
+    return text.replace(",", "").replace("\u3000", " ").lower()
 
 
 #: **日历分量**（`2024年` / `3月` / `15日`）不算"必须能在原文里找到"的原子。
@@ -84,8 +129,48 @@ def _is_calendar(atom: str) -> bool:
 
 def _atoms_of(sentence: str) -> list[str]:
     """一句话里的数字原子（**先去引用标记**，否则 `[3]` 里的 3 会被当成数据）。"""
-    atoms = [_norm(atom) for atom in _ATOM.findall(_MARKER.sub("", sentence))]
+    text = _LEADING_ORDINAL.sub("", sentence)
+    text = _ISO_DATE.sub(" ", text)
+    atoms = [_norm(atom) for atom in _ATOM.findall(_MARKER.sub("", text))]
     return [atom for atom in atoms if atom and not _is_calendar(atom)]
+
+
+#: 原子开头的数字部分（`6个月` → `6`、`1000元` → `1000`）。原子一定以数字开头。
+_ATOM_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+def _has_number(pool: str, number: str) -> bool:
+    """`number` 是否作为**独立数字**出现在原文里。
+
+    ⚠️ 两侧不许接别的数字：否则核 `8` 会被原文里的 `18` / `80` 蒙混过关 ——
+        那正是"数字必核"最容易被绕过的地方。
+    """
+    return re.search(r"(?<!\d)" + re.escape(number) + r"(?!\d)", pool) is not None
+
+
+def _supported(atom: str, pool: str, pool_spaced: str) -> bool:
+    """这个原子被 `pool`（若干被引块的原文拼起来）支持吗？
+
+    ① 原子**完整出现** → 支持；
+    ② 否则拆成"数字 + 单位"：**数字必须在原文里**，单位**只要这一块里出现过**就算
+       （数字的"在不在"用 `pool_spaced` 判，见 `_norm_spaced` 为什么不能用同一份）。
+       ⟹ "数字必核、单位只作辅助"。
+
+    ⚠️ 第 ② 条是**故意的放宽**（2026-10-27 抽样校准）：表格里"日本 8"（"天"在列头）、
+        "199"（"元"在列头）都是**原文确实支持**的写法，模型渲染成"8 天"/"199 元"
+        却被判串号 —— 这类占误报的四分之一。代价是"单位写错"（7 天说成 7 个月）
+        会被放过；但抽样里这种一例都没有，而"错块号"（真串号唯一的形态）照样抓得住。
+    """
+    if atom in pool:
+        return True
+    match = _ATOM_NUMBER.match(atom)
+    if match is None:
+        return False
+    number = match.group(0)
+    if not _has_number(pool_spaced, number):
+        return False
+    unit = atom[len(number) :]
+    return not unit or unit in pool
 
 
 @dataclass(frozen=True)
@@ -157,6 +242,7 @@ def audit(
         return CitationAudit()
 
     contents = [_norm(hit.content) for hit in hits]
+    spaced = [_norm_spaced(hit.content) for hit in hits]
     checked = 0
     issues: list[CitationIssue] = []
 
@@ -173,10 +259,12 @@ def audit(
             continue
         checked += 1
         pool = "".join(contents[m - 1] for m in markers if 1 <= m <= len(contents))
+        pool_spaced = "".join(spaced[m - 1] for m in markers if 1 <= m <= len(contents))
         if extra_evidence:
             # 不占编号（不可被 `[n]` 引用），但**参与核对**。
             pool += _norm(extra_evidence)
-        missing = tuple(atom for atom in atoms if atom not in pool)
+            pool_spaced += _norm_spaced(extra_evidence)
+        missing = tuple(atom for atom in atoms if not _supported(atom, pool, pool_spaced))
         if missing:
             issues.append(CitationIssue(markers=markers, atoms=missing, sentence=segment.strip()))
 

@@ -422,7 +422,11 @@ class RagPipeline:
 
         # 引用可核对性（v1.3 收尾）：**流式发完了才能核**，所以放在这里。
         # ⚠️ 只记录 + 打 warning，**不改写已经发出去的文字**（理由见 `citations.py`）。
-        audit = citation_module.audit("".join(collected), hits)
+        # ⚠️ **订单事实要一起递进去**（2026-10-27 校尺时发现的漏）：
+        #    agent 那边 `tools._audit` 早就传了 `extra_evidence`，这一路却漏了 ——
+        #    于是"你这单签收已 8 天"这种**正确答案**在 web/飞书永远被判串号
+        #    （`8 天` 来自订单快照，不占任何 `[n]` 编号）。
+        audit = citation_module.audit("".join(collected), hits, extra_evidence=self._order_facts)
         if audit.checked:
             record_citation_support(audit.ok)
         if not audit.ok:
