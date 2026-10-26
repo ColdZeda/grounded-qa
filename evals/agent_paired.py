@@ -226,6 +226,44 @@ def _tools_match(expected: list[str], got: list[str]) -> bool | None:
     return all(name in got for name in expected)
 
 
+def _rows_from_dump(path: Path) -> list[Row]:
+    """把落盘的 JSON 读回成 `Row`，**不重跑**就能重出报告。
+
+    ⚠️ 为什么需要它：报告口径改一次就要重花一遍 token，否则旧数据说不清；
+       而且"这个数字怎么算出来的"必须能事后复查（JSON 里有逐轮原始结果）。
+    """
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    rows: list[Row] = []
+    for item in payload.get("rows") or []:
+        row = Row(
+            id=item["id"],
+            kind=item["kind"],
+            question=item.get("question") or "",
+            min_search=int(item.get("min_search") or 0),
+        )
+        row.pipeline_hits = list(item.get("pipeline_hits") or [])
+        row.agent_hits = list(item.get("agent_hits") or [])
+        row.tools_ok = item.get("tools_ok")
+        row.pipeline = _arm_from_dict(item.get("pipeline") or {})
+        row.agent = _arm_from_dict(item.get("agent") or {})
+        rows.append(row)
+    return rows
+
+
+def _arm_from_dict(data: dict[str, Any]) -> ArmResult:
+    return ArmResult(
+        text=str(data.get("text") or ""),
+        refused=bool(data.get("refused")),
+        latency_ms=int(data.get("latency_ms") or 0),
+        steps=int(data.get("steps") or 0),
+        retries=int(data.get("retries") or 0),
+        tokens=int(data.get("tokens") or 0),
+        tools=list(data.get("tools") or []),
+        degraded=data.get("degraded"),  # type: ignore[arg-type]
+        error=data.get("error"),  # type: ignore[arg-type]
+    )
+
+
 async def _run(args: argparse.Namespace) -> int:
     settings = get_settings()
     questions = _load_questions()
@@ -357,14 +395,26 @@ def _report(rows: list[Row], *, arm: str) -> None:
         # ① 主指标：澄清组（pipeline 结构上做不到"反问"）
         clarify = [row for row in rows if row.kind == "insufficient"]
         if clarify:
-            hp = sum(row.hit_pipeline for row in clarify)
-            ha = sum(row.hit_agent for row in clarify)
-            delta = (ha - hp) / len(clarify) * 100
-            verdict = "✅ 达标" if delta >= 20 else "❌ 未达标"
+            total = len(clarify)
+            # ⚠️ **两种口径都列出来** —— 它们回答的是两个不同的问题，少一个都会被误读：
+            #    · 逐轮均值：这条路上"平均多少比例的尝试是对的"（把非确定性算进去）
+            #    · 多数决题数：有几道题它**稳定**答对（每道题一票，抗抖动）
+            #   只报前者会高估（同一道题蒙对一次也算分），只报后者会低估且很粗（n=5 时一题 20 pt）。
+            rate_p = sum(_rate(row.pipeline_hits) for row in clarify) / total
+            rate_a = sum(_rate(row.agent_hits) for row in clarify) / total
+            maj_p = sum(row.hit_pipeline for row in clarify)
+            maj_a = sum(row.hit_agent for row in clarify)
+            delta_maj = (maj_a - maj_p) / total * 100
+            ok = (rate_a - rate_p) * 100 >= 20 and delta_maj >= 20
             print(
-                f"① 主指标 · 澄清组 ≥ +20 pt：Δ {delta:+.1f} pt"
-                f"（agent {ha}/{len(clarify)} vs pipeline {hp}/{len(clarify)}）{verdict}"
+                f"① 主指标 · 澄清组 ≥ +20 pt：逐轮 Δ {(rate_a - rate_p) * 100:+.1f} pt"
+                f"（{rate_a:.1%} vs {rate_p:.1%}）｜多数决 Δ {delta_maj:+.1f} pt"
+                f"（{maj_a}/{total} vs {maj_p}/{total} 题）{'✅ 达标' if ok else '❌ 未达标'}"
             )
+            if total <= 8:
+                print(
+                    f"   ⚠️ 只有 {total} 道题 ⟹ **一题就是 {100 / total:.0f} pt**，别把 ±1 题当成能力差异"
+                )
         # ② 护栏：多跳 / 多诉求组（要点命中，答错就是答错，不许比 pipeline 更差）
         depth = [row for row in rows if row.kind in ("multi_hop", "multi_intent")]
         if depth:
@@ -448,7 +498,15 @@ def main() -> None:
     parser.add_argument("--arm", choices=("both", "pipeline", "agent"), default="both")
     parser.add_argument("--tenant", default="default", help="租户 slug（默认 default）")
     parser.add_argument("--no-dump", dest="dump", action="store_false", help="不落 JSON")
+    parser.add_argument(
+        "--from-json",
+        type=Path,
+        help="**不重跑**，把之前落盘的 JSON 按当前口径重新出报告（改报告时用，不花 token）",
+    )
     args = parser.parse_args()
+    if args.from_json:
+        _report(_rows_from_dump(args.from_json), arm="both")
+        raise SystemExit(0)
     raise SystemExit(asyncio.run(_run(args)))
 
 
