@@ -446,6 +446,23 @@ export interface CitationAudit {
 }
 
 /** `event: done` —— 收尾。注意**它不代表成功**，出错时 `error` 事件之后照样会来一个 `done`。 */
+/**
+ * SSE 的 `tool` 帧：agent 正在调一个工具。
+ *
+ * ⚠️ 它**不是给终用户看的业务信息**，而是"我还活着"的进度信号：
+ *    agent 比 pipeline 慢 2~4 倍，中间几秒什么都不给，用户会以为卡死了。
+ */
+export interface ToolEvent {
+  /** 工具名：`search_kb` / `get_order` / `ask_user` / `finish`。 */
+  name: string
+  /** 参数的**截断预览**（已脱敏）。 */
+  args: string
+  ok: boolean
+  ms: number
+  /** 一句话人话，界面直接显示。 */
+  summary: string
+}
+
 export interface DoneEvent {
   refused: boolean
   confidence: number | null

@@ -62,6 +62,13 @@ function openContext(payload: { documentId: string; ordinal: number; title: stri
 
 /** `retrieving` = 检索中（还没收到 sources）；`generating` = 正在出字。 */
 const phase = ref<'idle' | 'retrieving' | 'generating'>('idle')
+/**
+ * agent 正在干什么（`tool` 帧的 summary）。空 = 没在调工具。
+ *
+ * ⚠️ 这一行字不是装饰：agent 的中间步骤对用户是不可见的，
+ *    不告诉他"正在查订单"，就只剩下一个转圈的等待。
+ */
+const toolLabel = ref('')
 const abort = ref<AbortController | null>(null)
 
 const scroller = ref<HTMLElement | null>(null)
@@ -121,6 +128,8 @@ const phaseLabel = computed(() => {
   // ⚠️ 上传中也得给个说法：不然按钮明明亮着却点不动（或者点下去什么都没发生）。
   if (uploading.value) return '图片上传中…'
   if (phase.value === 'retrieving') return '正在检索知识库…'
+  // agent 跑过的工具优先：它比"正在生成"具体得多，而且是真实发生的事
+  if (toolLabel.value) return toolLabel.value
   if (phase.value === 'generating') return '正在生成回答…'
   return ''
 })
@@ -452,7 +461,12 @@ async function send(): Promise<void> {
           // 把它当成"生成中"会让界面一直转圈。
           phase.value = event.refused ? 'idle' : 'generating'
         },
+        onTool: (event) => {
+          // 一旦开始出字，工具状态就该让位 —— 否则会与正文同时在屏幕上赛跑。
+          toolLabel.value = event.summary || ''
+        },
         onDelta: (text) => {
+          toolLabel.value = ''
           pending.content += text
           void scrollToBottom()
         },
@@ -481,6 +495,7 @@ async function send(): Promise<void> {
     }
   } finally {
     pending.streaming = false
+    toolLabel.value = ''
     phase.value = 'idle'
     abort.value = null
     void scrollToBottom()

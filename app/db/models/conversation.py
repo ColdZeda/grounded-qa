@@ -90,6 +90,13 @@ class Conversation(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
     external_title: Mapped[str | None] = mapped_column(String(200), nullable=True)
     #: 上次解析 `external_title` 的时间 —— 隔 **7 天**再刷一次（群改名能跟上）。
     #: ⚠️ 规格里没写这一列，但"每 7 天刷新"没有它就没法实现（`updated_at` 会被每条消息改掉，不能当依据）。
+    #: 会话级便筺（阶段 7 · agent）：**跨轮要记住的事实**（单号 / 商品 / 参照时刻）。
+    #:
+    #: ⚠️ 为什么不塞进 `messages.meta`：那些是**每一句**的记录，而这个是
+    #:    **当前状态**。每轮都从上百条历史里重新推导一遍，既慢又容易推错。
+    #: ⚠️ 也不进向量 / 不参与检索 —— 它只是给提示词看的。
+    meta: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
     external_title_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

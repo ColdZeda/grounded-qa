@@ -478,19 +478,33 @@ class RagPipeline:
             合并那一行会让读者以为"rerank 一挂就不判了"，
             而真实行为是"**照样判，只是拿错了尺子**" —— 后者才是要知道的事。
         """
-        if not hits:
-            return True
-        if confidence is None:
-            # 纯全文命中（没有 embedding / 没开 rerank）→ 没有可信的置信度。
-            # 宁可答（并在引用里给出处让人核对），也不要用一个无意义的数字假装判断过。
-            return False
-        # ⚠️ **不能合并成一个阈值**：`rerank` 分与余弦不是同一个量纲。
-        threshold = (
-            self._settings.answer_min_score
-            if score_kind == "rerank"
-            else self._settings.answer_min_cosine
-        )
-        return confidence < threshold
+        return should_refuse(hits, confidence, score_kind, settings=self._settings)
+
+
+def should_refuse(
+    hits: Sequence[RetrievedChunk],
+    confidence: float | None,
+    score_kind: str,
+    *,
+    settings: Settings,
+) -> bool:
+    """判拒答的**唯一实现**（agent 也调它，见 `agent.py`）。
+
+    ⚠️ **2026-10-26（阶段 7）从 `RagPipeline._should_refuse` 抽成模块级函数**：
+        agent 的最终答案同样要过这一关（"下结论这一步不自由"）。
+        两处各写一遍的话，迟早一边改了另一边没改 —— 那时"agent 拒答更多/更少"
+        会被误读成"agent 更谨慎/更敢答"，其实只是实现漂了。
+        ⚠️ 判据本身**一个字没改**：上面的长说明（四种情况 / 两把尺子）仍是权威。
+    """
+    if not hits:
+        return True
+    if confidence is None:
+        # 纯全文命中（没有 embedding / 没开 rerank）→ 没有可信的置信度。
+        # 宁可答（并在引用里给出处让人核对），也不要用一个无意义的数字假装判断过。
+        return False
+    # ⚠️ **不能合并成一个阈值**：`rerank` 分与余弦不是同一个量纲。
+    threshold = settings.answer_min_score if score_kind == "rerank" else settings.answer_min_cosine
+    return confidence < threshold
 
 
 def _chunk_text(text: str, *, size: int = 24) -> list[str]:

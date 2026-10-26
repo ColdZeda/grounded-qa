@@ -22,6 +22,7 @@ import type {
   ErrorEvent,
   ImageInfo,
   SourcesEvent,
+  ToolEvent,
 } from '@/types/api'
 
 export interface StreamHandlers {
@@ -31,6 +32,11 @@ export interface StreamHandlers {
   onDelta?: (text: string) => void
   /** 收尾。⚠️ 它**不代表成功** —— 出错时 `error` 之后也会来一个 `done`。 */
   onDone?: (event: DoneEvent) => void
+  /**
+   * agent 在调工具（只有 `ANSWER_MODE=agent` 时才会有这个事件）。
+   * ⚠️ 必须显示：agent 慢 2~4 倍，不告诉用户"在干一件事"会被当成卡死。
+   */
+  onTool?: (event: ToolEvent) => void
   /** 流中途出错。`detail` 是给开发者看的；界面上应当提示"回答不完整"。 */
   onError?: (event: ErrorEvent) => void
 }
@@ -105,6 +111,15 @@ function dispatch(frame: SseFrame, handlers: StreamHandlers): void {
       break
     case 'delta':
       handlers.onDelta?.(asString(payload.text))
+      break
+    case 'tool':
+      handlers.onTool?.({
+        name: asString(payload.name),
+        args: asString(payload.args),
+        ok: payload.ok === true,
+        ms: asNumber(payload.ms) ?? 0,
+        summary: asString(payload.summary),
+      })
       break
     case 'done': {
       const audit = asCitationAudit(payload.citation_audit)

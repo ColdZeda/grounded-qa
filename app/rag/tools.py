@@ -65,6 +65,7 @@ from app.db.models.knowledge import ContentStatus, Document
 from app.db.models.order import Order
 from app.db.repository import TenantScopedRepository
 from app.orders import find_order, order_snapshot
+from app.rag import citations as citation_module
 from app.rag import mdtext
 from app.rag import prompt as prompt_module
 from app.rag.providers import EmbeddingClient, ModelAPIError, RerankClient
@@ -441,6 +442,7 @@ class ToolRuntime:
         settings: Settings | None = None,
         ref_time: date | None = None,
         now: datetime | None = None,
+        max_searches: int | None = None,
     ) -> None:
         self._session = session
         self._tenant_id = tenant_id
@@ -465,6 +467,14 @@ class ToolRuntime:
         self.last_score_kind: str = "none"
         #: 已经搜过几次（轨迹指标）。
         self.search_count = 0
+        #: 本轮最多许查几次。`agent_max_retries=1` 时就是 **2 次**：
+        #: 查一次 + 允许改写重试一次（`PLAN §13.3` 的自愈）。
+        #: ⚠️ 卡上限的是**代码**不是提示词 —— 否则模型会在"再查一次也许就有了"里耗光预算。
+        self._max_searches = max_searches or (self._settings.agent_max_retries + 1)
+        #: 交卷自查用过没有（**只许拦一次**，拦第二次就可能死循环）。
+        self._self_check_used = False
+        #: 最近一次交卷自查的结果（`Answer.extra["citation_audit"]`）。
+        self.last_audit: Any = None
 
     # ---- 只读属性 ----
 
@@ -534,6 +544,17 @@ class ToolRuntime:
 
     async def _search_kb(self, query: str, *, top_k: int | None = None) -> ToolResult:
         settings = self._settings
+        if self._max_searches and self.search_count >= self._max_searches:
+            return ToolResult(
+                name=SEARCH_KB,
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": f"这一轮已经查过 {self.search_count} 次，不允许再查",
+                    "hint": f"用现有结果收尾（{FINISH}）；确实缺关键信息就用 {ASK_USER} 问一次。",
+                },
+                summary="检索次数用完",
+            )
         self.search_count += 1
         ref_time = self.ref_time
 
@@ -796,6 +817,24 @@ class ToolRuntime:
 
     # ---- finish ----
 
+    def _audit(self, answer: str) -> Any:
+        """拿已有证据去核答案里的数字。
+
+        ⚠️ `hits` 的顺序必须与 `[n]` 编号一致 —— `ref` 天然就是
+            1..N 连续编号（`_search_kb` 里同一次追加时分配），所以直接按序取。
+        """
+        hits = [
+            RetrievedChunk(
+                chunk_id=item.chunk_id,
+                document_id=item.document_id,
+                ordinal=item.ordinal,
+                content=item.content,
+                score=item.score,
+            )
+            for item in self._evidence
+        ]
+        return citation_module.audit(answer, hits)
+
     def _finish(self, answer: str, citations: list[int]) -> ToolResult:
         """交卷。**引用必须能对上** —— 对不上就退回去让它重来（循环只给一次机会）。
 
@@ -828,6 +867,34 @@ class ToolRuntime:
                 },
                 summary="交卷被拒绝（没有引用）",
             )
+        # 交卷前自查（`PLAN §13.3` 的"交卷前自查"）：
+        # 答案里的数字必须能在引用里找到。复用 pipeline 那个串号审计器，不另写一套。
+        #
+        # ⚠️ **只拦一次**（`_self_check_used`）：拦第二次就可能
+        #    “修不对 → 被拦 → 再修”无限循环，而步数是有限的。
+        # ⚠️ **查过订单就不拦**：金额 / 签收天数本来就在订单事实里，
+        #    不在知识库条款里 —— 硬拦会把正确答案卡死。
+        report = self._audit(answer)
+        self.last_audit = {
+            "checked": report.checked,
+            "unsupported": report.unsupported,
+            "issues": [item.as_dict() for item in report.issues],
+        }
+        if report.unsupported and not self._orders and not self._self_check_used:
+            self._self_check_used = True
+            numbers = sorted({atom for item in report.issues for atom in item.atoms})[:6]
+            return ToolResult(
+                name=FINISH,
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": "答案里有数字在引用里找不到",
+                    "unsupported": numbers,
+                    "hint": f"先用 {SEARCH_KB} 补证据，或者刚掉查不到的那句话。",
+                },
+                summary="交卷被拒绝（数字核对不上）",
+            )
+
         return ToolResult(
             name=FINISH,
             ok=True,

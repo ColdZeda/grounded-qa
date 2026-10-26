@@ -212,6 +212,33 @@ def _evidence(*, ref: int) -> tools.Evidence:
     )
 
 
+async def test_finish_rejects_numbers_that_are_not_in_the_citations() -> None:
+    """交卷自查：答案里的数字在引用里找不到 → **拦一次**。
+
+    这就是 `PLAN §13.3` 的"交卷前自查"：不靠模型自觉，靠一次确定性的核对。
+    """
+    runtime = _runtime()
+    runtime._evidence.append(_evidence(ref=1))
+
+    first = await runtime.dispatch(tools.FINISH, {"answer": "保修 5 年[1]。", "citations": [1]})
+    assert first.ok is False
+    assert "数字" in first.payload["error"]
+    assert "5" in str(first.payload["unsupported"])
+
+
+async def test_self_check_blocks_only_once() -> None:
+    """拦第二次就可能死循环 —— **只拦一次**，然后放行并记下审计结果。"""
+    runtime = _runtime()
+    runtime._evidence.append(_evidence(ref=1))
+
+    await runtime.dispatch(tools.FINISH, {"answer": "保修 5 年[1]。", "citations": [1]})
+    second = await runtime.dispatch(tools.FINISH, {"answer": "保修 5 年[1]。", "citations": [1]})
+
+    assert second.ok is True
+    assert runtime.last_audit is not None
+    assert runtime.last_audit["unsupported"] >= 1
+
+
 # ------------------------------------------------------------
 # ③ 集成：真库
 # ------------------------------------------------------------

@@ -164,6 +164,23 @@ class Settings(BaseSettings):
     #    代价是每问一次的输入 token 大约翻倍 —— 已重跑生成层评测确认要点命中不掉分
     #    （`uv run python evals/run.py --layer generation --mode all`）。
     history_messages: int = 12
+
+    # ---------- agent（阶段 7，`PLAN §13`）----------
+    #: 问答走哪条路。**默认 pipeline** —— agent 是待验证的路径，
+    #: 配对评测证明它更强之前不许当默认（`PLAN §13.4` 验收标准 4）。
+    #: ⚠️ `pipeline` 时必须与加入 agent 之前**逐字节一致**：分支只能出现在
+    #:    `chat.py` 拿到 question 之后、进 `RagPipeline` 之前，别的什么都不许动。
+    answer_mode: Literal["pipeline", "agent"] = "pipeline"
+    #: 最多几步。**一次模型返回算一步**（带多个 `tool_calls` 也只算一步 ——
+    #: 并行调用是省步数的，不该反过来罚它）。
+    agent_max_steps: int = 6
+    #: 整轮问答的总预算（秒）。超了 → **立刻回落确定性 pipeline**。
+    #: ⚠️ 这个数字就是"把最多花多少的权力留在代码里"那句话的实体（`architecture §9.48`）。
+    agent_total_budget_seconds: float = 20.0
+    #: 单步预算（秒）—— 等模型一次返回的上限。卡住的某一步不该吃掉整轮预算。
+    agent_step_timeout_seconds: float = 8.0
+    #: 检索落空 / 置信度不够时，允许"换个说法再查一次"几次（自愈）。
+    agent_max_retries: int = 1
     # 外部模型 API 超时（秒）。2C2G 上不能让一个卡住的请求把连接池占死。
     model_request_timeout_seconds: float = 60.0
 

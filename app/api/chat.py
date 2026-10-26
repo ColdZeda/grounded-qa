@@ -31,8 +31,9 @@ from app.db.models.conversation import Channel, Conversation, Message, MessageRo
 from app.db.models.image import Image
 from app.db.models.user import User, UserRole
 from app.db.repository import TenantScopedRepository
-from app.orders import order_snapshot, render_order_facts, resolve_orders
+from app.orders import find_order, order_snapshot, render_order_facts, resolve_orders
 from app.rag import followup as followup_module
+from app.rag.agent import AgentRunner, ToolEvent
 from app.rag.pipeline import Answer, Delta, RagPipeline, Sources, build_clients
 from app.rag.providers import ChatClient, EmbeddingClient, ModelAPIError, RerankClient
 from app.rag.vision import ImageAnalysisClient, build_image_client
@@ -172,7 +173,7 @@ async def _prepare_image(
 
 
 async def _order_context(
-    session: SessionDep, user: User, *, text: str
+    session: SessionDep, user: User, *, text: str, extra_order_no: str | None = None
 ) -> tuple[list[dict[str, object]], str, list[datetime]]:
     """从这段文字里捞单号 → 查库 → 事实卡片 ＋ 提示词块 ＋ 下单时间。
 
@@ -186,6 +187,12 @@ async def _order_context(
     # ⚠️ 过滤口径：**只按租户**（决策 D5）—— 坐席能查本租户任意单号，
     #    跨租户仍然查不到。见 `app/orders.py::find_order` 的说明。
     orders = await resolve_orders(session, tenant_id=user.tenant_id, text=text)
+    # ⚠️ **这条就是 `PLAN §13.6` 的"回落路径也要读 scratchpad"**：
+    #    agent 上一轮查到了单号，这一轮用户只说"那保修呢"（句子里没单号）。
+    #    agent 超预算一回落 pipeline，如果不补这一下，多轮记忆就断在那一步。
+    if not orders and extra_order_no:
+        found = await find_order(session, tenant_id=user.tenant_id, order_no=extra_order_no)
+        orders = [found] if found is not None else []
     now = datetime.now(UTC)
     snapshots = [order_snapshot(order, now=now) for order in orders]
     return snapshots, render_order_facts(snapshots), [order.placed_at for order in orders]
@@ -194,6 +201,50 @@ async def _order_context(
 # ------------------------------------------------------------
 # 会话归属：与 conversations.py 同一套规则（租户 + 租户内按用户）
 # ------------------------------------------------------------
+def _scratchpad_of(conversation: Conversation) -> dict[str, object]:
+    """取这个会话的**跨轮事实**（agent 写的）。没有就是空字典。
+
+    ⚠️ 读不出来就当空，**不报错**：这是"记忆"，不是"数据"。
+        一个格式不对的 meta 不该让整次问答失败。
+    """
+    raw = (conversation.meta or {}).get("scratchpad")
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+class _AgentSource:
+    """把 `AgentRunner` 套成 `source.answer(question=..., history=...)` 的形状。
+
+    ⚠️ 为什么要这个适配器：`AgentRunner` 的问题与历史是**构造时**就定下的
+        （它要把它们组成系统提示），而 `_stream` 只认 pipeline 那个形状。
+        两边不动，只加一层适配 —— 比去改任一边的接口都安全。
+    """
+
+    def __init__(self, runner: AgentRunner) -> None:
+        self._runner = runner
+
+    def answer(self, *, question: str | None = None, history: object = None) -> AsyncIterator:
+        # 已在构造时定下，这里的参数只为了对齐形状（念念不忘，念念不忘）。
+        return self._runner.answer()
+
+
+def _agent_meta(final: Answer | None) -> dict[str, object] | None:
+    """agent 跑过的痕迹 → `messages.meta`。**pipeline 模式下返回 `None`**（不写这个字段）。
+
+    ⚠️ 没有它，agent 的行为**无法归因** —— 路径不固定，事后只能靠这串轨迹回放
+        "它当时为什么调了这个工具、为什么没调那个"。
+    """
+    if final is None:
+        return None
+    trace = final.extra.get("agent_trace")
+    if not isinstance(trace, list):
+        return None
+    meta: dict[str, object] = {"agent_trace": trace}
+    for key in ("agent_steps", "agent_retries", "degraded", "awaiting"):
+        if key in final.extra:
+            meta[key] = final.extra[key]
+    return meta
+
+
 async def _load_conversation(
     session: SessionDep, user: User, conversation_id: uuid.UUID
 ) -> Conversation:
@@ -286,8 +337,15 @@ async def ask(
 
     # ④ 订单：从"图里读到的文字 + 用户原话"里捞单号，精确查库。
     #    ⚠️ 图里的转写排前面：用户从图里抄单号时，那句话往往就是"SF10001 这单…"。
+    scratchpad = _scratchpad_of(conversation)
     order_snapshots, order_facts, order_placed_at = await _order_context(
-        session, current_user, text=f"{image_context.text} {question}".strip()
+        session,
+        current_user,
+        text=f"{image_context.text} {question}".strip(),
+        # 上一轮已经确认过的单号（仅 agent 跑过之后才会有）
+        extra_order_no=scratchpad.get("order_no")
+        if isinstance(scratchpad.get("order_no"), str)
+        else None,
     )
 
     chat, embedder, reranker = clients
@@ -340,10 +398,33 @@ async def ask(
         user_message.meta = {**(user_message.meta or {}), "followup_prev": followup_prev}
         await session.commit()
 
+    # ⑤ 选路：`ANSWER_MODE=pipeline`（默认）时 **一个字都不变**，
+    #    `agent` 才把同一个 pipeline 当作**回落目标**交给 `AgentRunner`。
+    #    ⚠️ 分支只能出现在这里：往前靠一步就会把 agent 的东西渗进老路径，
+    #       `PLAN §13.4` 要求 pipeline 模式与加之前逐字节一致。
+    mode = get_settings().answer_mode
+    source: RagPipeline | _AgentSource = pipeline
+    if mode == "agent":
+        source = _AgentSource(
+            AgentRunner(
+                session=session,
+                tenant_id=current_user.tenant_id,
+                chat=chat,
+                question=question,
+                fallback=lambda: pipeline,
+                embedder=embedder,
+                reranker=reranker,
+                settings=get_settings(),
+                history=history,
+                user_id=current_user.id,
+                scratchpad=scratchpad,
+            )
+        )
+
     return StreamingResponse(
         _stream(
             session,
-            pipeline,
+            source,
             conversation,
             question,
             history,
@@ -410,7 +491,7 @@ def _sse(event: str, data: dict[str, object]) -> str:
 
 async def _stream(
     session: SessionDep,
-    pipeline: RagPipeline,
+    source: RagPipeline | _AgentSource,
     conversation: Conversation,
     question: str,
     history: list[dict[str, str]],
@@ -428,7 +509,7 @@ async def _stream(
     """
     final: Answer | None = None
     try:
-        async for event in pipeline.answer(question=question, history=history):
+        async for event in source.answer(question=question, history=history):
             if isinstance(event, Sources):
                 payload: dict[str, object] = {
                     "citations": [c.as_dict() for c in event.citations],
@@ -453,6 +534,19 @@ async def _stream(
                 yield _sse("sources", payload)
             elif isinstance(event, Delta):
                 yield _sse("delta", {"text": event.text})
+            elif isinstance(event, ToolEvent):
+                # ⚠️ **这一帧不是装饰**：agent 比 pipeline 慢 2~4 倍，
+                #    中间几秒什么都不给，用户会以为卡死了（`PLAN §13.3`）。
+                yield _sse(
+                    "tool",
+                    {
+                        "name": event.name,
+                        "args": event.args_preview,
+                        "ok": event.ok,
+                        "ms": event.ms,
+                        "summary": event.summary,
+                    },
+                )
             elif isinstance(event, Answer):
                 final = event
                 record_chat_outcome(_outcome_of(event))
@@ -507,8 +601,17 @@ async def _persist_answer(
         #    那样阈值调优就只能靠猜，badcase 也归因不了。
         confidence=final.confidence,
         latency_ms=final.latency_ms,
+        # ⚠️ agent 跑过才有；无痕迹时保持 `None`，不给老数据增加空字段。
+        meta=_agent_meta(final),
     )
     session.add(message)
+
+    # 把这一轮**确认过的事实**并进会话的 scratchpad（下一轮"那保修呢"就靠它）。
+    # ⚠️ 新事实**覆盖**同名旧事实；没提到的字段原样保留（否则"上一轮说过的商品"会被一句寒暄冲掉）。
+    delta = final.extra.get("scratchpad")
+    if isinstance(delta, dict) and delta:
+        current = _scratchpad_of(conversation)
+        conversation.meta = {**(conversation.meta or {}), "scratchpad": {**current, **delta}}
     # ⚠️ 会话列表是按 `updated_at` 倒序排的。助手消息落库**不会**自动更新
     #    `conversations.updated_at`（那是另一张表），所以这里显式碰一下 ——
     #    否则"刚聊过的会话"不会浮到列表最上面，用起来非常别扭。

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -60,6 +62,86 @@ class ModelAPIError(RuntimeError):
 
 def _auth_headers(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """模型要的一次工具调用。
+
+    ⚠️ `raw_arguments` **保留模型给的原文字符串**，不丢掉。参数 JSON 坏掉时
+        （很常见：少个引号、多个逗号），循环要能把原文原样骂回去让它自己改 ——
+        只留 `parse_error` 的话，模型根本不知道自己写错了什么。
+    """
+
+    id: str
+    name: str
+    raw_arguments: str
+    #: 解析成功时的参数字典；失败是 `None`（此时看 `parse_error`）。
+    arguments: dict[str, Any] | None = None
+    parse_error: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolChatResult:
+    """一次"带工具"的对话结果。"""
+
+    #: 模型的自然语言部分。**agent 不用它当答案**（答案只来自 `finish` 工具），
+    #: 但它在 trace 里有价值：能看出模型"想说什么"却选错了工具。
+    content: str
+    tool_calls: list[ToolCall]
+    usage: dict[str, int]
+    finish_reason: str
+
+
+def _parse_usage(usage: object) -> dict[str, int] | None:
+    """从响应体里取 `usage`。字段白名单与流式那边一致（`_USAGE_FIELDS`）。"""
+    if not isinstance(usage, dict):
+        return None
+    counted = {key: int(usage[key]) for key in _USAGE_FIELDS if isinstance(usage.get(key), int)}
+    return counted or None
+
+
+def _parse_tool_call(item: object) -> ToolCall:
+    """把 `choices[0].message.tool_calls[i]` 解析成 `ToolCall`。
+
+    ⚠️ **参数解析失败不算致命错误**：OpenAI 兼容端点里 `arguments` 是个**字符串**，
+        内容是 JSON。模型偶尔会吐出带尾逗号 / 用单引号的"差不多是 JSON"的东西。
+        这时**不抛异常**，而是把 `parse_error` 带回去 —— 循环会把它作为工具错误
+        回灌，模型下一步多半能自己改对（这就是"自愈"的一半）。
+    """
+    if not isinstance(item, dict):
+        return ToolCall(id="", name="", raw_arguments="", parse_error="tool_call 不是对象")
+    raw_id = str(item.get("id") or "")
+    function = item.get("function")
+    if not isinstance(function, dict):
+        return ToolCall(id=raw_id, name="", raw_arguments="", parse_error="缺少 function 字段")
+    name = str(function.get("name") or "")
+    raw_arguments = function.get("arguments")
+    if isinstance(raw_arguments, dict):
+        # 个别端点直接把对象塞进来（不合规范但见过）—— 当成已解析。
+        return ToolCall(
+            id=raw_id, name=name, raw_arguments=json.dumps(raw_arguments), arguments=raw_arguments
+        )
+    text = str(raw_arguments or "")
+    if not text.strip():
+        return ToolCall(id=raw_id, name=name, raw_arguments=text, arguments={})
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return ToolCall(
+            id=raw_id,
+            name=name,
+            raw_arguments=text,
+            parse_error=f"参数不是合法 JSON（{exc.msg}）",
+        )
+    if not isinstance(parsed, dict):
+        return ToolCall(
+            id=raw_id,
+            name=name,
+            raw_arguments=text,
+            parse_error="参数必须是 JSON 对象",
+        )
+    return ToolCall(id=raw_id, name=name, raw_arguments=text, arguments=parsed)
 
 
 # ------------------------------------------------------------
@@ -169,6 +251,68 @@ class ChatClient:
             return str(body["choices"][0]["message"]["content"])
         except (KeyError, IndexError, TypeError) as exc:
             raise ModelAPIError(f"对话 API 返回结构不符合预期：{body}") from exc
+
+    async def complete_with_tools(
+        self,
+        messages: Sequence[dict[str, Any]],
+        tools: Sequence[dict[str, Any]],
+        *,
+        usage: dict[str, int] | None = None,
+        request_timeout: float | None = None,
+        tool_choice: str = "auto",
+    ) -> ToolChatResult:
+        """一次**带工具**的非流式对话（agent 循环的每一步）。
+
+        ⚠️ **为什么 agent 走非流式、而 pipeline 走流式**：
+            流式下一帧帧拼 `tool_calls` 的分片（`function.arguments` 会被切成好几段）
+            极容易拼错，而 agent 的每一步本来也**不给人看中间文本**——它要的是"调哪个工具"。
+            真正给用户看的流式只有最后那一句答案（由 `finish` 触发，见 `agent.py`）。
+        ⚠️ `request_timeout` 是**单步预算**（`PLAN §13.3`：单步 8 s）。httpx 支持按请求覆盖超时，
+            这样"某一步卡住"不会拖到整个请求超时。
+        """
+        payload: dict[str, object] = {
+            "model": self._model,
+            "messages": list(messages),
+            "tools": list(tools),
+            "tool_choice": tool_choice,
+            "stream": False,
+        }
+        client = self._client_or_default()
+
+        try:
+            response = await client.post(
+                f"{self._base_url}/chat/completions",
+                headers=_auth_headers(self._api_key),
+                json=payload,
+                **({"timeout": request_timeout} if request_timeout is not None else {}),
+            )
+        except httpx.HTTPError as exc:
+            raise ModelAPIError(f"对话 API 连接失败：{exc}") from exc
+
+        if response.status_code >= 400:
+            raise ModelAPIError(f"对话 API 返回 {response.status_code}：{response.text[:300]}")
+
+        body = response.json()
+        try:
+            choice = body["choices"][0]
+            message = choice["message"]
+            finish_reason = str(choice.get("finish_reason") or "")
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ModelAPIError(f"对话 API 返回结构不符合预期：{body}") from exc
+
+        if usage is not None:
+            counted = _parse_usage(body.get("usage"))
+            if counted:
+                usage.clear()
+                usage.update(counted)
+
+        calls = [_parse_tool_call(item) for item in (message.get("tool_calls") or [])]
+        return ToolChatResult(
+            content=str(message.get("content") or ""),
+            tool_calls=calls,
+            usage=dict(usage or {}),
+            finish_reason=finish_reason,
+        )
 
 
 def _parse_stream_chunk(data: str) -> str:
