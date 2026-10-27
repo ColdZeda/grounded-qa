@@ -108,6 +108,58 @@ function pickMode(mode: 'fast' | 'agent'): void {
 }
 const abort = ref<AbortController | null>(null)
 
+/**
+ * "最后一条是我的提问、后面没有回答"（2026-10-28 新增的兜底）。
+ *
+ * ⚠️ **为什么需要它**：走查第三次发现，生成中途切走页面会让后端那一轮**被取消** ——
+ *    不是"落库失败"，是答案没生成、没落库、连 token 都没记，库里只剩一条没人回的提问。
+ *    现在已经改成"离开也让它跑完"（见 `onBeforeUnmount`），但**仍然可能**发生
+ *    （关标签页 / 断网 / 后端真的挂了），所以这里要显式告诉人，而不是显示一片空白。
+ * ⚠️ 不要一看到就断言"失败了"：更常见的情况是**它还在生成**。所以先轮询，
+ *    见 `watchOrphan`。
+ */
+const orphanQuestion = ref('')
+/** 轮询的令牌：换会话 / 重新加载时作废上一轮，避免两个循环抢着改 `messages`。 */
+let orphanSeq = 0
+
+/**
+ * 回来时发现"提问没人回"⟹ 轮询几次看是不是还在生成。
+ *
+ * 时间表：0.4s → 2s → 2s → 2s（共 ~6.4s，比 agent 的 30s 预算短得多，
+ * 只用来盖住"你切走的这一下还没落库"的窗口）。拉了 4 次都没有 ⟹ 保留提示 + 重试。
+ */
+async function watchOrphan(conversationId: string): Promise<void> {
+  const seq = ++orphanSeq
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 400 : 2000))
+    if (seq !== orphanSeq || !orphanQuestion.value) return
+    try {
+      const history = await listMessages(conversationId)
+      // ⚠️ 判据是"条数变多了"而不是"最后一条是 assistant"：
+      //    后端可能落进来的是**两条**（提问 + 回答），比位置判断稳。
+      if (history.length > messages.value.length) {
+        messages.value = toUiList(history)
+        orphanQuestion.value = ''
+        await scrollToBottom(true)
+        return
+      }
+    } catch {
+      // 拉不到就下一轮再试 —— 真都没有，就停在提示上（让人自己点重试）
+    }
+  }
+}
+
+/**
+ * 重试 = **把那句话填回输入框**，由人自己按发送。
+ *
+ * ⚠️ 刻意**不新增"重新生成"接口**：那要动 `ask()` 的入参语义（复用哪条提问、
+ *    旧的孤儿怎么处理），收益只是少按一次回车。填回输入框零风险、行为可预期。
+ */
+function retryOrphan(): void {
+  draft.value = orphanQuestion.value
+  orphanQuestion.value = ''
+}
+
 const scroller = ref<HTMLElement | null>(null)
 /** 用户是不是"贴着底部"。不贴就说明他在往上翻历史 —— 这时**不能**把他拽回来。 */
 const stick = ref(true)
@@ -381,6 +433,16 @@ async function load(): Promise<void> {
     //    坐席会以为顾客看见了，其实没有。这是最坏的一种"看起来能用"。
     conversationChannel.value = conversation.channel
     messages.value = toUiList(history)
+    // ⚠️ 最后一条是**我的提问**、后面没有回答 ⟹ 要么还在生成，要么那一轮被中断了。
+    //    两种情况都要给人一个交代（以前是**一片空白**，看着像卡死）。
+    const last = messages.value[messages.value.length - 1]
+    if (last?.role === 'user') {
+      orphanQuestion.value = last.content
+      void watchOrphan(id)
+    } else {
+      orphanQuestion.value = ''
+      orphanSeq += 1 // 作废可能在跑的轮询
+    }
     await scrollToBottom(true)
   } catch (err) {
     loadError.value =
@@ -557,9 +619,13 @@ async function send(): Promise<void> {
     }
   } finally {
     pending.streaming = false
-    toolLabel.value = ''
-    phase.value = 'idle'
-    abort.value = null
+    // ⚠️ **只清"我这一路"的状态**：离开页面不再 abort（见 `onBeforeUnmount`）⟹
+    //    旧会话的流可能在**新一次提问之后**才收尾，无条件写会把新的那条打断。
+    if (abort.value === controller) {
+      abort.value = null
+      toolLabel.value = ''
+      phase.value = 'idle'
+    }
     void scrollToBottom()
   }
 }
@@ -581,9 +647,19 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 onBeforeUnmount(() => {
-  // 离开页面就别再收流了。⚠️ 后端会继续把它生成完并落库 —— 这是刻意的
-  // （否则"我看到了半截，刷新却没了"）。这里只是不再占用这个连接。
-  abort.value?.abort()
+  // ⚠️⚠️ **2026-10-28 改：这里不再 `abort()`。**
+  //
+  //    以前离开页面就掐断连接 ⟹ 后端那一轮被 Starlette **取消**：
+  //    答案不生成、不落库、`record_tokens` 也不执行（**钱花了、账没记**），
+  //    会话里只剩一条没人回的提问。走查第三次实测：两次切走，两次都这样
+  //    （`chat.py` 里"断开也会落库"那句注释只在最后几十毫秒成立，等于没有）。
+  //
+  //    现在只"不再渲染"，让流自己读完 ⟹ 后端照常生成 → 落库 → 记账，
+  //    你回到这个会话能看到答案（`watchOrphan` 负责"还没落库"的那几秒）。
+  //    ⚠️ 用户点「停止」仍然 abort —— 那是**明确的意图**，见 `stop()`。
+  //    ⚠️ 代价：离开页面这一轮照旧把 token 花完。它本来就在花，以前是花完还没结果。
+  phase.value = 'idle'
+  toolLabel.value = ''
 })
 </script>
 
@@ -639,6 +715,15 @@ onBeforeUnmount(() => {
           :message="message"
           @open-context="openContext"
         />
+        <!--
+          "提问没人回"的交代（2026-10-28）。
+          ⚠️ 大多数时候它在几百毫秒后就自己消失（`watchOrphan` 拉到答案了）；
+             真消失了才说明那一轮确实没跑完 —— 那时候**必须**给人一条出路。
+        -->
+        <p v-if="orphanQuestion" class="orphan">
+          这条提问还没有回答（可能还在生成，也可能你切走页面时中断了）。
+          <button type="button" class="orphan__retry" @click="retryOrphan">填回输入框重发</button>
+        </p>
       </div>
     </main>
 
@@ -828,6 +913,37 @@ onBeforeUnmount(() => {
   max-width: 820px;
   margin: 0 auto;
   color: var(--text-muted);
+}
+
+/* 「提问没人回」的提示：**低调**但看得见 —— 它是兜底说明，不是错误。 */
+.orphan {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.orphan__retry {
+  padding: 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.orphan__retry:hover {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 .intro {

@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Annotated
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select, update
@@ -540,9 +541,10 @@ async def _stream(
 ) -> AsyncIterator[str]:
     """把 pipeline 的领域事件翻译成 SSE 帧，并负责助手消息落库。
 
-    ⚠️ **落库放在 `finally`**：客户端中途断开（关页面 / 切网络）会让这个生成器被
-        `GeneratorExit`，如果落库写在最后一行，那条回答就永远丢了 ——
-        而用户明明已经看到了半截。
+    ⚠️ **落库在 `finally`，而且自带 session**（2026-10-28 改）：
+        客户端中途断开会让这个生成器被取消/关掉，若落库还挂在请求级 session 上，
+        那一轮就永远丢了 —— 而用户明明已经看到（或正要看到）答案。
+        现在的做法见下面 `finally` 那段注释。
     """
     final: Answer | None = None
     try:
@@ -625,21 +627,38 @@ async def _stream(
         record_chat_outcome("error")
         yield _sse("error", {"detail": f"{type(exc).__name__}: {exc}", "stage": "pipeline"})
     finally:
-        await _persist_answer(session, conversation, final)
-        # ⚠️ **记账也放 finally**：用户中途关掉页面（`GeneratorExit`）时，
-        #    token 其实**已经花了** —— 不记的话，最费钱的那类请求
-        #    （问大问题、看两眼就走）反而完全不进账。
-        # ⚠️ 拒答时 `usage` 是空的（根本没调模型）⟹ 记 0，不占额度。
-        if final is not None:
-            await guard.record_tokens(
-                user_id, int(final.usage.get("total_tokens") or 0), channel=Channel.WEB.value
-            )
+        # ⚠️⚠️ **2026-10-28：收尾动作放进 `CancelScope(shield=True)`。**
+        #
+        #    走查第三次实测（生产库 + nginx 日志）：生成中途切走页面 ⟹ 这一轮被
+        #    **取消** —— 答案不生成、不落库、`record_tokens` 也不执行（钱花了、账没记），
+        #    会话里只剩一条没人回的提问。原来那句"断开也会落库"只在"答案已生成完、
+        #    就差最后一句写库"那几十毫秒里成立，**等于没有**。
+        #
+        #    `shield=True` 的意思是：**已经被取消的任务**在退出这个 scope 之前不会被
+        #    再打断一次 ⟹ 这两个"必须做完"的动作能真的做完。
+        #
+        #    ⚠️ **它救不了"生成途中就被取消"**（那种连 `Answer` 都没产生，没有东西可落）——
+        #       那种要靠"生成与转发解耦"（候选 `W25`）。真正挡住它的是前端那条
+        #       「离开页面不再 abort」（`ChatView.onBeforeUnmount`）。
+        #    ⚠️ 刻意**不换独立 session / 不另起 task**：`get_session_factory()` 是进程级
+        #       引擎，而测试是"每个用例一个事件循环"（约定 16）⟹ 在 `finally` 里开新
+        #       session 会把连接池跨循环复用，整批测试跟着红（这次真踩到了）。
+        #       用请求的 session 是安全的：yield 依赖在**响应结束之后**才拆。
+        with anyio.CancelScope(shield=True):
+            await _persist_answer(session, conversation, final)
+            # ⚠️ **记账也放这里**：用户中途关掉页面时 token 其实**已经花了**，
+            #    不记的话，最费钱的那类请求（问大问题、看两眼就走）反而完全不进账。
+            # ⚠️ 拒答时 `usage` 是空的（根本没调模型）⟹ 记 0，不占额度。
+            if final is not None:
+                await guard.record_tokens(
+                    user_id, int(final.usage.get("total_tokens") or 0), channel=Channel.WEB.value
+                )
 
 
 async def _persist_answer(
     session: SessionDep, conversation: Conversation, final: Answer | None
 ) -> None:
-    """把助手回答落库（即使客户端提前断开也要落）。"""
+    """把助手回答落库（即使客户端提前断开也要落 —— 由调用方的 shield 保证）。"""
     if final is None or not final.text:
         return
     message = Message(
@@ -679,3 +698,4 @@ async def _persist_answer(
         await session.commit()
     except Exception:
         await session.rollback()
+        raise
