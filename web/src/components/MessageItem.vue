@@ -20,7 +20,16 @@ import { renderAnswer } from '@/lib/markdown'
 import { isDetailed } from '@/stores/prefs'
 import type { UiMessage } from '@/types/ui'
 
-const props = defineProps<{ message: UiMessage }>()
+const props = defineProps<{
+  message: UiMessage
+  /**
+   * 这条消息所在会话的 id。
+   *
+   * ⚠️ **只为"上报错误的兜底"存在**（2026-10-28）：本页刚生成的回答 id 是 `local-N`，
+   *    不是 UUID，直接提交会被后端拒 ⟹ 拿到会话 id 才能回去查出真 id。
+   */
+  conversationId?: string
+}>()
 
 /**
  * 纠错反馈的本地状态。
@@ -79,6 +88,9 @@ async function sendFeedback(): Promise<void> {
       message_id: props.message.id,
       verdict,
       note: feedbackNote.value.trim() || null,
+      // 兜底用：id 是 `local-N` 时，靠"会话 + 答案正文"去换真 id（见 `api/feedback.ts`）
+      conversation_id: props.conversationId ?? null,
+      answer: props.message.content,
     })
     feedbackDone.value = true
     feedbackOpen.value = false

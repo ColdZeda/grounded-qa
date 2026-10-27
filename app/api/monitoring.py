@@ -160,6 +160,19 @@ PANELS: tuple[_Panel, ...] = (
         ),
     ),
     _Panel(
+        key="citation_repaired_24h",
+        group="问答与用量",
+        title="24 小时自动改正引用编号",
+        unit="count",
+        hint=(
+            "修法 D 在**发出去之前**改掉的编号次数（只改编号、正文一个字不动）。"
+            "**有数 = 兜底在工作**；它持续变多说明模型串号变多了，那是另一个问题"
+        ),
+        # ⚠️ `or vector(0)`：这个计数器**可能一条都还没产生过**（序列不存在），
+        #    没有它 Prometheus 直接返回空 ⟹ 界面显示「—」，看起来像坏了。
+        expr="sum(increase(gq_citation_repaired_total[24h])) or vector(0)",
+    ),
+    _Panel(
         key="tokens_24h",
         group="问答与用量",
         title="24 小时 token",

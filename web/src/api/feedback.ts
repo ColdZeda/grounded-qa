@@ -10,6 +10,7 @@
  */
 
 import { apiJson } from './client'
+import { listMessages } from './conversations'
 
 export type FeedbackVerdict = 'wrong_answer' | 'wrong_citation' | 'other'
 
@@ -21,6 +22,10 @@ export interface FeedbackOut {
   answer_snapshot: string
   citations_snapshot: Record<string, unknown>[]
   created_at: string
+  /** 客户问的那一句。⚠️ 迁移前的老记录是 `null` —— 要明说"没存到"，别当成空问题。 */
+  question_snapshot: string | null
+  /** 这条回答属于哪个会话（「打开原会话」用）。会话被删后为 `null`。 */
+  conversation_id: string | null
 }
 
 /** 管理员清单里的一条：多出"谁做的"和"草稿什么状态"。 */
@@ -72,19 +77,76 @@ export interface PublishOut {
   conflicts: ConflictItem[]
 }
 
+/** UUID 的形状。`local-1` 这种临时 id 就是靠它认出来的。 */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * 把"界面上那条消息的 id"换成**服务端真 id**（2026-10-28 走查 D1）。
+ *
+ * ## 为什么需要这一步
+ *
+ * 本页**刚生成**的回答在界面上是乐观消息，id 是 `local-1` / `local-2`（`ChatView.nextLocalId`）；
+ * 它要等这一轮跑完、落库之后才有真 UUID。以前直接把这个临时 id 发给服务端 ⟹
+ * **422「Input should be a valid UUID」**（界面上还显示成英文）。
+ * 症状很刁：**刷新过的旧回答能提交，当场生成的必失败**。
+ *
+ * ## 做法
+ *
+ * id 不像 UUID ⟹ 拉一次消息列表，用**内容相同的那条 assistant** 对出真 id；
+ * 对不上就等 1.2 秒再试（最多 3 次，覆盖"答案刚落库"的那一两秒）。
+ * 仍然对不上才报错 —— 那句话是给人看的，不是英文原文。
+ */
+async function resolveMessageId(payload: {
+  message_id: string
+  conversation_id?: string | null
+  answer?: string
+}): Promise<string> {
+  if (UUID_RE.test(payload.message_id)) return payload.message_id
+  const conversationId = payload.conversation_id
+  if (!conversationId) {
+    throw new Error('这条回答还没落库，请稍等一两秒再点一次')
+  }
+  const wanted = (payload.answer ?? '').trim()
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const history = await listMessages(conversationId)
+    // 从后往前找：同一段话只可能出现在最后一条（重复提问也是后者才是刚生成的这条）
+    for (let i = history.length - 1; i >= 0; i -= 1) {
+      const item = history[i]
+      if (item.role !== 'user' && item.content.trim() === wanted) return item.id
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+  }
+  throw new Error('这条回答还没落库，请稍等一两秒再点一次')
+}
+
 export async function submitFeedback(payload: {
   message_id: string
   verdict: FeedbackVerdict
   note?: string | null
+  /** 会话 id：只在需要"临时 id → 真 id"时用得上。 */
+  conversation_id?: string | null
+  /** 当时的答案正文：用来在列表里认出"是哪一条"。 */
+  answer?: string
 }): Promise<FeedbackOut> {
+  const messageId = await resolveMessageId(payload)
+  const body = {
+    message_id: messageId,
+    verdict: payload.verdict,
+    note: payload.note ?? null,
+  }
   return apiJson<FeedbackOut>('/feedback', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   })
 }
 
-export async function listFeedback(limit = 50): Promise<FeedbackAdminOut[]> {
-  return apiJson<FeedbackAdminOut[]>(`/feedback?limit=${limit}`)
+export async function listFeedback(
+  limit = 50,
+  verdict?: FeedbackVerdict,
+): Promise<FeedbackAdminOut[]> {
+  const query = new URLSearchParams({ limit: String(limit) })
+  if (verdict) query.set('verdict', verdict)
+  return apiJson<FeedbackAdminOut[]>(`/feedback?${query.toString()}`)
 }
 
 export async function adoptFeedback(

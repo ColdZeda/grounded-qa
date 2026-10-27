@@ -102,12 +102,15 @@ async def create_feedback(
             AnswerFeedback.user_id == current_user.id,
         )
     )
+    question = await _question_before(session, message)
     if existing is not None:
         # 覆盖：同一个人改了主意，不该留两条互相矛盾的说法
         existing.verdict = payload.verdict
         existing.note = (payload.note or "").strip() or None
         existing.answer_snapshot = message.content
         existing.citations_snapshot = list(message.citations or [])
+        existing.question_snapshot = question
+        existing.conversation_id = message.conversation_id
         await session.commit()
         await session.refresh(existing)
         return existing
@@ -119,12 +122,37 @@ async def create_feedback(
         verdict=payload.verdict,
         note=(payload.note or "").strip() or None,
         answer_snapshot=message.content,
+        # ⚠️ 提问也一起冻住（2026-10-28 D3）：只给答案，很多"错"根本判不了 ——
+        #    可能是问得不清楚、也可能是上一轮的上下文没带上。
+        question_snapshot=question,
+        conversation_id=message.conversation_id,
         citations_snapshot=list(message.citations or []),
     )
     session.add(feedback)
     await session.commit()
     await session.refresh(feedback)
     return feedback
+
+
+async def _question_before(session: SessionDep, message: Message) -> str | None:
+    """取这条助手回答**对应的那句提问**（同一会话里，它之前最近的一条 user）。
+
+    ⚠️ 用 `created_at <= 助手消息` 而不是"往前数一条"：中间可能插进系统提示或另一轮
+        并发问答，按角色找更稳。
+    ⚠️ 找不到就返回 `None`（老数据 / 奇怪的会话），界面上会明说"没存到提问"。
+    """
+    stmt = (
+        select(Message.content)
+        .where(
+            Message.tenant_id == message.tenant_id,
+            Message.conversation_id == message.conversation_id,
+            Message.role == MessageRole.USER,
+            Message.created_at <= message.created_at,
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    )
+    return await session.scalar(stmt)
 
 
 @router.get(
@@ -137,14 +165,21 @@ async def list_feedback(
     session: SessionDep,
     current_user: CurrentUser,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    verdict: Annotated[FeedbackVerdict | None, Query()] = None,
 ) -> list[FeedbackAdminOut]:
     """按时间倒序的反馈清单。
 
     ⚠️ **只用 `TenantScopedRepository`**（约定 12）：这张表里的每一行都带租户，
         忘了加 `WHERE tenant_id` 在这里等于把别家的问题清单给出去。
+    ⚠️ `verdict` 过滤是给**按类分组**用的（2026-10-28 D2）：三种"哪里不对"的处理方式
+        本来就不一样（答案错 → 改内容；引用错 → 看串号；其他 → 先读），
+        混成一条流之后，管理员每次都要自己挑。分页在**组内**做（`limit` 逐组递增）。
     """
     repo = TenantScopedRepository(session, tenant_id=current_user.tenant_id, model=AnswerFeedback)
-    stmt = repo.select().order_by(AnswerFeedback.created_at.desc()).limit(limit)
+    stmt = repo.select()
+    if verdict is not None:
+        stmt = stmt.where(AnswerFeedback.verdict == verdict)
+    stmt = stmt.order_by(AnswerFeedback.created_at.desc()).limit(limit)
     return await _decorate(
         session, current_user.tenant_id, list((await session.scalars(stmt)).all())
     )

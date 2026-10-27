@@ -125,13 +125,20 @@ let orphanSeq = 0
 /**
  * 回来时发现"提问没人回"⟹ 轮询几次看是不是还在生成。
  *
- * 时间表：0.4s → 2s → 2s → 2s（共 ~6.4s，比 agent 的 30s 预算短得多，
- * 只用来盖住"你切走的这一下还没落库"的窗口）。拉了 4 次都没有 ⟹ 保留提示 + 重试。
+ * 时间表：先 0.4s 一次，之后每 2s 一次，**总共约 35 秒**（`ORPHAN_WAIT_MS`）。
+ * ⚠️ 为什么是 35 秒：agent 的**总预算是 30 秒**（`agent_total_budget_seconds`）。
+ *    以前只等 6.4 秒就停手 —— 那条其实还在生成，界面却已经说"没生成完"，
+ *    等于把正在发生的事报成故障。宁可多问十几次（几十字节的 GET），也不要误报。
  */
+const ORPHAN_WAIT_MS = 35_000
+
 async function watchOrphan(conversationId: string): Promise<void> {
   const seq = ++orphanSeq
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 400 : 2000))
+  const deadline = Date.now() + ORPHAN_WAIT_MS
+  let first = true
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, first ? 400 : 2000))
+    first = false
     if (seq !== orphanSeq || !orphanQuestion.value) return
     try {
       const history = await listMessages(conversationId)
@@ -144,7 +151,7 @@ async function watchOrphan(conversationId: string): Promise<void> {
         return
       }
     } catch {
-      // 拉不到就下一轮再试 —— 真都没有，就停在提示上（让人自己点重试）
+      // 拉不到就下一轮再试 —— 真都没有，就停在提示上（让人自己点重发）
     }
   }
 }
@@ -713,6 +720,7 @@ onBeforeUnmount(() => {
           v-for="message in messages"
           :key="message.id"
           :message="message"
+          :conversation-id="id"
           @open-context="openContext"
         />
         <!--
@@ -721,7 +729,7 @@ onBeforeUnmount(() => {
              真消失了才说明那一轮确实没跑完 —— 那时候**必须**给人一条出路。
         -->
         <p v-if="orphanQuestion" class="orphan">
-          这条提问还没有回答（可能还在生成，也可能你切走页面时中断了）。
+          这条提问还没有回答（可能还在生成，也可能你切走页面时中断了）。你可以继续等待，或
           <button type="button" class="orphan__retry" @click="retryOrphan">填回输入框重发</button>
         </p>
       </div>

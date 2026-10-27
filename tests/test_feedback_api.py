@@ -286,6 +286,95 @@ async def test_list_is_admin_only(client: Any, make_account, login) -> None:
 
 
 # ------------------------------------------------------------
+# 快照要含"客户问的那句" ＋ 原会话；清单可按类过滤（2026-10-28 D2/D3）
+# ------------------------------------------------------------
+async def _seed_question(
+    session: AsyncSession, *, tenant_id: uuid.UUID, conversation_id: uuid.UUID, text: str
+) -> Message:
+    """在助手回答**之前**塞一条用户提问（提问的时间早于答案）。"""
+    question = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation_id,
+        role=MessageRole.USER,
+        content=text,
+    )
+    session.add(question)
+    await session.commit()
+    await session.refresh(question)
+    return question
+
+
+@pytest.mark.integration
+async def test_feedback_snapshots_the_question_and_conversation(
+    client: Any, make_account, login, session: AsyncSession
+) -> None:
+    """快照里要有**客户问的那一句** ＋ 会话 id。
+
+    ⚠️ 只存答案是判不了的：很多"答错了"其实是问题本身不清楚，或者上一轮的上下文没带上。
+        看不到提问，三个月后就只剩一句"这里错了"（那就等于没有记录）。
+    """
+    account = await make_account(label="fb-q")
+    token = await login(account.email, account.password)
+    conversation = await _new_conversation(client, token)
+    conversation_id = uuid.UUID(conversation["id"])
+    await _seed_question(
+        session, tenant_id=account.tenant_id, conversation_id=conversation_id, text="保修多久？"
+    )
+    message = await _seed_answer(
+        session,
+        tenant_id=account.tenant_id,
+        conversation_id=conversation_id,
+        text="家具主体 2 年。",
+    )
+
+    resp = await client.post(
+        FEEDBACK,
+        json={"message_id": str(message.id), "verdict": "wrong_answer", "note": "要分部件"},
+        headers=account.auth(token),
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["question_snapshot"] == "保修多久？"
+    assert body["conversation_id"] == str(conversation_id)
+
+
+@pytest.mark.integration
+async def test_list_feedback_can_filter_by_verdict(
+    client: Any, make_account, login, session: AsyncSession
+) -> None:
+    """按类分组（D2）：`?verdict=` 只回那一类，三种处理动作本来就不一样。"""
+    admin = await make_account(label="fb-group", role=UserRole.ADMIN)
+    token = await login(admin.email, admin.password)
+    headers = admin.auth(token)
+    conversation = await _new_conversation(client, token)
+    conversation_id = uuid.UUID(conversation["id"])
+
+    created: dict[str, uuid.UUID] = {}
+    for verdict in ("wrong_answer", "wrong_citation"):
+        message = await _seed_answer(
+            session,
+            tenant_id=admin.tenant_id,
+            conversation_id=conversation_id,
+            text=f"{verdict} 的答案",
+        )
+        resp = await client.post(
+            FEEDBACK,
+            json={"message_id": str(message.id), "verdict": verdict},
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
+        created[verdict] = uuid.UUID(resp.json()["id"])
+
+    only_answer = await client.get(f"{FEEDBACK}?verdict=wrong_answer", headers=headers)
+    assert only_answer.status_code == 200
+    ids = [row["id"] for row in only_answer.json()]
+    assert ids == [str(created["wrong_answer"])]
+
+    both = await client.get(FEEDBACK, headers=headers)
+    assert len(both.json()) == 2
+
+
+# ------------------------------------------------------------
 # 采纳入库：草稿 → 人工发布（W22 / D11）
 # ------------------------------------------------------------
 async def _account_with_feedback(client, make_account, login, session, text: str):

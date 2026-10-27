@@ -29,11 +29,61 @@ import {
 } from '@/api/feedback'
 import { currentUser } from '@/stores/auth'
 
-const items = ref<FeedbackAdminOut[]>([])
 const loading = ref(true)
 const error = ref('')
 const notice = ref('')
 const busyId = ref('')
+
+/**
+ * 三组反馈（2026-10-28 D2）：**按"哪里不对"分开**，各自翻页。
+ *
+ * ⚠️ 为什么分：三类的处理动作根本不同 —— 答案错要去改内容、引用错要去看串号、
+ *    其他先得读一遍。混成一条时间线之后，管理员每次都在自己心里分拣。
+ * ⚠️ 为什么各自 `limit`（**按组翻页**，六条硬规矩 ⑥）：一个组不能把配额吃光；
+ *    也不做"拉全量在前端切"—— 那样一旦反馈多了，首屏就会慢得莫名其妙。
+ */
+type Verdict = FeedbackAdminOut['verdict']
+
+interface Group {
+  verdict: Verdict
+  label: string
+  hint: string
+  items: FeedbackAdminOut[]
+  limit: number
+  loading: boolean
+}
+
+const PAGE_SIZE = 5
+
+const groups = ref<Group[]>([
+  {
+    verdict: 'wrong_answer',
+    label: '答案错',
+    hint: '事实 / 结论不对 —— 采纳后要改的是内容',
+    items: [],
+    limit: PAGE_SIZE,
+    loading: false,
+  },
+  {
+    verdict: 'wrong_citation',
+    label: '引用错',
+    hint: '答案对、出处引错了 —— 多半是串号',
+    items: [],
+    limit: PAGE_SIZE,
+    loading: false,
+  },
+  {
+    verdict: 'other',
+    label: '其他',
+    hint: '说不清是哪一类，先读一遍',
+    items: [],
+    limit: PAGE_SIZE,
+    loading: false,
+  },
+])
+
+/** 扁平的视图（`loading` / `items.length` 这些判空逻辑只关心"有没有东西"）。 */
+const items = computed(() => groups.value.flatMap((group) => group.items))
 
 /** 正在编辑草稿的那条（`null` = 没有在编辑）。 */
 const editing = ref<{ id: string; title: string; content: string } | null>(null)
@@ -67,19 +117,33 @@ function statusTone(item: FeedbackAdminOut): string {
 
 const pending = computed(() => items.value.filter((item) => !item.published_at).length)
 
-async function load(): Promise<void> {
-  loading.value = true
+/** 拉某一组（`group.limit` 条）。刷新时三组一起重拉，各自的首屏都回到 5 条。 */
+async function loadGroup(group: Group): Promise<void> {
+  group.loading = true
   try {
-    items.value = await listFeedback()
-    error.value = ''
+    group.items = await listFeedback(group.limit, group.verdict)
   } catch (err) {
     error.value = err instanceof ApiError ? err.message : `加载失败：${(err as Error).message}`
   } finally {
-    loading.value = false
+    group.loading = false
   }
 }
 
+async function load(): Promise<void> {
+  loading.value = true
+  error.value = ''
+  for (const group of groups.value) group.limit = PAGE_SIZE
+  await Promise.all(groups.value.map(loadGroup))
+  loading.value = false
+}
+
 onMounted(load)
+
+/** 「加载更多」：**只加这一组**的条数，其他组不动。 */
+async function loadMore(group: Group): Promise<void> {
+  group.limit += PAGE_SIZE
+  await loadGroup(group)
+}
 
 /** 开始采纳：**预填原答案**，让管理员在上面改，而不是从空白页开始写。 */
 function startAdopt(item: FeedbackAdminOut): void {
@@ -194,8 +258,17 @@ function relative(iso: string): string {
         还没有反馈。在会话里对某条回答点「⚑ 上报错误」，它就会出现在这里。
       </p>
 
-      <ul v-else class="list">
-        <li v-for="item in items" :key="item.id" class="card">
+      <div v-else class="groups">
+        <section v-for="group in groups" :key="group.verdict" class="group">
+          <div class="group__head">
+            <h3 class="group__title">{{ group.label }}</h3>
+            <span class="group__hint">{{ group.hint }}</span>
+            <span class="group__count">{{ group.items.length }} 条</span>
+          </div>
+          <p v-if="group.items.length === 0" class="group__empty">这一组还没有反馈。</p>
+
+          <ul v-else class="list">
+            <li v-for="item in group.items" :key="item.id" class="card">
           <div class="card__head">
             <span class="badge" :class="`badge--${item.verdict === 'other' ? 'muted' : 'warn'}`">
               {{ VERDICT_LABEL[item.verdict] }}
@@ -207,10 +280,30 @@ function relative(iso: string): string {
 
           <p v-if="item.note" class="card__note">“{{ item.note }}”</p>
 
+          <!--
+            快照 = **客户问 + AI 答**（2026-10-28 D3）。
+            ⚠️ 只给答案是不够判的：很多"答错了"其实是问得不清楚、或者上一轮的上下文没带上。
+            ⚠️ 迁移前的老记录没有提问 ⟹ 明说"没存到"，别显示成空白（那看起来像客户没问）。
+          -->
           <details class="card__snap">
-            <summary>当时的回答（快照）</summary>
+            <summary>当时的问答（快照）</summary>
+            <p class="snap__q">
+              <span class="snap__tag">客户问</span>
+              <span v-if="item.question_snapshot">{{ item.question_snapshot }}</span>
+              <span v-else class="snap__missing">（这条反馈收集时还没存提问）</span>
+            </p>
+            <p class="snap__tag snap__tag--answer">AI 答</p>
             <pre class="card__pre">{{ item.answer_snapshot }}</pre>
           </details>
+
+          <!-- 顺着去看上下文（现在只能跳到会话，不是精确定位到某一条） -->
+          <RouterLink
+            v-if="item.conversation_id"
+            class="card__open"
+            :to="{ name: 'chat', params: { id: item.conversation_id } }"
+          >
+            打开原会话 →
+          </RouterLink>
 
           <!-- 采纳表单：预填原答案，管理员在上面直接改 -->
           <div v-if="editing && editing.id === item.id" class="form">
@@ -307,7 +400,19 @@ function relative(iso: string): string {
             </span>
           </p>
         </li>
-      </ul>
+          </ul>
+
+          <button
+            v-if="group.items.length > 0 && group.items.length >= group.limit"
+            class="btn btn--ghost btn--sm group__more"
+            type="button"
+            :disabled="group.loading"
+            @click="loadMore(group)"
+          >
+            {{ group.loading ? '加载中…' : '加载更多' }}
+          </button>
+        </section>
+      </div>
     </main>
   </div>
 </template>
@@ -333,6 +438,90 @@ function relative(iso: string): string {
   color: var(--text-muted);
   font-size: 0.85rem;
   line-height: 1.7;
+}
+
+/* 三组：每小题一行组头（标题 + 一句说明 + 条数），组内各自翻页 */
+.groups {
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.group__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.group__title {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.group__hint {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.group__count {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.group__empty {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 0.85rem;
+}
+
+.group__more {
+  align-self: flex-start;
+}
+
+.snap__q {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--line);
+  background: var(--surface-sunken);
+  border-radius: 0 8px 8px 0;
+  white-space: pre-wrap;
+}
+
+.snap__tag {
+  display: inline-block;
+  margin-right: 8px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.snap__tag--answer {
+  margin: 10px 0 2px;
+}
+
+.snap__missing {
+  color: var(--text-faint);
+}
+
+.card__open {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 0.82rem;
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.card__open:hover {
+  text-decoration: underline;
 }
 
 .list {

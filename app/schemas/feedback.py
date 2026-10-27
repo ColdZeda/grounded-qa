@@ -36,6 +36,11 @@ class FeedbackOut(BaseModel):
     answer_snapshot: str
     citations_snapshot: list[dict[str, object]]
     created_at: datetime
+    #: **客户问的那一句**（2026-10-28 D3）。迁移前的老记录是 `None` ——
+    #: 界面要明说"这条收集时还没存提问"，不能当成"客户什么都没问"。
+    question_snapshot: str | None = None
+    #: 这条回答属于哪个会话（「打开原会话」用）。会话被删后为 `None`。
+    conversation_id: uuid.UUID | None = None
     # ---- 「采纳入库」流程（D11）。四个时间/人字段就是**操作留痕** ----
     adopted_document_id: uuid.UUID | None = None
     adopted_by: uuid.UUID | None = None

@@ -58,6 +58,15 @@ class AnswerFeedback(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: 当时的答案原文。**快照，不是引用** —— 后面改了也不影响这条记录。
     answer_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
+    #: **客户问的那一句**（2026-10-28 走查 D3）。
+    #: ⚠️ 只给"当时的答案"是不够判的：很多"答错了"其实是**问得不清楚**或**上文没带**，
+    #:    看不到提问就只能猜。所以提问也一起冻住。
+    #: ⚠️ 可为空：迁移之前产生的那几条没有这一列，界面上要明说"这条收集时还没存提问"。
+    question_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: 这条回答属于哪个会话（点「打开原会话」用）。会话被删则置空 —— 反馈本身仍留着。
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     #: 当时的引用列表（`Citation.as_dict()` 的原样）。
     citations_snapshot: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, default=list
