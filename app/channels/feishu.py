@@ -227,7 +227,12 @@ def render_reply(answer: Answer, *, show_sources: bool) -> str:
     if not body:
         body = "（没有生成出内容）"
     if not show_sources or not answer.citations:
-        return body
+        # ⚠️ **2026-10-28 走查 A12**：不给来源，就**不许留编号**。
+        #    正文里的 `[1]` 在飞书里点不了、也没有列表可对，顾客只会觉得可疑。
+        #    ⚠️ 这里**不传 `keep`**（= 全删）：不给来源就一个编号都不该留 ——
+        #       包括"形状像编号、其实不在 citations 里"的那种（那更糟，它连对应都没有）。
+        #       字面方括号（`[多件或需拆旧]`）不是纯数字，不会被误删。
+        return mdtext.strip_citation_markers(body)
 
     lines = [body, "", "**—— 参考来源 ——**"]
     for cite in answer.citations:

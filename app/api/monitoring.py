@@ -150,7 +150,10 @@ PANELS: tuple[_Panel, ...] = (
         group="问答与用量",
         title="24 小时拒答率",
         unit="ratio",
-        hint="拒答次数 ÷ 全部问答次数。分母为 0 时显示 —（没有提问不等于 0% 拒答）",
+        hint=(
+            "拒答次数 ÷ 全部问答次数。分母为 0 时显示 —（没有提问不等于 0% 拒答）。"
+            "⚠️ 24 小时滑动窗口来自 Prometheus 抓取 ⟹ 刚发生的一次拒答要等 30~60 秒才进得来"
+        ),
         expr=(
             'sum(increase(gq_chat_outcome_total{outcome="refused"}[24h]))'
             " / clamp_min(sum(increase(gq_chat_outcome_total[24h])), 1e-9)"

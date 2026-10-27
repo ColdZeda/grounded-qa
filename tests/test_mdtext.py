@@ -8,7 +8,7 @@
    前端对摘要是**纯文本插值**（`{{ cite.snippet }}`），任何标记都会原样显示。
 """
 
-from app.rag.mdtext import downgrade, snippet
+from app.rag.mdtext import downgrade, snippet, strip_citation_markers
 from app.rag.prompt import make_snippet
 
 CHUNK = """## 配送与时效
@@ -65,3 +65,33 @@ def test_headings_are_plain_by_default_and_bold_for_feishu() -> None:
     """同一份规则、两种渠道：摘要要纯文字，卡片要加粗（`lark_md` 没有标题语法）。"""
     assert downgrade("## 保修期") == "保修期"
     assert downgrade("## 保修期", bold_headings=True) == "**保修期**"
+
+
+# ------------------------------------------------------------
+# 顾客侧：删掉行内引用编号（2026-10-28 走查 A12）
+# ------------------------------------------------------------
+
+
+def test_strip_citation_markers_removes_only_real_markers() -> None:
+    """只删「本次真的引用到的那些编号」。
+
+    ⚠️ 两类东西**不许动**：`[多件或需拆旧]`（方括号里不是数字的字面内容）、
+        `[1]` 这种"形状像、但其实不是本次引用"的编号（`keep` 之外）。
+    """
+    text = "拆解含在 299 元[1] 档内；把旧家具拆成可搬运件[多件或需拆旧]，单件 99 元[7]。"
+
+    out = strip_citation_markers(text, keep={1})
+
+    assert "[1]" not in out
+    assert "[多件或需拆旧]" in out  # 字面方括号，原样
+    assert "[7]" in out  # 不在 keep 里 ⟹ 不删（不知道它是什么就别动）
+
+
+def test_strip_citation_markers_cleans_leftover_space_before_punctuation() -> None:
+    """删完编号留下的「空格 + 标点」要收拾掉，否则读起来像排版坏了。"""
+    assert strip_citation_markers("均已撤回[1] 。", keep={1}) == "均已撤回。"
+
+
+def test_strip_citation_markers_noop_when_nothing_to_strip() -> None:
+    text = "保修期 2 年，没有任何编号。"
+    assert strip_citation_markers(text, keep={1}) == text

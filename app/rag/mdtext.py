@@ -57,6 +57,13 @@ _EMPHASIS = re.compile(
 #: `[文字](url)` → `文字`：摘要里放不下 URL，也不该让人看一坨链接源码。
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 
+#: **行内**引用标记 `[3]` / `[12]`（顾客侧没有来源区时，它无所指）。
+#: ⚠️ 只认纯数字 —— `[多件或需拆旧]` / `[文字](链接)` 都不是这个形状，不能被误删。
+_INLINE_MARKER = re.compile(r"[ \t]*\[(\d{1,3})\]")
+
+#: 删掉标记后可能留下的"空格 + 标点"（`撤回 。`）。
+_SPACE_BEFORE_PUNCT = re.compile(r"[ \t]+([，。；：、！？）」』])")
+
 
 def _strip_inline(text: str) -> str:
     """洗掉行内标记但**保留文字本身**。"""
@@ -154,6 +161,39 @@ def downgrade(
 
     flush()
     return "\n".join(out).strip()
+
+
+def strip_citation_markers(text: str, *, keep: frozenset[int] | set[int] | None = None) -> str:
+    """删掉正文里的**行内**引用编号 `[3]`（顾客侧专用）。
+
+    ## 为什么顾客侧要删
+
+    2026-10-28 走查（A12）：飞书里已经**不再附"参考来源"**（顾客不需要知道知识库里有哪几篇），
+    但正文里的 `[1]` `[2]` 还留着 ⟹ 那个数字**无所指**，顾客只会觉得"这是什么意思"。
+    要么给来源，要么删编号 —— 中间态是最差的。
+
+    ## 只删"真的是引用"的那些
+
+    * 只认**纯数字**：`[多件或需拆旧]`、`[文字](链接)` 不动；
+    * 给了 `keep` 就只删**里面这些编号**（= 本次真的引用到的），
+      这样正文里万一有个 `[7]` 而它并不是引用，也不会被误删；
+    * 删完收拾一下留下的"空格 + 标点"（`撤回 。` → `撤回。`）。
+
+    ⚠️ **不碰 Web 端**：那边的编号能点开、能核对原文，删了等于把证据删了。
+    """
+    if not text:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        index = int(match.group(1))
+        if keep is not None and index not in keep:
+            return match.group(0)
+        return ""
+
+    cleaned = _INLINE_MARKER.sub(replace, text)
+    if cleaned == text:
+        return text
+    return _SPACE_BEFORE_PUNCT.sub(r"\1", cleaned)
 
 
 def snippet(text: str, *, limit: int = 160) -> str:

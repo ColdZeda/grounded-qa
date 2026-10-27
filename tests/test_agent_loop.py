@@ -17,6 +17,7 @@ import json
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -604,3 +605,52 @@ def test_citation_index_equals_ref() -> None:
         ordinal=1,
     )
     assert citation.as_dict()["index"] == 3
+
+
+# ------------------------------------------------------------
+# 显示层重编号（2026-10-28 走查「图 20」）
+# ------------------------------------------------------------
+
+
+def _cite(index: int) -> Citation:
+    return Citation(
+        index=index,
+        chunk_id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        score=0.9,
+        snippet=f"块 {index}",
+        score_kind="rerank",
+        ordinal=index,
+    )
+
+
+def test_renumber_squeezes_refs_to_one_based() -> None:
+    """`ref` 是"本轮第几条证据"，跨多次检索连续递增 ⟹ 正文里可能冒出 `[14]`。
+
+    ⚠️ 读者看到的应当是"第几条来源"，所以显示层压成 1..N，`agent_trace` 里仍留原 `ref`。
+    ⚠️ 字面方括号（`[多件或需拆旧]`）**不许动** —— 它不是编号。
+    """
+    runner = object.__new__(AgentRunner)
+    runner._runtime = SimpleNamespace(
+        last_repairs=[{"marker": 9, "corrected": 14, "sentence": "x", "chunk_id": "c"}]
+    )
+
+    text, citations = runner._renumber(
+        "第一句[3]。第二句[7]。第三句[14]，还有[多件或需拆旧]。", [_cite(3), _cite(7), _cite(14)]
+    )
+
+    assert text == "第一句[1]。第二句[2]。第三句[3]，还有[多件或需拆旧]。"
+    assert [item.index for item in citations] == [1, 2, 3]
+    # 修法 D 的明细也要跟着换，否则界面写"改成了 [14]"、正文里却是 [3]
+    assert runner._runtime.last_repairs[0]["corrected"] == 3
+
+
+def test_renumber_is_a_noop_when_already_one_based() -> None:
+    """已经是 1..N 就一个字都不改（ID 不变 = 前端 `:key` 不抖）。"""
+    runner = object.__new__(AgentRunner)
+    runner._runtime = SimpleNamespace(last_repairs=[])
+
+    text, citations = runner._renumber("甲[1] 乙[2]", [_cite(1), _cite(2)])
+
+    assert text == "甲[1] 乙[2]"
+    assert citations[1] is not None and citations[1].index == 2

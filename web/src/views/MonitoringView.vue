@@ -105,6 +105,20 @@ const refusalSample = computed<number | null>(() => {
   return Math.round(total)
 })
 
+/**
+ * 「24 小时拒答率」的**分子**：拒答次数。
+ *
+ * ⚠️ 2026-10-28 走查（A20）：只给一个 `0.0%` 加一句"样本少于几十次时没意义"，
+ *    读起来像**在教人做项目**，而且真出事时看不出"到底是 0 次还是 0.4%"。
+ *    改成 `拒答 1 / 全部 89` —— 分子分母一起给，比率自己会说话，**一句说教都不需要**。
+ */
+const refusedCount = computed<number>(() => {
+  const panel = snapshot.value?.panels.find((item) => item.title === '24 小时问答结果')
+  if (!panel) return 0
+  const hit = panel.items.find((item) => shortLabel(item.label) === 'refused')
+  return hit?.value === null || hit?.value === undefined ? 0 : Math.round(hit.value)
+})
+
 /** 把「单位」翻成给人看的一串字。`null` 一律 `—`。 */
 function fmt(panel: MonitorPanel, item: MonitorItem | undefined): string {
   const value = item?.value
@@ -266,9 +280,13 @@ onMounted(load)
               </ul>
 
               <p class="card__hint">{{ panel.hint }}</p>
-              <!-- 比率没有分母就没有意义：样本只有 1 的时候，「拒答率 100%」什么都不说明 -->
-              <p v-if="panel.title === '24 小时拒答率' && refusalSample !== null" class="card__sample">
-                样本 {{ refusalSample }} 次 —— 少于几十次时，这个百分比基本没意义
+              <!-- 比率没有分母就没有意义：分子分母一起给（2026-10-28 走查 A20） -->
+              <p
+                v-if="panel.title === '24 小时拒答率' && refusalSample !== null"
+                class="card__sample"
+                title="24 小时滑动窗口，来自 Prometheus 抓取 ⟹ 刚发生的一次拒答要等 30~60 秒才进得来"
+              >
+                拒答 {{ refusedCount }} / 全部 {{ refusalSample }}
               </p>
             </article>
           </div>

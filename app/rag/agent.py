@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -58,6 +59,9 @@ from app.rag.tools import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: 正文里的**行内引用编号** `[3]` / `[14]`。只认纯数字（`[多件]`、`[文字](链接)` 不碰）。
+_CITE_MARKER = re.compile(r"\[(\d{1,3})\]")
 
 
 @dataclass(frozen=True)
@@ -347,6 +351,9 @@ class AgentRunner:
 
         text = finished.finish_answer or ""
         citations = self._citations(finished.finish_refs)
+        # ⚠️ **2026-10-28**：显示层一律压成 1..N —— `ref` 是"本轮第几条证据"，
+        #    跨多次检索连续递增，正文里会冒出 `[14]` 这种编号（走查「图 20」）。
+        text, citations = self._renumber(text, citations)
 
         # 护栏 3：**下结论这一步不自由** —— 最终答案仍要过阈值拒答。
         if self._should_refuse(citations):
@@ -455,6 +462,42 @@ class AgentRunner:
             for ref in refs
             if (item := by_ref.get(ref)) is not None
         ]
+
+    def _renumber(self, text: str, citations: list[Citation]) -> tuple[str, list[Citation]]:
+        """把引用编号压成 **1..N 连续编号**（2026-10-28 走查「图 20」）。
+
+        ## 为什么要压
+
+        `ref` 是"**本轮第几条证据**"（`tools.py`：跨多次 `search_kb` 连续递增），
+        所以 agent 查得越多，正文里的编号就越大 —— 走查里真出现过 `[14]`，
+        而来源区只有 3 张卡。编号本身**没错**，错的是"读者看到的是全局编号，
+        不是第几条来源"。
+
+        ## 边界
+
+        * `ref` 只在 `agent_trace` 里保留，用来归因"它到底引了哪一块"；
+        * 只改 `[数字]` 这种形状 —— `[多件或需拆旧]`、`[文字](链接)` 不动；
+        * **先算映射、再一次性 sub**：替换结果不会被二次扫描，不存在
+          `[2]→[3]`、`[3]→[5]` 被连环改错的经典坑；
+        * 修法 D 的明细（`marker → corrected`）里的 `corrected` 也要跟着换，
+          否则界面上写"改成了 [7]"，正文里却是 [2] —— 比不显示更糟。
+        """
+        if not citations:
+            return text, citations
+        mapping = {item.index: position for position, item in enumerate(citations, start=1)}
+        if all(old == new for old, new in mapping.items()):
+            return text, citations
+
+        def swap(match: re.Match[str]) -> str:
+            number = int(match.group(1))
+            return f"[{mapping.get(number, number)}]"
+
+        text = _CITE_MARKER.sub(swap, text)
+        for fix in self._runtime.last_repairs:
+            corrected = fix.get("corrected")
+            if isinstance(corrected, int) and corrected in mapping:
+                fix["corrected"] = mapping[corrected]
+        return text, [replace(item, index=mapping[item.index]) for item in citations]
 
     def _should_refuse(self, citations: Sequence[Citation]) -> bool:
         """阈值拒答：**沿用 pipeline 那一行判断**，不另立一套。

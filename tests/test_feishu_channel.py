@@ -192,8 +192,14 @@ def test_render_reply_never_shows_the_audit_hint_to_a_customer() -> None:
         rendered = render_reply(answer, show_sources=show)
         assert "未能核对上" not in rendered
         assert "⚠️" not in rendered
-        # 正文照常（连 `[1]` 都原样留着，一个字都没动）
-        assert rendered.startswith("家具主体保修 2 年[1]")
+        # ⚠️ **2026-10-28 改**：不给来源时，正文里的 `[1]` `[2]` 也要一并删掉。
+        #    顾客看到 `[1]` 但下面没有来源列表 ⟹ 那个数字**无所指**，只会让人犯嘀咕。
+        #    给来源的那种（`show=True`）保留编号 —— 那时它指向下面的列表。
+        if show:
+            assert rendered.startswith("家具主体保修 2 年[1]")
+        else:
+            assert "[" not in rendered
+            assert rendered.startswith("家具主体保修 2 年")
 
 
 def test_render_reply_hides_sources_leaving_only_the_body() -> None:
