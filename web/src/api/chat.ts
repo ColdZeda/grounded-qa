@@ -17,7 +17,9 @@
 import { ApiError, apiFetch, authHeaders } from './client'
 import { consumeSse, type SseFrame } from './sse'
 import type {
+  AgentStep,
   CitationAudit,
+  CitationRepair,
   DoneEvent,
   ErrorEvent,
   ImageInfo,
@@ -94,8 +96,16 @@ function asCitationAudit(value: unknown): CitationAudit | undefined {
   }
 }
 
-function dispatch(frame: SseFrame, handlers: StreamHandlers): void {
-  const payload = parseJson(frame.data)
+/**
+ * `done` 里的数组字段（`agent_trace` / `citation_repairs`）。
+ *
+ * ⚠️ 非数组 / 空数组一律当**没有**（返回 `undefined`）—— 后端也只在非空时才带这两样，
+ *    两边口径一致的话，调用方只需要判 `undefined`。
+ */
+function asArray<T>(value: unknown): T[] | undefined {
+  return Array.isArray(value) && value.length > 0 ? (value as T[]) : undefined
+}
+function dispatch(frame: SseFrame, handlers: StreamHandlers): void {  const payload = parseJson(frame.data)
   if (payload === null) return
 
   switch (frame.event) {
@@ -130,6 +140,13 @@ function dispatch(frame: SseFrame, handlers: StreamHandlers): void {
         citation_audit: audit,
         degraded: asString(payload.degraded) || undefined,
         agent_steps: asNumber(payload.agent_steps) ?? undefined,
+        // ⚠️ **2026-10-28：这两个字段必须在"翻译"这一步就搬过去。**
+        //    后端 2026-10-27 就往 `done` 里带了，但这里没搬 ⟹ 前端的 `DoneEvent` 是
+        //    **可选字段**，TypeScript 一个字都不报，运行时就是 `undefined` ⟹
+        //    "轨迹/自动改正只有当轮看不到，刷新才有"（`home` 里 A1/A8 就是这么挂的）。
+        //    教训：**手写对象字面量 + 可选字段 = 静默丢字段**，加了新字段必须两边一起改。
+        agent_trace: asArray<AgentStep>(payload.agent_trace),
+        citation_repairs: asArray<CitationRepair>(payload.citation_repairs),
       })
       break
     }

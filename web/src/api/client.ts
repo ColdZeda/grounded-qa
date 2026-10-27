@@ -92,14 +92,25 @@ async function toApiError(resp: Response): Promise<ApiError> {
 }
 
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const resp = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      Accept: 'application/json',
-      ...authHeaders(),
-      ...(init.headers ?? {}),
-    },
-  })
+  // ⚠️ **2026-10-28 补：字符串 body 自动带 `Content-Type: application/json`。**
+  //    以前靠每个调用点自己写这个头 —— 结果 `feedback.ts` 三处 + `auth.ts` 一处忘了写，
+  //    浏览器给字符串 body 自动填的是 `text/plain;charset=UTF-8` ⟹ FastAPI 把 body 当
+  //    **原始字节**交给 Pydantic ⟹ 422「Input should be a valid dictionary or object…」。
+  //    症状是"整个功能都用不了"，但报错长得像参数校验，很难往"少了一个头"上想。
+  //    ⟹ 收进这里：**默认正确，忘了也对**。显式传了的仍以调用方为准（`FormData` 绝不能补，
+  //       boundary 必须由浏览器生成）。
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...authHeaders(),
+    ...((init.headers as Record<string, string> | undefined) ?? {}),
+  }
+  const isJsonBody = typeof init.body === 'string'
+  const hasContentType = Object.keys(headers).some((key) => key.toLowerCase() === 'content-type')
+  if (isJsonBody && !hasContentType) {
+    headers['Content-Type'] = 'application/json'
+  }
+
+  const resp = await fetch(`${API_BASE}${path}`, { ...init, headers })
 
   if (resp.status === 401) {
     // ⚠️ **先清 token 再通知**：钩子里会跳登录页，跳过去的那一刻
