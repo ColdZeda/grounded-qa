@@ -135,8 +135,11 @@ def days_since_delivery(order: Order, *, now: Any) -> int | None:
     #    而调用方的 `now` 可能是本地时区（`tools.py` 用的是 `datetime.now().astimezone()`）。
     #    直接各自 `.date()` 相减会在跨日的那几小时里差一天 —— 又是"差一天结论就反"。
     #    所以先统一到 `now` 的时区，再比日历。
-    #    📌 **日历基准 = `now` 的时区**（生产容器是 UTC）。要做到"按北京时间算"
-    #       得给容器设 `TZ`，那会连带影响日志时间戳 —— 记在 `architecture §9.53 ②`，本轮不做。
+    #    📌 **日历基准 = `now` 的时区** = `Asia/Shanghai`（容器的 `TZ` 就是它，见 `Dockerfile`）
+    #       ⟹ 自然日按**北京日历**，过零点才加一天。
+    #       ⚠️ 2026-10-28 实测：SF10001 签收 `10-17 17:05Z`（北京 10-18 01:05）、
+    #          10-27 23:46（北京）提问 → **9 天**。此前这里写"生产容器是 UTC"是错的，
+    #          那条错也漏进了 `PLAN §14` 与走查 A15/A16（均已改）。
     if now.tzinfo is not None and delivered.tzinfo is not None:
         delivered = delivered.astimezone(now.tzinfo)
     delta = now.date() - delivered.date()
