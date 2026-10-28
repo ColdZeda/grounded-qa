@@ -205,7 +205,17 @@ async def prepare_document(
         existing = None
     if existing is not None:
         if not replace:
-            return Prepared(existing, created=False, note="同名文档已入库过（要重来需显式替换）")
+            # ⚠️ **2026-10-28 改：同名但内容变了 ⟹ 自动换版**（以前一律跳过）。
+            #    现场：语料补了一段「中国大陆 5 个城市」，本地 `--replace` 灌好了，
+            #    CD 里的 ingest **不带** `--replace` ⟹ 生产**静默跳过**，库里还是旧内容，
+            #    而部署是绿的（`/healthz` 200）—— 又一个"改了没生效且不报错"。
+            #    判据改成"**同名同内容才跳过**"：内容变了就是新版本，旧版必须被换掉，
+            #    否则同一件事在库里有两个版本，答案看运气（这条本来就写在模块说明里）。
+            if existing.content_hash == content_hash:
+                return Prepared(existing, created=False, note="同名同内容，已在库里（跳过）")
+            if existing.status in (DocumentStatus.PENDING, DocumentStatus.PROCESSING):
+                # 真的在处理中：换个版本等于白烧一次 embedding，先让它跑完
+                return Prepared(existing, created=False, note="同名文档正在入库中，等它跑完再换版")
         await _forget(session, existing)
 
     # ② 同内容文档 —— 与表的唯一约束同口径，避免撞成 IntegrityError（500）
