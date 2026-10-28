@@ -119,6 +119,15 @@ const abort = ref<AbortController | null>(null)
  *    见 `watchOrphan`。
  */
 const orphanQuestion = ref('')
+/**
+ * 两种状态（2026-10-28 用户定）：
+ * · `waiting` —— 刚回来、还在等。**大多数情况它真的还在生成**（agent 最长 30 秒），
+ *   所以这里只说"还在生成"，**不吓人**。
+ * · `failed` —— 等满 `ORPHAN_WAIT_MS` 还没有 ⟹ 基本可以断定那一轮断了，
+ *   才说"连接断开了，这次回答没有生成"并给重发。
+ * ⚠️ 不要一进门就报"断开"：那是误报（走查里确认过这个判断）。
+ */
+const orphanPhase = ref<'waiting' | 'failed'>('waiting')
 /** 轮询的令牌：换会话 / 重新加载时作废上一轮，避免两个循环抢着改 `messages`。 */
 let orphanSeq = 0
 
@@ -129,6 +138,7 @@ let orphanSeq = 0
  * ⚠️ 为什么是 35 秒：agent 的**总预算是 30 秒**（`agent_total_budget_seconds`）。
  *    以前只等 6.4 秒就停手 —— 那条其实还在生成，界面却已经说"没生成完"，
  *    等于把正在发生的事报成故障。宁可多问十几次（几十字节的 GET），也不要误报。
+ * 等满了还没有 ⟹ 才把 `orphanPhase` 翻成 `failed`（说"连接断开了"）。
  */
 const ORPHAN_WAIT_MS = 35_000
 
@@ -147,6 +157,7 @@ async function watchOrphan(conversationId: string): Promise<void> {
       if (history.length > messages.value.length) {
         messages.value = toUiList(history)
         orphanQuestion.value = ''
+        orphanPhase.value = 'waiting'
         await scrollToBottom(true)
         return
       }
@@ -154,6 +165,8 @@ async function watchOrphan(conversationId: string): Promise<void> {
       // 拉不到就下一轮再试 —— 真都没有，就停在提示上（让人自己点重发）
     }
   }
+  // 等够了还是没有 ⟹ 那一轮确实断了（不是"还在生成"）
+  if (seq === orphanSeq && orphanQuestion.value) orphanPhase.value = 'failed'
 }
 
 /**
@@ -165,6 +178,7 @@ async function watchOrphan(conversationId: string): Promise<void> {
 function retryOrphan(): void {
   draft.value = orphanQuestion.value
   orphanQuestion.value = ''
+  orphanPhase.value = 'waiting'
 }
 
 const scroller = ref<HTMLElement | null>(null)
@@ -724,13 +738,17 @@ onBeforeUnmount(() => {
           @open-context="openContext"
         />
         <!--
-          "提问没人回"的交代（2026-10-28）。
-          ⚠️ 大多数时候它在几百毫秒后就自己消失（`watchOrphan` 拉到答案了）；
-             真消失了才说明那一轮确实没跑完 —— 那时候**必须**给人一条出路。
+          "提问没人回"的交代（2026-10-28）。**两段**：
+          · 前 35 秒说"还在生成"（大多数情况真的还在跑，别吓人）；
+          · 等满了才说"连接断开了"（这时才确定那一轮没跑完）。
         -->
-        <p v-if="orphanQuestion" class="orphan">
-          这条提问还没有回答（可能还在生成，也可能你切走页面时中断了）。你可以继续等待，或
-          <button type="button" class="orphan__retry" @click="retryOrphan">填回输入框重发</button>
+        <p v-if="orphanQuestion && orphanPhase === 'waiting'" class="orphan orphan--waiting">
+          <span class="orphan__dot"></span>
+          回答还在生成…
+        </p>
+        <p v-else-if="orphanQuestion" class="orphan">
+          连接断开了，这次回答没有生成。
+          <button type="button" class="orphan__retry" @click="retryOrphan">重发</button>
         </p>
       </div>
     </main>
@@ -952,6 +970,29 @@ onBeforeUnmount(() => {
 .orphan__retry:hover {
   border-color: var(--primary);
   color: var(--primary);
+}
+
+/* 「还在生成」那一档：一个会呼吸的小圆点，比一行字更像"在动" */
+.orphan--waiting {
+  border-style: solid;
+}
+
+.orphan__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: orphan-pulse 1s ease-in-out infinite;
+}
+
+@keyframes orphan-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .intro {
