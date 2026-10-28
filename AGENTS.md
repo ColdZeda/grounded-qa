@@ -1,4 +1,4 @@
-﻿# AGENTS.md · 给 AI 助手的操作手册
+# AGENTS.md · 给 AI 助手的操作手册
 
 > 状态：**当前有效** ｜ 最后更新 2026-10-27
 
@@ -429,6 +429,7 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 | **侧栏抽屉浮出来只显示一半 / 整个看不见** | `.app` 上的 `overflow-x: auto`（"内容区最小宽 560"的兜底）**会裁掉溢出的绝对定位子元素** | 抽屉面板用 **`position: fixed`**（不受祖先 `overflow` 裁剪） |
 | **改 `.vue` 里一处样式，"另一个断点"下没变** | 断点有**两套判定**：宽度在 `main.css` 的 `--sidebar-w` 媒体查询里，折叠/抽屉状态在 `AppSidebar.vue` 的两个 `matchMedia` 里 | 断点数字**两处一起改** → §9.45 ② |
 | **容器 `Up (healthy)`，但 `docker logs` 一行都没有，飞书始终不回** | `mem_limit` 给小了 —— feishu 进程 anon ≈197 MiB（lark ＋ sqlalchemy ＋ asyncpg ＋ httpx），96m 上限下 **`import lark_oapi` 就被内核 SIGKILL（exit 137）**，**死在打第一行日志之前**；而 healthcheck 只 `pgrep`，重启间隙也能过 ⟹ 「健康」和「什么都没干」长得一模一样 | 判据不是报错，是**占用率**：`docker stats` 显示 **≈99.98% / 上限** 就是它。已抬到 **320m**。⚙️ 推广形式：**`mem_limit` 顶格 = 静默崩溃，日志是空的** |
+| **登录 / 列表全 500，而 `/healthz` 还是 200** | **40G 盘被历史镜像撑满**：CD 每次 `compose pull` 都留一个新 tag，**旧的不删** ⟹ 一天十来次部署后 **306 个镜像 / 34.3 GB**、盘 100% ⟹ postgres 写不了 `postmaster.pid` 直接 crash loop，api 连不上库。⚠️ `/healthz` **不碰数据库**，所以它一直是"健康"的 | 判据：`df -h /` ＋ `docker system df`；处置 `docker image prune -a -f`（**镜像在 ACR，随时能 pull，不删卷**）。**已固化进 `deploy.yml`**：部署成功后自动 `docker image prune -af --filter 'until=48h'` 并打印 `df`。经验值：一对 api+nginx ≈1.1 GB ⟹ 40G 盘约能扛 **30 次部署** |
 
 ---
 
