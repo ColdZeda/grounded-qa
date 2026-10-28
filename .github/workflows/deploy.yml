@@ -278,8 +278,6 @@ jobs:
         #    ModuleNotFoundError。（uvicorn 能跑是因为它自己把 cwd 插进 sys.path。）
         run: |
           set -euo pipefail
-          echo "🧪 演练（W24）：故意让灌库这一步失败，验证「红但不回滚」"
-          exit 1
           ssh target "cd $REMOTE_DIR && \
             ACR_REGISTRY='$ACR_REGISTRY' IMAGE_TAG='$IMAGE_TAG' \
             docker compose -f $COMPOSE_FILE run --rm --no-deps api \
