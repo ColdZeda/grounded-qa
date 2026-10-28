@@ -262,6 +262,7 @@ jobs:
             docker compose -f $COMPOSE_FILE run --rm --no-deps api python -m app.db.seed"
 
       - name: 灌知识库（幂等）
+        id: ingest
         # ⚠️ **为什么要放在部署链里**（2026-10-17 补）：
         #    生产库原本 `chunks = 0` —— 站点能登录、能拒答，但**答不了任何业务问题**。
         #    语料会随 api 镜像一起发布（见 Dockerfile 的 `COPY evals/corpus`），
@@ -333,7 +334,17 @@ jobs:
           echo "已记录当前版本：$IMAGE_TAG"
 
       - name: 部署失败 → 自动回滚
-        if: failure()
+        # ⚠️⚠️ **2026-10-28（W24）：内容失败不再回滚代码。**
+        #
+        #    回滚是给**坏镜像**用的，不是给**坏数据**用的。以前任何一步红都回滚 ——
+        #    2026-10-27 就撞上了：百炼预算耗尽 ⟹ 「灌知识库」报 embedding 400 ⟹
+        #    自动回滚到旧镜像，**而迁移已经前进**（单向，退不回去）⟹ 现场是
+        #    「库新、代码旧」，而且 `/healthz` 还是 200，比整个挂掉更难发现。
+        #
+        #    现在只排除**灌库**这一步：它红了照样让整条部署**红**（看得见），
+        #    但代码留在新的 —— 修好数据/额度后重跑 ingest 就行，不用重新部署。
+        #    其余失败（镜像拉不下来、容器起不来、健康检查不过、迁移失败…）照旧回滚。
+        if: failure() && steps.ingest.outcome != 'failure'
         run: |
           set -euo pipefail
           prev='${{ steps.prev.outputs.tag }}'
@@ -349,6 +360,15 @@ jobs:
           ssh target "curl -fsS http://127.0.0.1:8080/healthz" \
             && echo "✅ 回滚成功" \
             || { echo "❌ 回滚后仍不健康，请立即人工介入"; exit 1; }
+
+      - name: 内容灌库失败 → **不回滚**，代码留在新版
+        # ⚠️ 这条存在的唯一目的：让"没回滚"这件事**有痕迹**。
+        #    否则红了的流水线里看不到"为什么这次没回滚"，下次又要重新推理一遍。
+        if: failure() && steps.ingest.outcome == 'failure'
+        run: |
+          echo "⚠️ 「灌知识库」失败：代码**已上线**（未回滚），库里的内容可能落后。"
+          echo "   处理：修好数据 / 额度后，单独重跑这一步（或在服务器上执行 ingest）。"
+          echo "   判断部署是否真的生效，看：docker inspect gq-api 的 image tag。"
 
       - name: 失败时导出容器日志
         if: failure()
