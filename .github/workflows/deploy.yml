@@ -333,6 +333,19 @@ jobs:
           ssh target "printf '%s\n' '$IMAGE_TAG' > $REMOTE_DIR/.current_tag"
           echo "已记录当前版本：$IMAGE_TAG"
 
+      - name: 清理旧镜像（防历史 tag 把 40G 盘撑满）
+        # ⚠️⚠️ **2026-10-28 事故**：一天里部署了十来次，每次 `compose pull` 都留下一个新 tag，
+        #    服务器上攒到 **306 个镜像 / 34.3 GB** ⟹ 40G 盘 **100% 满** ⟹
+        #    postgres 写不了 `postmaster.pid`（crash loop）⟹ api 连不上库 ⟹
+        #    登录 / 会话列表全 **500**，而 `/healthz` 照样 200（它不碰库）。
+        #    ⟹ 每次部署成功后清掉 **48 小时前**的镜像；正在跑的不受影响。
+        #    镜像在 ACR 里，要回滚直接 pull 回来 —— 本地旧 tag 没有保留价值。
+        if: success()
+        run: |
+          set -euo pipefail
+          ssh target "docker image prune -af --filter 'until=48h' | tail -n 1"
+          ssh target "df -h / | tail -n 1"
+
       - name: 部署失败 → 自动回滚
         # ⚠️⚠️ **2026-10-28（W24）：内容失败不再回滚代码。**
         #
