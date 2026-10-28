@@ -446,6 +446,38 @@ async def test_admin_can_delete_feedback_but_member_cannot(
 
 
 @pytest.mark.integration
+async def test_draft_holds_only_the_corrected_text(
+    client: AsyncClient, with_models, make_account, login, session: AsyncSession
+) -> None:
+    """草稿正文**只放"更正后的说法"** —— 内部信息不许跟着进知识库（2026-10-28 走查）。
+
+    ⚠️ 以前草稿里还有三段：顶上一句"由纠错反馈采纳生成…（反馈 id）"、`## 坐席指出的问题`
+        （坐席的吐槽）、`## 依据`（引用摘要 + **chunk id**）。它们会跟着正文一起被切块、进检索 ——
+        顾客问"保修多久"，命中的可能是「应说明分部件」或者一串 UUID。
+    ⚠️ 正文里模型写的行内编号 `[1]` 也要洗掉：那是"刚才那次回答"的编号，进了知识库没有对齐对象。
+    """
+    headers, _account, feedback = await _account_with_feedback(
+        client, make_account, login, session, "家具主体保修 2 年[1]。"
+    )
+    created = await _adopt(
+        client,
+        headers=headers,
+        feedback_id=uuid.UUID(feedback["id"]),
+        content=f"家具主体保修 2 年，布艺 6 个月[1]。{MARKER}",
+    )
+    assert created["document_name"].startswith("feedback/")
+
+    draft = await client.get(f"{FEEDBACK}/{feedback['id']}/draft", headers=headers)
+    assert draft.status_code == 200, draft.text
+    body = draft.json()["content"]
+
+    assert MARKER in body, "更正后的说法必须在"
+    assert "[1]" not in body, "行内编号要洗掉（它在知识库里无所指）"
+    assert "坐席指出的问题" not in body, "坐席的吐槽是内部信息，不进知识库"
+    assert "依据" not in body, "引用摘要 / chunk id 不进知识库正文"
+
+
+@pytest.mark.integration
 async def test_member_cannot_adopt_or_publish(
     client: AsyncClient, with_models, make_account, login, session: AsyncSession
 ) -> None:

@@ -222,8 +222,15 @@ export interface MessageOut {
 // 知识库文档（app/schemas/document.py）
 // ------------------------------------------------------------
 
-/** `app/db/models/knowledge.py` 的 `DocumentStatus`。 */
+/** `app/db/models/knowledge.py` 的 `DocumentStatus`（**入库状态机**）。 */
 export type DocumentStatus = 'pending' | 'processing' | 'ready' | 'failed'
+
+/**
+ * `app/db/models/knowledge.py` 的 `ContentStatus`（**内容有效性**，与上面的状态机正交）。
+ *
+ * ⚠️ 只有 `active` / `superseded` 能进检索（在 `ref_time` 有效的那些）。
+ */
+export type ContentStatus = 'active' | 'superseded' | 'draft' | 'sibling_brand' | 'internal'
 
 export interface DocumentOut {
   id: string
@@ -232,6 +239,14 @@ export interface DocumentOut {
   content_type: string | null
   size_bytes: number | null
   status: DocumentStatus
+  /**
+   * **内容状态**（和 `status` 正交）：`active` 现行 / `superseded` 废止 / `draft` 草稿 /
+   * `sibling_brand` 同品牌他站 / `internal` 内部稿。
+   *
+   * ⚠️ `status=ready` 只说"切片和向量都好了"，**没说它能不能被检索引用** ——
+   *    走查现场就卡在这：草稿还没发布，页面却只写「已入库」。
+   */
+  content_status: ContentStatus
   /** ⚠️ **只有 `failed` 时才有值** —— 界面靠它解释"为什么没进库"。 */
   error_message: string | null
   /** 被切成几块。上传接口返回时是 0（还没切），列表接口每次都是真数。 */

@@ -52,6 +52,8 @@ interface Group {
   items: FeedbackAdminOut[]
   limit: number
   loading: boolean
+  /** 组头能不能点开（2026-10-28 用户要求：三组可折叠，否则页面太长）。 */
+  open: boolean
 }
 
 const PAGE_SIZE = 5
@@ -64,6 +66,8 @@ const groups = ref<Group[]>([
     items: [],
     limit: PAGE_SIZE,
     loading: false,
+    // 只默认展开第一组：三组全展开的话，卡片再多一点就翻不动了
+    open: true,
   },
   {
     verdict: 'wrong_citation',
@@ -72,6 +76,7 @@ const groups = ref<Group[]>([
     items: [],
     limit: PAGE_SIZE,
     loading: false,
+    open: false,
   },
   {
     verdict: 'other',
@@ -80,6 +85,7 @@ const groups = ref<Group[]>([
     items: [],
     limit: PAGE_SIZE,
     loading: false,
+    open: false,
   },
 ])
 
@@ -288,22 +294,29 @@ function relative(iso: string): string {
 
       <div v-else class="groups">
         <section v-for="group in groups" :key="group.verdict" class="group">
-          <div class="group__head">
-            <h3 class="group__title">{{ group.label }}</h3>
-            <span class="group__hint">{{ group.hint }}</span>
+          <!-- 组头可点：三组折叠起来，页面才不至于长得翻不动 -->
+          <button
+            class="group__head"
+            type="button"
+            :aria-expanded="group.open"
+            @click="group.open = !group.open"
+          >
+            <span class="group__chev">{{ group.open ? '▾' : '▸' }}</span>
+            <span class="group__title">{{ group.label }}</span>
             <span class="group__count">{{ group.items.length }} 条</span>
-          </div>
-          <p v-if="group.items.length === 0" class="group__empty">这一组还没有反馈。</p>
+            <span class="group__hint">{{ group.hint }}</span>
+          </button>
 
-          <ul v-else class="list">
-            <li v-for="item in group.items" :key="item.id" class="card">
+          <template v-if="group.open">
+            <p v-if="group.items.length === 0" class="group__empty">这一组还没有反馈。</p>
+
+            <ul v-else class="list">
+              <li v-for="item in group.items" :key="item.id" class="card">
           <div class="card__head">
-            <span class="badge" :class="`badge--${item.verdict === 'other' ? 'muted' : 'warn'}`">
-              {{ VERDICT_LABEL[item.verdict] }}
-            </span>
+            <!-- 分类不再重复写：这一条已经在这一组里了（2026-10-28 用户提：卡片别这么长） -->
             <span class="badge" :class="`badge--${statusTone(item)}`">{{ statusOf(item) }}</span>
-            <span class="card__time">{{ relative(item.created_at) }}</span>
-            <span class="card__cites">引用 {{ item.citations_snapshot.length }} 条</span>
+            <span class="card__time">{{ relative(item.created_at) }} · 引用
+              {{ item.citations_snapshot.length }} 条</span>
           </div>
 
           <p v-if="item.note" class="card__note">“{{ item.note }}”</p>
@@ -445,17 +458,18 @@ function relative(iso: string): string {
             </span>
           </p>
         </li>
-          </ul>
+            </ul>
 
-          <button
-            v-if="group.items.length > 0 && group.items.length >= group.limit"
-            class="btn btn--ghost btn--sm group__more"
-            type="button"
-            :disabled="group.loading"
-            @click="loadMore(group)"
-          >
-            {{ group.loading ? '加载中…' : '加载更多' }}
-          </button>
+            <button
+              v-if="group.items.length >= group.limit"
+              class="btn btn--ghost btn--sm group__more"
+              type="button"
+              :disabled="group.loading"
+              @click="loadMore(group)"
+            >
+              {{ group.loading ? '加载中…' : '加载更多' }}
+            </button>
+          </template>
         </section>
       </div>
     </main>
@@ -501,10 +515,26 @@ function relative(iso: string): string {
 .group__head {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
-  padding-bottom: 6px;
+  width: 100%;
+  padding: 4px 0 8px;
+  border: 0;
   border-bottom: 1px solid var(--line);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.group__head:hover .group__title {
+  color: var(--primary);
+}
+
+.group__chev {
+  color: var(--text-muted);
+  font-size: 0.8rem;
 }
 
 .group__title {

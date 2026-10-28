@@ -66,6 +66,25 @@ const STATUS_LABEL: Record<DocumentOut['status'], string> = {
   failed: '失败',
 }
 
+/**
+ * **内容状态**的显示口径（2026-10-28 走查）。
+ *
+ * ⚠️ 为什么要单独一颗徽章：`已入库` 只说"切片和向量都好了"，**没说它能不能被检索引用**。
+ *    现场就卡在这 —— 采纳出来的草稿还没发布，页面只写「已入库」，走查的人以为它已经在用了。
+ */
+const CONTENT_LABEL: Record<DocumentOut['content_status'], string> = {
+  active: '现行',
+  superseded: '已废止',
+  draft: '草稿（不进检索）',
+  sibling_brand: '同品牌他站',
+  internal: '内部稿',
+}
+
+/** 只有这两种内容状态会被检索引用；其余一律当"不生效"标灰。 */
+function contentIsLive(item: DocumentOut): boolean {
+  return item.content_status === 'active' || item.content_status === 'superseded'
+}
+
 async function load(): Promise<void> {
   try {
     const page = await listDocuments()
@@ -261,6 +280,18 @@ onMounted(load)
           </div>
           <span class="badge" :class="`badge--${item.status}`">
             {{ STATUS_LABEL[item.status] }}
+          </span>
+          <!-- 内容状态：能不能被检索引用，看的是这一颗（不是上面那颗） -->
+          <span
+            class="badge"
+            :class="contentIsLive(item) ? 'badge--ready' : 'badge--muted'"
+            :title="
+              contentIsLive(item)
+                ? '这份文档的内容状态允许它被检索引用'
+                : '这份文档不会被检索引用（草稿 / 内部稿 / 他站）'
+            "
+          >
+            {{ CONTENT_LABEL[item.content_status] }}
           </span>
           <!-- 管理动作只给管理员；判断用**函数调用** `canWrite()`（AGENTS §10 编译期折叠坑） -->
           <div v-if="canWrite()" class="row__ops">

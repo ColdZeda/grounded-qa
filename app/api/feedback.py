@@ -31,6 +31,7 @@ from app.db.models.user import User
 from app.db.repository import TenantScopedRepository
 from app.kb.conflicts import build_report, collect
 from app.kb.ingest import ingest_bytes
+from app.rag import mdtext
 from app.schemas.feedback import (
     AdoptIn,
     AdoptOut,
@@ -288,36 +289,24 @@ def _guess_title(feedback: AnswerFeedback) -> str:
     return (head[:40] or "纠错采纳").rstrip("。，；：,.;:")
 
 
-def _draft_markdown(feedback: AnswerFeedback, *, title: str, content: str) -> str:
-    """把一条反馈拼成一页 markdown。
+def _draft_markdown(*, title: str, content: str) -> str:
+    """把"更正后的说法"拼成一页 markdown（**只放正文**）。
 
-    ⚠️ **不把"原答案"和"更正后的说法"混成一段**：草稿是要进知识库的，
-        里面留着"我原来答错了"这种话，会被检索出来引给顾客。
-        所以原答案只作为**引用来源**出现（`## 依据`），正文只有更正后的说法。
+    ## 为什么只剩正文了（2026-10-28 走查改）
+
+    以前这里还塞了三段：顶部一句"由纠错反馈采纳生成…（反馈 id）"、`## 坐席指出的问题`
+    （坐席写的那句吐槽）、`## 依据`（快照里的引用摘要 + **chunk id**）。
+    它们**都会跟着正文一起被切块、进检索** —— 顾客问"保修多久"，命中的可能是
+    「应说明分部件」或者一串 `65a2f058-7bfb-…`。那是内部信息，不是知识。
+
+    ⚠️ 这些信息**没有丢**：它们本来就存在 `answer_feedback` 里（note / citations_snapshot），
+        在反馈页随时能查。要留痕也在那儿留，不该混进知识正文。
+
+    ⚠️ 顺手把正文里的**行内引用编号** `[1]` 删掉：那是"刚才那次回答"的编号，
+        进了知识库没有对齐的对象，只会被下一个读者当成错的编号。
     """
-    sources = []
-    for index, cite in enumerate(feedback.citations_snapshot or [], start=1):
-        snippet = str(cite.get("snippet") or "").replace("\n", " ")[:120]
-        document = str(cite.get("document") or cite.get("document_id") or "")
-        sources.append(f"- [{index}] {snippet}" + (f"（`{document}`）" if document else ""))
-    if not sources:
-        sources.append("- （原始回答没有引用来源，请人工补上依据）")
-
-    parts = [
-        f"# {title}",
-        "",
-        "> 由纠错反馈采纳生成，**已人工审阅后发布**。"
-        f"口径源自反馈 `{feedback.id.hex[:8]}`（{feedback.verdict.value}）。",
-        "",
-        "## 结论",
-        "",
-        content.strip(),
-        "",
-    ]
-    if feedback.note:
-        parts += ["## 坐席指出的问题", "", feedback.note.strip(), ""]
-    parts += ["## 依据", "", *sources, ""]
-    return "\n".join(parts)
+    body = mdtext.strip_citation_markers(content.strip())
+    return "\n".join([f"# {title}", "", body, ""])
 
 
 @router.post(
@@ -359,7 +348,7 @@ async def adopt_feedback(
         )
 
     filename = f"{_DRAFT_PREFIX}{feedback.id}.md"
-    text = _draft_markdown(feedback, title=title, content=content)
+    text = _draft_markdown(title=title, content=content)
     _, embedder, _ = clients
     result = await ingest_bytes(
         session,

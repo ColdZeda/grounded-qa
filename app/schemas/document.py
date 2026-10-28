@@ -7,7 +7,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.db.models.knowledge import DocumentStatus
+from app.db.models.knowledge import ContentStatus, DocumentStatus
 
 
 class DocumentOut(BaseModel):
@@ -24,6 +24,11 @@ class DocumentOut(BaseModel):
     content_type: str | None
     size_bytes: int | None
     status: DocumentStatus
+    #: **内容状态**：`active` 现行 / `superseded` 废止 / `draft` 草稿 / `sibling_brand` 同品牌他站 / `internal` 内部稿。
+    #: ⚠️ 2026-10-28 加：它和 `status`（入库状态机：排队/入库中/已入库/失败）**正交** ——
+    #:    「已入库」只说"切片和向量都好了"，**没说它能不能被检索引用**。
+    #:    走查现场就卡在这：草稿明明还没发布，知识库页却只写「已入库」，看不出它是草稿。
+    content_status: ContentStatus = ContentStatus.ACTIVE
     #: 失败原因。**只有 FAILED 时才有值** —— 界面据此显示"为什么没进库"。
     error_message: str | None
     created_at: datetime
