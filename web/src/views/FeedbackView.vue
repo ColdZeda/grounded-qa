@@ -531,7 +531,11 @@ function relative(iso: string): string {
 }
 
 .group__head:hover .group__title {
-  color: var(--primary);
+  /* ⚠️ 不要改成 `color: var(--primary)`：**「其他」本身就是蓝的**，
+     一悬停就变成同一个颜色，看起来像"没反应"（2026-10-28 走查）。
+     用下划线 + 轻微压暗，三种颜色都看得出被指到了。 */
+  filter: brightness(0.92);
+  text-decoration: underline;
 }
 
 .group__chev {

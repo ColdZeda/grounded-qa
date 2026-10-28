@@ -97,25 +97,13 @@ async def create_feedback(
             detail="选「其他」时请写一句说明",
         )
 
-    existing = await session.scalar(
-        select(AnswerFeedback).where(
-            AnswerFeedback.message_id == message.id,
-            AnswerFeedback.user_id == current_user.id,
-        )
-    )
     question = await _question_before(session, message)
-    if existing is not None:
-        # 覆盖：同一个人改了主意，不该留两条互相矛盾的说法
-        existing.verdict = payload.verdict
-        existing.note = (payload.note or "").strip() or None
-        existing.answer_snapshot = message.content
-        existing.citations_snapshot = list(message.citations or [])
-        existing.question_snapshot = question
-        existing.conversation_id = message.conversation_id
-        await session.commit()
-        await session.refresh(existing)
-        return existing
-
+    # ⚠️ **每次上报都是一条新记录**（2026-10-28 用户改的口径）。
+    #    以前是"同一个人 + 同一条消息 = 覆盖"，理由是"一个人点五次别变成五条 badcase"。
+    #    但那个理由在两个场景下站不住：① 同一条回答可以有**不同**的问题（答错了一处、
+    #    又引错了一处）；② 一条已经采纳/发布的反馈被后来的一次误点**改写**，
+    #    连 `adopted/published` 的留痕都对不上了 —— 那是把治理记录当成个人待办。
+    #    防重复改由前端做（提交后短时禁用 + 明确的"再报一次"入口），后端不吞证据。
     feedback = AnswerFeedback(
         tenant_id=current_user.tenant_id,
         message_id=message.id,

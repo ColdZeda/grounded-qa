@@ -74,6 +74,15 @@ const hiddenSourceCount = computed(() =>
 const unsupportedCount = computed(() => props.message.citationAudit?.unsupported ?? 0)
 const repairs = computed(() => props.message.citationRepairs ?? [])
 
+/** 「再报一次」：清掉上一次的选择，重新打开表单（每次上报都是一条新记录）。 */
+function reportAgain(): void {
+  feedbackDone.value = false
+  feedbackVerdict.value = null
+  feedbackNote.value = ''
+  feedbackError.value = ''
+  feedbackOpen.value = true
+}
+
 async function sendFeedback(): Promise<void> {
   const verdict = feedbackVerdict.value
   if (verdict === null || feedbackBusy.value) return
@@ -256,8 +265,14 @@ function onBodyClick(event: MouseEvent): void {
         @click="feedbackOpen = true"
       >
         ⚑ 上报错误
-      </button>
-      <span v-else-if="feedbackDone" class="fb__done">✓ 已记录，谢谢</span>
+      </button>      <!--
+        ⚠️ **2026-10-28：同一条回答可以报多次**（每次上报 = 反馈页里的一条新记录）。
+           所以"已记录"之后留一个「再报一次」—— 否则同一条回答发现了第二个问题就没入口了。
+      -->
+      <span v-if="feedbackDone" class="fb__done">
+        ✓ 已记录，谢谢
+        <button type="button" class="fb__again" @click="reportAgain">再报一次</button>
+      </span>
 
       <div v-if="feedbackOpen" class="fb__panel">
         <!--
@@ -863,5 +878,22 @@ function onBodyClick(event: MouseEvent): void {
 
 .fb__done {
   color: var(--ok);
+}
+
+/* 「再报一次」：低调的文字按钮 —— 它不是主操作，但必须存在 */
+.fb__again {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.85em;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.fb__again:hover {
+  color: var(--primary);
 }
 </style>

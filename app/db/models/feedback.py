@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -33,14 +33,17 @@ class FeedbackVerdict(enum.StrEnum):
 
 
 class AnswerFeedback(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
-    """一条纠错反馈。**同一个人对同一条消息只能有一条**（重复提交是覆盖）。"""
+    """一条纠错反馈。
+
+    ⚠️ **每次上报 = 一条新记录**（2026-10-28 改）：以前是"同一人 + 同一消息唯一"，
+        重复提交会**覆盖**旧记录。取消它的理由有两条：
+        ① 同一条回答可以有**不同**问题（答错一处、又引错一处）；
+        ② 一条已经采纳/发布的反馈被后来一次误点改写，连 `adopted/published` 的留痕都对不上 ——
+           那是把治理记录当成了个人待办。
+        防误点交给前端（提交后短时禁用 ＋ 明确的"再报一次"入口），后端不替人吞证据。
+    """
 
     __tablename__ = "answer_feedback"
-    __table_args__ = (
-        # 同一用户 + 同一消息唯一：避免一个人点五次就变成五条 badcase。
-        # ⚠️ 用数据库约束，**不用"先查后写"** —— 并发下查与写之间有窗口。
-        UniqueConstraint("message_id", "user_id", name="feedback_unique_per_user_message"),
-    )
 
     message_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, index=True

@@ -165,10 +165,16 @@ async def test_feedback_stores_a_snapshot_on_the_server(
 
 
 @pytest.mark.integration
-async def test_second_feedback_overwrites_the_first(
+async def test_second_feedback_creates_a_new_row(
     client: Any, make_account, login, session: AsyncSession
 ) -> None:
-    """同一个人对同一条消息提两次 → **覆盖**（不然一个人点五次就是五条 badcase）。"""
+    """同一个人对同一条消息报两次 → **两条记录**（2026-10-28 改的口径）。
+
+    ⚠️ 以前是"同一人 + 同一消息唯一，重复提交覆盖"。但同一条回答可以有不同问题
+        （答错一处、又引错一处）；更要紧的是：一条**已经采纳/发布**的反馈被后来一次
+        误点改写，`adopted_at` / `published_at` 的留痕就对不上了。
+        防误点交给前端（提交后短时禁用 +「再报一次」），后端不再替人吞证据。
+    """
     account = await make_account(label="fb")
     token = await login(account.email, account.password)
     conversation = await _new_conversation(client, token)
@@ -188,12 +194,12 @@ async def test_second_feedback_overwrites_the_first(
         headers=account.auth(token),
     )
     assert second.status_code == 201
-    assert second.json()["id"] == first.json()["id"], "应该是同一条被改写"
+    assert second.json()["id"] != first.json()["id"], "第二次上报必须是新的一条"
 
     rows = (
         await session.scalars(select(AnswerFeedback).where(AnswerFeedback.message_id == message.id))
     ).all()
-    assert len(rows) == 1
+    assert len(rows) == 2
 
 
 @pytest.mark.integration
