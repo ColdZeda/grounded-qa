@@ -302,7 +302,9 @@ function relative(iso: string): string {
             @click="group.open = !group.open"
           >
             <span class="group__chev">{{ group.open ? '▾' : '▸' }}</span>
-            <span class="group__title">{{ group.label }}</span>
+            <span class="group__title" :class="`group__title--${group.verdict}`">
+              {{ group.label }}
+            </span>
             <span class="group__count">{{ group.items.length }} 条</span>
             <span class="group__hint">{{ group.hint }}</span>
           </button>
@@ -328,12 +330,12 @@ function relative(iso: string): string {
           -->
           <details class="card__snap">
             <summary>当时的问答（快照）</summary>
-            <p class="snap__label">客户问</p>
+            <p class="snap__label">提问：</p>
             <p class="snap__text">
               <span v-if="item.question_snapshot">{{ item.question_snapshot }}</span>
               <span v-else class="snap__missing">（这条反馈收集时还没存提问）</span>
             </p>
-            <p class="snap__label">AI 答</p>
+            <p class="snap__label">答复：</p>
             <pre class="card__pre">{{ item.answer_snapshot }}</pre>
           </details>
 
@@ -538,8 +540,27 @@ function relative(iso: string): string {
 }
 
 .group__title {
-  margin: 0;
-  font-size: 0.95rem;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  /* 三种分类给三种颜色：一眼能看出这是哪一类，而不是三行长得一样的灰字 */
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+
+.group__title--wrong_answer {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.group__title--wrong_citation {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.group__title--other {
+  background: var(--primary-soft);
+  color: var(--primary);
 }
 
 .group__hint {
@@ -563,15 +584,18 @@ function relative(iso: string): string {
   align-self: flex-start;
 }
 
-/* 快照的两段（客户问 / AI 答）：**标签一行、内容一行**，两边长得一样 */
+/* 快照的两段（提问 / 答复）：**标签一行、内容一行**，两块都给暗底 —— 才分得清哪句是客户的 */
 .snap__label {
-  margin: 8px 0 2px;
+  margin: 10px 0 3px;
   color: var(--text-muted);
   font-size: 0.75rem;
 }
 
 .snap__text {
-  margin: 0 0 6px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
   white-space: pre-wrap;
 }
 

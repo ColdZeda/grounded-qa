@@ -71,12 +71,15 @@ const STATUS_LABEL: Record<DocumentOut['status'], string> = {
  *
  * ⚠️ 为什么要单独一颗徽章：`已入库` 只说"切片和向量都好了"，**没说它能不能被检索引用**。
  *    现场就卡在这 —— 采纳出来的草稿还没发布，页面只写「已入库」，走查的人以为它已经在用了。
+ * ⚠️ 文案要**短**：这一行已经有"入库状态 + 内容状态 + 两个按钮"，
+ *    写「草稿（不进检索）」会把右边的按钮挤出屏幕（走查里真挤了）。
+ *    "不进检索"这句话放到 `title` 里，悬停能看。
  */
 const CONTENT_LABEL: Record<DocumentOut['content_status'], string> = {
   active: '现行',
   superseded: '已废止',
-  draft: '草稿（不进检索）',
-  sibling_brand: '同品牌他站',
+  draft: '草稿',
+  sibling_brand: '他站',
   internal: '内部稿',
 }
 
@@ -288,7 +291,7 @@ onMounted(load)
             :title="
               contentIsLive(item)
                 ? '这份文档的内容状态允许它被检索引用'
-                : '这份文档不会被检索引用（草稿 / 内部稿 / 他站）'
+                : '这份文档不会被检索引用（草稿还没发布 / 内部稿 / 他站）'
             "
           >
             {{ CONTENT_LABEL[item.content_status] }}
@@ -372,7 +375,9 @@ onMounted(load)
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  /* 徽章 + 两个按钮在窄屏会挤 ⟹ 允许换行，别把右边的按钮顶出可视区 */
+  flex-wrap: wrap;
+  gap: 8px 16px;
   padding: 14px 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -409,6 +414,7 @@ onMounted(load)
   display: flex;
   flex: 0 0 auto;
   gap: 6px;
+  margin-left: auto;
 }
 
 .row__op {
