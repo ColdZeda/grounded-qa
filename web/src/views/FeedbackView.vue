@@ -20,6 +20,7 @@ import AppHeader from '@/components/AppHeader.vue'
 import { ApiError } from '@/api/client'
 import {
   adoptFeedback,
+  deleteFeedback,
   listFeedback,
   publishFeedback,
   readDraft,
@@ -143,6 +144,33 @@ onMounted(load)
 async function loadMore(group: Group): Promise<void> {
   group.limit += PAGE_SIZE
   await loadGroup(group)
+}
+
+/**
+ * 删掉一条反馈（硬删、不可恢复）。
+ *
+ * ⚠️ **为什么需要它**：上报的不一定对 —— 误点、看错、事后发现是自己理解错。
+ *    假阳性一直堆在治理清单里，比没有清单更糟（没人再愿意逐条看）。
+ * ⚠️ 删反馈**不删**已经采纳出来的草稿文档 —— 提示里写清楚，别让人以为一起没了。
+ */
+async function removeFeedback(item: FeedbackAdminOut): Promise<void> {
+  const extra = item.adopted_document_id
+    ? '\n\n⚠️ 这条已经采纳过：删掉反馈**不会**删掉知识库里那份草稿文档（要删请去知识库页）。'
+    : ''
+  const ok = window.confirm(
+    `确定删掉这条「${VERDICT_LABEL[item.verdict]}」反馈吗？\n\n无法恢复。${extra}`,
+  )
+  if (!ok) return
+  busyId.value = item.id
+  try {
+    await deleteFeedback(item.id)
+    notice.value = '已删掉这条反馈。'
+    await load()
+  } catch (err) {
+    error.value = err instanceof ApiError ? err.message : `删除失败：${(err as Error).message}`
+  } finally {
+    busyId.value = ''
+  }
 }
 
 /** 开始采纳：**预填原答案**，让管理员在上面改，而不是从空白页开始写。 */
@@ -287,12 +315,12 @@ function relative(iso: string): string {
           -->
           <details class="card__snap">
             <summary>当时的问答（快照）</summary>
-            <p class="snap__q">
-              <span class="snap__tag">客户问</span>
+            <p class="snap__label">客户问</p>
+            <p class="snap__text">
               <span v-if="item.question_snapshot">{{ item.question_snapshot }}</span>
               <span v-else class="snap__missing">（这条反馈收集时还没存提问）</span>
             </p>
-            <p class="snap__tag snap__tag--answer">AI 答</p>
+            <p class="snap__label">AI 答</p>
             <pre class="card__pre">{{ item.answer_snapshot }}</pre>
           </details>
 
@@ -359,7 +387,14 @@ function relative(iso: string): string {
             </button>
           </div>
 
-          <div v-if="canWrite()" class="card__ops">
+          <!--
+            ⚠️ 正在编辑草稿时**不显示**这一排：否则下面同时挂着「生成草稿 / 取消」
+               和「采纳为草稿」，看起来像两个功能（走查里就点懵过一次）。
+          -->
+          <div
+            v-if="canWrite() && !(editing && editing.id === item.id)"
+            class="card__ops"
+          >
             <button
               v-if="!item.adopted_document_id"
               class="btn btn--primary btn--sm"
@@ -388,6 +423,16 @@ function relative(iso: string): string {
                 发布
               </button>
             </template>
+            <!-- 上报的不一定对：假阳性要能清掉，否则清单没人看 -->
+            <button
+              class="btn btn--ghost btn--sm btn--danger-text"
+              type="button"
+              title="删掉这条反馈（不可恢复；不会删掉已采纳的草稿文档）"
+              :disabled="busyId === item.id"
+              @click="removeFeedback(item)"
+            >
+              删除
+            </button>
           </div>
 
           <p class="card__trail">
@@ -488,24 +533,16 @@ function relative(iso: string): string {
   align-self: flex-start;
 }
 
-.snap__q {
-  margin: 8px 0 0;
-  padding: 8px 10px;
-  border-left: 3px solid var(--line);
-  background: var(--surface-sunken);
-  border-radius: 0 8px 8px 0;
-  white-space: pre-wrap;
-}
-
-.snap__tag {
-  display: inline-block;
-  margin-right: 8px;
+/* 快照的两段（客户问 / AI 答）：**标签一行、内容一行**，两边长得一样 */
+.snap__label {
+  margin: 8px 0 2px;
   color: var(--text-muted);
   font-size: 0.75rem;
 }
 
-.snap__tag--answer {
-  margin: 10px 0 2px;
+.snap__text {
+  margin: 0 0 6px;
+  white-space: pre-wrap;
 }
 
 .snap__missing {
@@ -586,6 +623,15 @@ function relative(iso: string): string {
   display: flex;
   gap: 8px;
   margin-top: 12px;
+}
+
+/* 「删除」：不抢眼但认得出（红字、无底色）—— 它是破坏性动作，不是主按钮 */
+.btn--danger-text {
+  color: var(--danger);
+}
+
+.btn--danger-text:hover {
+  border-color: var(--danger);
 }
 
 .card__trail {

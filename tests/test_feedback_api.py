@@ -398,6 +398,54 @@ async def _account_with_feedback(client, make_account, login, session, text: str
 
 
 @pytest.mark.integration
+async def test_admin_can_delete_feedback_but_member_cannot(
+    client: Any, make_account, login, session: AsyncSession
+) -> None:
+    """反馈是**治理清单**：假阳性要能清掉，但只有管理员能清（2026-10-28 用户提）。
+
+    ⚠️ 为什么普通坐席不能删：他能**提交**（那是他的判断），但不能把记录**抹掉** ——
+        否则"这条我报错了"可以被当事人撤回，badcase 就不可追溯了。
+    ⚠️ 另一个租户的管理员来删 → **404**（不是 403，约定 14）。
+    """
+    admin = await make_account(label="fb-del", role=UserRole.ADMIN)
+    token = await login(admin.email, admin.password)
+    headers = admin.auth(token)
+    conversation = await _new_conversation(client, token)
+    message = await _seed_answer(
+        session,
+        tenant_id=admin.tenant_id,
+        conversation_id=uuid.UUID(conversation["id"]),
+        text="这条是误报",
+    )
+    created = await client.post(
+        FEEDBACK,
+        json={"message_id": str(message.id), "verdict": "other", "note": "误点"},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    feedback_id = uuid.UUID(created.json()["id"])
+
+    member = await make_account(label="fb-del-member", role=UserRole.MEMBER)
+    member_token = await login(member.email, member.password)
+    denied = await client.delete(f"{FEEDBACK}/{feedback_id}", headers=member.auth(member_token))
+    assert denied.status_code == 403
+
+    stranger = await make_account(label="fb-del-stranger", role=UserRole.ADMIN)
+    stranger_token = await login(stranger.email, stranger.password)
+    missing = await client.delete(
+        f"{FEEDBACK}/{feedback_id}", headers=stranger.auth(stranger_token)
+    )
+    assert missing.status_code == 404
+
+    ok = await client.delete(f"{FEEDBACK}/{feedback_id}", headers=headers)
+    assert ok.status_code == 204
+    left = (
+        await session.scalars(select(AnswerFeedback).where(AnswerFeedback.id == feedback_id))
+    ).all()
+    assert left == []
+
+
+@pytest.mark.integration
 async def test_member_cannot_adopt_or_publish(
     client: AsyncClient, with_models, make_account, login, session: AsyncSession
 ) -> None:

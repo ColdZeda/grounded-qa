@@ -18,7 +18,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 
 from app.api.chat import ClientsDep
@@ -183,6 +183,36 @@ async def list_feedback(
     return await _decorate(
         session, current_user.tenant_id, list((await session.scalars(stmt)).all())
     )
+
+
+@router.delete(
+    "/{feedback_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="删掉一条反馈（仅管理员；硬删）",
+)
+async def delete_feedback(
+    feedback_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+    _: AdminWriter,
+) -> Response:
+    """删掉一条反馈。**硬删，没有回收站**（六条硬规矩 ⑤）。
+
+    ⚠️ **为什么要有删除**（2026-10-28 用户提）：上报的**不一定对** ——
+        误点、看错、或者坐席报了"这条答错了"后来发现是自己理解错。
+        治理清单里留着一堆假阳性，比没有清单更糟：没人再有耐心逐条看。
+    ⚠️ **删反馈不删知识库文档**：如果这条已经采纳过，`feedback/<uuid>.md` 还在
+        知识库页里（自己就是一份文档，有自己的生命周期）。级联删文档太危险 ——
+        一个"删掉这条上报"的动作不该把已经发布的正文一起带走。
+    ⚠️ 越权一律 **404**（约定 14）：403 等于承认"这条反馈存在"。
+    """
+    repo = TenantScopedRepository(session, tenant_id=current_user.tenant_id, model=AnswerFeedback)
+    row = await session.scalar(repo.select().where(AnswerFeedback.id == feedback_id))
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="反馈不存在")
+    await session.delete(row)
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 async def _decorate(

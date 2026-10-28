@@ -9,7 +9,7 @@
  *    而且发布前服务端会先拿它和全库算一次冲突。
  */
 
-import { apiJson } from './client'
+import { apiFetch, apiJson } from './client'
 import { listMessages } from './conversations'
 
 export type FeedbackVerdict = 'wrong_answer' | 'wrong_citation' | 'other'
@@ -161,6 +161,19 @@ export async function adoptFeedback(
 
 export async function readDraft(id: string): Promise<DraftOut> {
   return apiJson<DraftOut>(`/feedback/${id}/draft`)
+}
+
+/**
+ * 删掉一条反馈（**硬删，没有回收站**）。
+ *
+ * ⚠️ 上报的不一定对 —— 误点、看错、事后发现是自己理解错。假阳性堆在治理清单里，
+ *    比没有清单更糟：没人再有耐心逐条看。
+ * ⚠️ 删反馈**不删**已经采纳出来的草稿文档：那是知识库里的另一份东西，
+ *    一个"删掉这条上报"的动作不该把它带走（要删去知识库页删）。
+ */
+export async function deleteFeedback(id: string): Promise<void> {
+  // 后端回 204 无 body ⟹ 用 `apiFetch`（`apiJson` 会去 `resp.json()`，然后炸）
+  await apiFetch(`/feedback/${id}`, { method: 'DELETE' })
 }
 
 export async function publishFeedback(id: string, force = false): Promise<PublishOut> {
