@@ -21,9 +21,7 @@ def _chunk(content: str, *, score: float = 1.0) -> RetrievedChunk:
     )
 
 
-# ------------------------------------------------------------
 # RRF
-# ------------------------------------------------------------
 
 
 def test_rrf_rewards_agreement_between_paths() -> None:
@@ -97,9 +95,7 @@ def test_rrf_handles_empty_input() -> None:
     assert reciprocal_rank_fusion([[], []], k=60) == {}
 
 
-# ------------------------------------------------------------
 # 提示词组装
-# ------------------------------------------------------------
 
 
 def test_context_numbering_starts_at_one_and_follows_order() -> None:

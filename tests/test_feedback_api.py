@@ -291,9 +291,7 @@ async def test_list_is_admin_only(client: Any, make_account, login) -> None:
     assert denied.status_code == 403
 
 
-# ------------------------------------------------------------
 # 快照要含"客户问的那句" ＋ 原会话；清单可按类过滤（2026-10-28 D2/D3）
-# ------------------------------------------------------------
 async def _seed_question(
     session: AsyncSession, *, tenant_id: uuid.UUID, conversation_id: uuid.UUID, text: str
 ) -> Message:
@@ -380,9 +378,7 @@ async def test_list_feedback_can_filter_by_verdict(
     assert len(both.json()) == 2
 
 
-# ------------------------------------------------------------
 # 采纳入库：草稿 → 人工发布（W22 / D11）
-# ------------------------------------------------------------
 async def _account_with_feedback(client, make_account, login, session, text: str):
     """建一个管理员账号 ＋ 一条已存在的反馈，返回 (headers, account, feedback)。"""
     account = await make_account(label="adopt")

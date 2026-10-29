@@ -68,9 +68,7 @@ async def _seed_conversation(
     return conversation
 
 
-# ------------------------------------------------------------
 # 文档
-# ------------------------------------------------------------
 async def test_document_list_shows_chunk_count(client, login, make_account, session) -> None:
     """列表要给出"切成几块" —— 切分质量是检索质量的第一道门，看不出来就没人会发现切坏了。"""
     account = await make_account(label="docs-count")
@@ -114,9 +112,7 @@ async def test_delete_document_is_404_for_other_tenants(
     assert response.status_code == 404
 
 
-# ------------------------------------------------------------
 # 会话
-# ------------------------------------------------------------
 async def test_delete_conversation_removes_messages(client, login, make_account, session) -> None:
     account = await make_account(label="conv-del")
     conversation = await _seed_conversation(
@@ -155,9 +151,7 @@ async def test_member_cannot_delete_someone_elses_conversation(
     assert response.status_code == 404
 
 
-# ------------------------------------------------------------
 # 分组摘要 ＋ 按组分页（2026-10-25：一个组不许吃光全局配额）
-# ------------------------------------------------------------
 async def test_summary_reports_each_group_count(client, login, make_account, session) -> None:
     account = await make_account(label="conv-summary")
     for index in range(3):

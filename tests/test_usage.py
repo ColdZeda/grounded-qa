@@ -21,9 +21,7 @@ from tests.fakeredis import FakeRedis
 PREFIX = get_settings().api_prefix
 
 
-# ------------------------------------------------------------
 # 记账的只读读取
-# ------------------------------------------------------------
 async def test_peek_quota_is_none_when_redis_is_down() -> None:
     """Redis 挂了要说"不知道"，**不能返回 0** —— 0 会让页面显示"额度还很足"。"""
     assert await peek_quota(FakeRedis(broken=True), subject="u") is None
@@ -48,9 +46,7 @@ async def test_peek_rate_does_not_increment() -> None:
     assert [call for call, _key in redis.calls] == ["get"]
 
 
-# ------------------------------------------------------------
 # 纯函数
-# ------------------------------------------------------------
 def test_cost_is_none_without_price() -> None:
     """没配单价就**不给数字** —— 假装 0 元会让"成本"这个说法失去意义。"""
     assert _cost(1_000_000, 0.0) is None
@@ -64,9 +60,7 @@ def test_reset_at_is_next_midnight_beijing() -> None:
     assert _reset_at(datetime(2026, 10, 19, 20, 30, tzinfo=SHANGHAI)) == "2026-10-20 00:00"
 
 
-# ------------------------------------------------------------
 # 接口（需要真库：鉴权要查用户表）
-# ------------------------------------------------------------
 @pytest.mark.integration
 async def test_my_usage_reflects_recorded_tokens(client, login, make_account, limits_redis) -> None:
     account = await make_account(label="usage")

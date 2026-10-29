@@ -32,9 +32,7 @@ def _sample(name: str, labels: dict[str, str]) -> float | None:
     return REGISTRY.get_sample_value(name, labels)
 
 
-# ------------------------------------------------------------
 # HTTP 中间件
-# ------------------------------------------------------------
 def test_middleware_labels_by_route_template_not_real_url() -> None:
     """两个不同的真实 URL、同一个路由模板 ⟹ **一条**时间序列，计 2 次。
 
@@ -121,9 +119,7 @@ def test_middleware_does_not_touch_streaming_body() -> None:
     assert response.text == "event: a\n\nevent: b\n\n"
 
 
-# ------------------------------------------------------------
 # Prometheus 返回值的解析与并发查询
-# ------------------------------------------------------------
 def _transport(handler) -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
@@ -208,9 +204,7 @@ async def test_collect_raises_on_http_error() -> None:
         await monitoring.collect("http://prom.test", transport=_transport(handler))
 
 
-# ------------------------------------------------------------
 # 接口层（走 HTTP，需要真库：鉴权要查用户表）
-# ------------------------------------------------------------
 @pytest.mark.integration
 async def test_snapshot_reports_panels(client, login, make_account) -> None:
     """Prometheus 可查时：200 + `available=true` + 卡片齐全。"""

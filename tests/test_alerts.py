@@ -58,9 +58,7 @@ def _firing(
     }
 
 
-# ------------------------------------------------------------
 # 报文格式：按域名自动判断
-# ------------------------------------------------------------
 def test_webhook_kind_by_domain() -> None:
     assert webhook_kind(FEISHU_URL) == "feishu"
     assert webhook_kind(WECOM_URL) == "wecom"
@@ -78,9 +76,7 @@ def test_build_payload_shapes() -> None:
     assert wecom["text"]["content"] == "hi"
 
 
-# ------------------------------------------------------------
 # 解析：pending 不算、只用 labels 的白名单
-# ------------------------------------------------------------
 def test_parse_alerts_skips_pending() -> None:
     pending = _firing()
     pending["state"] = "pending"
@@ -116,9 +112,7 @@ def test_format_message_has_only_service_metric_value_time() -> None:
     assert "= 0" not in resolved
 
 
-# ------------------------------------------------------------
 # 一轮轮询：推送 + 去重
-# ------------------------------------------------------------
 class _Recorder:
     """假 webhook：记下每一份报文。"""
 
@@ -251,9 +245,7 @@ async def test_poll_marks_when_wecom_returns_errcode_zero() -> None:
     assert await redis.smembers(ACTIVE_KEY) == {"ApiScrapeDown|grounded-api|up"}
 
 
-# ------------------------------------------------------------
 # 启动：没配 URL 就不起任务
-# ------------------------------------------------------------
 async def test_start_shipper_is_noop_without_webhook() -> None:
     task = start_shipper(_settings(alert_webhook_url=""), FakeRedis())
     assert task is None

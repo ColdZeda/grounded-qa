@@ -42,9 +42,7 @@ PREFIX = get_settings().api_prefix
 DOC = "# 退货政策\n\n自签收之日起 7 天内可无理由退货。"
 
 
-# ------------------------------------------------------------
 # 夹具：上传要用假队列 ＋ 临时目录（真 Redis 不参与，也别污染工作区）
-# ------------------------------------------------------------
 class _RecordingEnqueue:
     def __init__(self) -> None:
         self.jobs: list[IngestJob] = []
@@ -98,9 +96,7 @@ async def _conversation(client: AsyncClient, token: str, title: str) -> dict[str
     return resp.json()
 
 
-# ------------------------------------------------------------
 # 消息：读
-# ------------------------------------------------------------
 async def test_messages_of_another_tenants_conversation_are_404(
     client: AsyncClient, make_account, login
 ) -> None:
@@ -120,9 +116,7 @@ async def test_messages_of_another_tenants_conversation_are_404(
     assert "机密" not in resp.text
 
 
-# ------------------------------------------------------------
 # 消息：写（提问）—— 必须在调模型之前拦住
-# ------------------------------------------------------------
 async def test_asking_into_another_tenants_conversation_is_404_and_calls_nothing(
     client: AsyncClient, app, make_account, login
 ) -> None:
@@ -151,9 +145,7 @@ async def test_asking_into_another_tenants_conversation_is_404_and_calls_nothing
     assert spy.calls == [], "越权的提问**绝不能**走到调模型那一步"
 
 
-# ------------------------------------------------------------
 # 知识库文档
-# ------------------------------------------------------------
 async def test_documents_are_tenant_scoped(
     client: AsyncClient, enqueue, make_account, login
 ) -> None:
@@ -188,9 +180,7 @@ async def test_member_cannot_upload_documents(
     assert enqueue.jobs == []
 
 
-# ------------------------------------------------------------
 # 管理端
-# ------------------------------------------------------------
 async def test_admin_tenant_endpoint_returns_own_tenant_only(
     client: AsyncClient, make_account, login
 ) -> None:
@@ -217,9 +207,7 @@ async def test_member_cannot_read_admin_endpoints(client: AsyncClient, make_acco
         assert resp.status_code == 403, f"{path} 没拦住成员"
 
 
-# ------------------------------------------------------------
 # token 本身：两种"凭据还在但人已经不该有权限"的情况
-# ------------------------------------------------------------
 async def test_token_with_mismatched_tenant_is_rejected(
     client: AsyncClient, session: AsyncSession, make_account, login
 ) -> None:

@@ -87,7 +87,7 @@ class Document(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # ---------- v1.3：内容有效性（与上面的 `status` 正交，见 `ContentStatus`）----------
+    # v1.3：内容有效性（与上面的 `status` 正交，见 `ContentStatus`）
     # ⚠️ 加这三列**不需要重嵌入**：向量在 `chunks.embedding`，状态在 `documents`，
     #    检索时 join 一下即可 —— 这正是"向量库和业务数据同在一个 PG"的红利。
     content_status: Mapped[ContentStatus] = mapped_column(

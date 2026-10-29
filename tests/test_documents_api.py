@@ -109,9 +109,7 @@ async def _admin_headers(make_account, login) -> tuple[dict[str, str], object]:
     return account.auth(token), account
 
 
-# ------------------------------------------------------------
 # 上传：接受与拒绝
-# ------------------------------------------------------------
 async def test_upload_accepts_text_and_enqueues_once(
     client: AsyncClient, wire, make_account, login
 ):
@@ -180,9 +178,7 @@ async def test_upload_requires_auth(client: AsyncClient, wire, make_account, log
     assert wire.jobs == []
 
 
-# ------------------------------------------------------------
 # 判重：不是错误，但要如实说
-# ------------------------------------------------------------
 async def test_same_content_twice_is_not_an_error_and_does_not_requeue(
     client: AsyncClient, wire, make_account, login
 ):
@@ -241,9 +237,7 @@ async def test_enqueue_failure_is_recorded_not_swallowed(
     assert not upload_path(document.id).exists()
 
 
-# ------------------------------------------------------------
 # 列表
-# ------------------------------------------------------------
 async def test_list_shows_status_and_isolates_tenants(
     client: AsyncClient, wire, make_account, login
 ):
@@ -266,9 +260,7 @@ async def test_list_shows_status_and_isolates_tenants(
     assert [item["filename"] for item in body["items"]] == ["upload/退货政策.md"]
 
 
-# ------------------------------------------------------------
 # worker：真的把文件变成块
-# ------------------------------------------------------------
 async def test_worker_turns_upload_into_chunks(
     client: AsyncClient, wire, make_account, login, session, factory
 ):

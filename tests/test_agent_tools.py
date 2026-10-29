@@ -37,9 +37,7 @@ def _runtime(*, question: str = "保修多久", ref_time: date | None = None) ->
     )
 
 
-# ------------------------------------------------------------
 # ① 工具签名与参数校验
-# ------------------------------------------------------------
 
 
 def test_schema_names_match_the_whitelist() -> None:
@@ -121,9 +119,7 @@ def test_recent_must_be_boolean() -> None:
         validate_arguments(tools.GET_ORDER, {"recent": "yes"})
 
 
-# ------------------------------------------------------------
 # ② 状态机：反问只一次 / 交卷要有引用
-# ------------------------------------------------------------
 
 
 async def test_ask_user_is_allowed_only_once() -> None:
@@ -273,9 +269,7 @@ async def test_ask_user_is_refused_right_after_an_order_was_found(
     assert again.ok is True, "只拦一次：真不行就让它问"
 
 
-# ------------------------------------------------------------
 # ③ 集成：真库
-# ------------------------------------------------------------
 
 
 async def _seed_doc(

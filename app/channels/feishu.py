@@ -286,7 +286,7 @@ class FeishuChannel:
         self._names = names
         self._seen: OrderedDict[str, None] = OrderedDict()
 
-    # ---------- 入口 ----------
+    # 入口
 
     async def handle_event(self, payload: dict[str, Any]) -> None:
         """处理一条事件。**任何异常都不许冒泡出去** —— 冒出去长连接就断了。"""
@@ -320,7 +320,7 @@ class FeishuChannel:
         for chunk in split_reply(reply):
             await self._sender.send_markdown(event.chat_id, chunk)
 
-    # ---------- 内部 ----------
+    # 内部
 
     def _remember(self, message_id: str) -> bool:
         """返回 True = **第一次见**。超出容量时淘汰最旧的。"""

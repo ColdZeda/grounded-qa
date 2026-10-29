@@ -56,7 +56,7 @@ class _Panel:
 #:    它的"耗时"是**用户看完全部回答**的时间，必须和普通请求分开看，
 #:    混在一起会让 P95 看起来像"系统很慢"，其实那是流没关。
 PANELS: tuple[_Panel, ...] = (
-    # ---------- 可用性与延迟 ----------
+    # 可用性与延迟
     _Panel(
         key="api_up",
         group="可用性与延迟",
@@ -103,7 +103,7 @@ PANELS: tuple[_Panel, ...] = (
         hint="近 24 小时累计（increase 会自动处理重启导致的计数器归零）",
         expr="sum(increase(gq_http_requests_total[24h]))",
     ),
-    # ---------- 资源 ----------
+    # 资源
     _Panel(
         key="cpu_5m",
         group="资源",
@@ -136,7 +136,7 @@ PANELS: tuple[_Panel, ...] = (
         hint="主机 load1。2 核上持续 > 2 说明在排队；和 CPU 一起看才知道是算还是在等",
         expr="node_load1",
     ),
-    # ---------- 问答与用量（24h）----------
+    # 问答与用量（24h）
     _Panel(
         key="chat_24h",
         group="问答与用量",
@@ -180,7 +180,7 @@ PANELS: tuple[_Panel, ...] = (
         hint="模型 API 回报的 usage.total_tokens 累计（不是估算）。拒答不调模型 ⟹ 不计数",
         expr="sum(increase(gq_tokens_total[24h]))",
     ),
-    # ---------- 限额与数据健康 ----------
+    # 限额与数据健康
     _Panel(
         key="limit_denied_24h",
         group="限额与数据健康",

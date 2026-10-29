@@ -1,18 +1,9 @@
 /**
- * 后端契约的 TypeScript 镜像。
- *
- * ⚠️ **手写，不是从 OpenAPI 代码生成。**
- *     现在只有 6 个端点，引入 codegen 链条（生成器 + 构建步骤 + 版本对齐）
- *     比手抄这 40 行贵得多。
- *
- * ⚠️ 代价是真实的：**后端改了字段这里不会报错**，只会在运行时变成 `undefined`。
- *     所以下面的字段名是一个一个对着 `app/schemas/*.py` 抄的，不凭印象写。
- *     哪天端点数量上去了，再换成生成 —— 那时生成的收益才盖过成本。
+ * 后端契约的 TypeScript 镜像（手写，不引 codegen）。
+ * 字段逐个对着 `app/schemas/*.py` 抄 —— 后端改字段这里不会报错，只会在运行时变 undefined。
  */
 
-// ------------------------------------------------------------
 // 鉴权（app/schemas/auth.py）
-// ------------------------------------------------------------
 
 /** `app/db/models/user.py` 的 `UserRole`。 */
 export type UserRole = 'admin' | 'member'
@@ -49,9 +40,7 @@ export interface ChatPreferences {
 /** 提问时的模式：`fast` = pipeline（快）；`agent` = 模型自己选工具（准，慢 2~4 倍）。 */
 export type ChatMode = 'fast' | 'agent'
 
-// ------------------------------------------------------------
 // 会话与消息（app/schemas/conversation.py / chat.py）
-// ------------------------------------------------------------
 
 /** `app/db/models/conversation.py` 的 `MessageRole`。`system` 目前不落库。 */
 export type MessageRole = 'user' | 'assistant' | 'system'
@@ -158,7 +147,7 @@ export interface MessageMeta {
    */
   followup_prev?: string | null
   orders?: OrderSnapshot[]
-  // ---- 以下只有**助手消息**且 agent 跑过才有 ----
+  // 以下只有**助手消息**且 agent 跑过才有
   /** agent 走了几步。 */
   agent_steps?: number
   /** 自愈（“白查”后重新检索）几次。 */
@@ -169,7 +158,7 @@ export interface MessageMeta {
   awaiting?: string
   /** 全轨迹（模型每步选了什么、工具返回了什么）。 */
   agent_trace?: AgentStep[]
-  // ---- 以下**两种模式都可能带**（2026-10-27 起落库；以前只随 SSE 帧走一次） ----
+  // 以下**两种模式都可能带**（2026-10-27 起落库；以前只随 SSE 帧走一次）
   /** 引用可核对性：这次有几处引用对不上。只在 `checked > 0` 时有。 */
   citation_audit?: CitationAudit
   /** 修法 D 自动改正过的编号（改前 / 改后 / 命中块）。 */
@@ -218,9 +207,7 @@ export interface MessageOut {
   created_at: string
 }
 
-// ------------------------------------------------------------
 // 知识库文档（app/schemas/document.py）
-// ------------------------------------------------------------
 
 /** `app/db/models/knowledge.py` 的 `DocumentStatus`（**入库状态机**）。 */
 export type DocumentStatus = 'pending' | 'processing' | 'ready' | 'failed'
@@ -284,9 +271,7 @@ export interface DocumentChunksOut {
   items: ChunkOut[]
 }
 
-// ------------------------------------------------------------
 // 评测报告（app/schemas/report.py）
-// ------------------------------------------------------------
 
 export interface ReportMetric {
   name: string
@@ -310,9 +295,7 @@ export interface ReportListOut {
   note: string
 }
 
-// ------------------------------------------------------------
 // 知识库冲突体检（app/kb/conflicts.py，`GET /reports/conflicts`）
-// ------------------------------------------------------------
 
 /** 一条"期限事实"：某篇文档说，在某个适用范围下，某主题是多少。 */
 export interface ConflictFact {
@@ -362,9 +345,7 @@ export interface ConflictReport {
   items: ConflictItem[]
 }
 
-// ------------------------------------------------------------
 // 运维看板（app/schemas/monitoring.py）
-// ------------------------------------------------------------
 
 export interface MonitorItem {
   /** 序列标签（如 `outcome=answered`）。单值序列是空串。 */
@@ -396,9 +377,7 @@ export interface MonitorSnapshot {
   error: string | null
 }
 
-// ------------------------------------------------------------
 // 配额与成本（app/schemas/usage.py）
-// ------------------------------------------------------------
 
 /** 某个渠道今天花了多少（**同一笔总量**的分项，不参与限流判定）。 */
 export interface ChannelUsage {
@@ -447,9 +426,7 @@ export interface TenantUsageOut {
   note: string
 }
 
-// ------------------------------------------------------------
 // 图片（app/schemas/image.py）
-// ------------------------------------------------------------
 
 /** 上传结果。
  *  ⚠️ 后端**刻意不回传 `path` / `sha256`**（前者是实现细节，后者是内部判重口径）。 */
@@ -462,9 +439,7 @@ export interface ImageOut {
   created_at: string
 }
 
-// ------------------------------------------------------------
 // SSE 事件载荷（app/api/chat.py 的 `_sse` 调用处）
-// ------------------------------------------------------------
 
 /** `sources` 里附带的那张图的读数（只在**这条消息带图**时出现）。 */
 export interface ImageInfo {

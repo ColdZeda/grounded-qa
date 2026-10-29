@@ -75,7 +75,7 @@ from app.rag.retrieval import HybridRetriever, RetrievedChunk
 
 logger = logging.getLogger(__name__)
 
-# ---------- 工具名 ----------
+# 工具名
 
 SEARCH_KB = "search_kb"
 GET_ORDER = "get_order"
@@ -124,7 +124,7 @@ class ToolArgumentError(ValueError):
     """参数不合法。**不抛给调用方** —— `dispatch` 会把它转成 `ok=false` 的 payload。"""
 
 
-# ---------- 给模型的工具签名（OpenAI `tools` 格式）----------
+# 给模型的工具签名（OpenAI `tools` 格式）
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
@@ -229,7 +229,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 
-# ---------- 参数校验 ----------
+# 参数校验
 
 _MAX_LEN: dict[str, int] = {
     "query": 200,
@@ -338,7 +338,7 @@ def validate_arguments(name: str, arguments: object) -> dict[str, Any]:
     return clean
 
 
-# ---------- 证据 ----------
+# 证据
 
 
 @dataclass(frozen=True)
@@ -414,7 +414,7 @@ class ToolResult:
     awaiting: str | None = None
 
 
-# ---------- 运行时 ----------
+# 运行时
 
 
 @dataclass
@@ -490,7 +490,7 @@ class ToolRuntime:
         #: 修法 D：本轮**自动改正**过的编号（改前 / 改后 / 命中块）。
         self.last_repairs: list[dict[str, Any]] = []
 
-    # ---- 只读属性 ----
+    # 只读属性
 
     @property
     def evidence(self) -> tuple[Evidence, ...]:
@@ -524,7 +524,7 @@ class ToolRuntime:
             self._now = datetime.now().astimezone()
         return self._now
 
-    # ---- 入口 ----
+    # 入口
 
     async def dispatch(self, name: str, arguments: object) -> ToolResult:
         """执行一次调用。**任何异常都在这里被兜住**，绝不抛给循环。
@@ -554,7 +554,7 @@ class ToolRuntime:
             return self._ask_user(args["question"])
         return self._finish(args["answer"], args["citations"])
 
-    # ---- search_kb ----
+    # search_kb
 
     async def _search_kb(self, query: str, *, top_k: int | None = None) -> ToolResult:
         settings = self._settings
@@ -754,7 +754,7 @@ class ToolRuntime:
             for row in rows
         }
 
-    # ---- get_order ----
+    # get_order
 
     async def _get_order(self, order_no: str | None, *, recent: bool) -> ToolResult:
         """查订单。**不返回任何 PII** —— `order_snapshot` 里本来就只有可核对的事实。"""
@@ -822,7 +822,7 @@ class ToolRuntime:
         stmt = repo.select().order_by(Order.placed_at.desc()).limit(RECENT_ORDERS)
         return list((await self._session.scalars(stmt)).all())
 
-    # ---- ask_user ----
+    # ask_user
 
     def _ask_user(self, question: str) -> ToolResult:
         """反问。**全程只允许一次**。
@@ -869,7 +869,7 @@ class ToolRuntime:
             awaiting=question,
         )
 
-    # ---- finish ----
+    # finish
 
     def _audit_hits(self) -> list[RetrievedChunk]:
         """把本轮证据转成核对器要的形状（`ref` 天然就是 1..N 连续编号）。"""

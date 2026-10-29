@@ -42,9 +42,7 @@ def _at(hour: int, minute: int = 0, second: int = 0, *, day: int = 17) -> dateti
     return datetime(2026, 10, day, hour, minute, second, tzinfo=ZoneInfo("Asia/Shanghai"))
 
 
-# ------------------------------------------------------------
 # 速率
-# ------------------------------------------------------------
 async def test_rate_allows_up_to_the_limit_then_denies() -> None:
     redis = FakeRedis()
 
@@ -108,9 +106,7 @@ async def test_rate_is_per_subject() -> None:
     assert fresh.allowed is True
 
 
-# ------------------------------------------------------------
 # 配额
-# ------------------------------------------------------------
 async def test_quota_is_read_only_and_blocks_at_the_limit() -> None:
     redis = FakeRedis()
     key, _ = _quota_key(SUBJECT, _at(10, 0))
@@ -198,9 +194,7 @@ async def test_quota_window_rolls_over_at_midnight() -> None:
     assert (await read_quota(redis, subject=SUBJECT, limit=100, now=_at(0, 1, day=18))).used == 0
 
 
-# ------------------------------------------------------------
 # fail-open
-# ------------------------------------------------------------
 async def test_redis_down_means_allowed_but_flagged() -> None:
     """Redis 挂了 → 放行，但 `failopen=True`（监控上要看得见）。"""
     redis = FakeRedis(broken=True)
@@ -221,9 +215,7 @@ async def test_add_tokens_swallows_redis_errors() -> None:
     await add_tokens(redis, subject=SUBJECT, tokens=100, channel="web")  # 不抛
 
 
-# ------------------------------------------------------------
 # 话术与异常
-# ------------------------------------------------------------
 def test_human_delay_uses_the_unit_people_think_in() -> None:
     assert human_delay(1) == "1 秒"
     assert human_delay(59) == "59 秒"
@@ -267,9 +259,7 @@ def test_ensure_passes_through_when_allowed() -> None:
     assert ensure(decision) is decision
 
 
-# ------------------------------------------------------------
 # 键的构造（白盒，但值得钉住）
-# ------------------------------------------------------------
 def test_rate_key_carries_the_aligned_minute() -> None:
     key, remaining = _rate_key(SUBJECT, _at(10, 7, 20))
 

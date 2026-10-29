@@ -25,9 +25,7 @@ def _hit(point: str, answer: str) -> bool:
     return _point_hit(point, _norm(_strip_citation_marks(answer)))[0]
 
 
-# ------------------------------------------------------------
 # 原子的归一化
-# ------------------------------------------------------------
 
 
 def test_years_are_canonicalized_to_months() -> None:
@@ -78,9 +76,7 @@ def test_range_gives_both_ends() -> None:
     assert _numeric_atoms("3 到 5 个工作日") == [("workday", 3.0), ("workday", 5.0)]
 
 
-# ------------------------------------------------------------
 # 要点判定
-# ------------------------------------------------------------
 
 
 def test_synonym_rewrite_still_hits() -> None:

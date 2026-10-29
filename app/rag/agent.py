@@ -163,7 +163,7 @@ class AgentRunner:
         self._usage: dict[str, int] = {}
         self._degraded: str | None = None
 
-    # ---------- 对外入口 ----------
+    # 对外入口
 
     async def answer(self) -> AsyncIterator[AgentEvent]:
         """跑循环，逐个 yield 事件（与 `RagPipeline.answer` 同一套事件类型 ＋ `ToolEvent`）。"""
@@ -328,7 +328,7 @@ class AgentRunner:
         async for event in self._finish(finished, started=started):
             yield event
 
-    # ---------- 收尾 ----------
+    # 收尾
 
     async def _finish(self, finished: ToolResult, *, started: float) -> AsyncIterator[AgentEvent]:
         """把工具的"终止"翻译成对外的 `Sources` / `Delta` / `Answer`。"""
@@ -422,7 +422,7 @@ class AgentRunner:
             else:
                 yield event
 
-    # ---------- 内部 ----------
+    # 内部
 
     def _build_messages(self) -> list[dict[str, object]]:
         system = _SYSTEM_PROMPT.format(

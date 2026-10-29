@@ -128,9 +128,7 @@ AdminUser = Annotated[User, Depends(require_admin)]
 AdminWriter = Annotated[User, Depends(require_admin_writer)]
 
 
-# ------------------------------------------------------------
 # 限流 / 配额用的 Redis
-# ------------------------------------------------------------
 def get_limits_redis() -> Redis:
     """限流与 token 配额用的连接。
 

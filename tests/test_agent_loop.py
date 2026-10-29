@@ -30,9 +30,7 @@ from app.rag.providers import ModelAPIError, ToolCall, ToolChatResult
 from app.rag.tools import ASK_USER, FINISH, GET_ORDER, SEARCH_KB
 from tests.test_agent_tools import _seed_doc
 
-# ------------------------------------------------------------
 # 替身
-# ------------------------------------------------------------
 
 
 def _call(name: str, arguments: dict[str, object], *, call_id: str | None = None) -> ToolCall:
@@ -167,9 +165,7 @@ def _tool_events(events: Sequence[object]) -> list[ToolEvent]:
     return [item for item in events if isinstance(item, ToolEvent)]
 
 
-# ------------------------------------------------------------
 # ① 交卷
-# ------------------------------------------------------------
 
 
 @pytest.mark.integration
@@ -257,9 +253,7 @@ async def test_parallel_tool_calls_cost_one_step(session: AsyncSession, make_acc
     assert [item.name for item in _tool_events(events)] == [SEARCH_KB, GET_ORDER, FINISH]
 
 
-# ------------------------------------------------------------
 # ② 反问
-# ------------------------------------------------------------
 
 
 @pytest.mark.integration
@@ -285,9 +279,7 @@ async def test_ask_user_becomes_the_reply(session: AsyncSession, make_account) -
     assert answer.citations == []
 
 
-# ------------------------------------------------------------
 # ③ 预算与回落（**验收标准 5**：必须有测试守住）
-# ------------------------------------------------------------
 
 
 @pytest.mark.integration
@@ -451,9 +443,7 @@ async def test_text_only_reply_gets_one_nudge(session: AsyncSession, make_accoun
     ), "第二句之前必须补一句'请调 finish'"
 
 
-# ------------------------------------------------------------
 # ④ 护栏：拒答与"纯订单题"
-# ------------------------------------------------------------
 
 
 @pytest.mark.integration
@@ -534,9 +524,7 @@ async def test_order_only_answer_is_not_refused(session: AsyncSession, make_acco
     assert "退款处理中" in answer.text
 
 
-# ------------------------------------------------------------
 # ⑤ 上下文构造
-# ------------------------------------------------------------
 
 
 @pytest.mark.integration
@@ -607,9 +595,7 @@ def test_citation_index_equals_ref() -> None:
     assert citation.as_dict()["index"] == 3
 
 
-# ------------------------------------------------------------
 # 显示层重编号（2026-10-28 走查「图 20」）
-# ------------------------------------------------------------
 
 
 def _cite(index: int) -> Citation:

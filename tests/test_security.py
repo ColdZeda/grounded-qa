@@ -24,9 +24,7 @@ from app.core.security import (
 ROUNDS = 4
 
 
-# ------------------------------------------------------------
 # 密码哈希
-# ------------------------------------------------------------
 
 
 def test_hash_then_verify_roundtrip() -> None:
@@ -81,9 +79,7 @@ def test_verify_returns_false_instead_of_raising_on_extreme_input() -> None:
     assert verify_password("normal", "") is False
 
 
-# ------------------------------------------------------------
 # JWT
-# ------------------------------------------------------------
 
 
 def test_token_roundtrip_carries_tenant_and_role() -> None:

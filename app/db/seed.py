@@ -135,7 +135,7 @@ async def seed() -> None:
     factory = get_session_factory()
 
     async with factory() as session:
-        # ---------- 租户 ----------
+        # 租户
         tenant = await session.scalar(
             select(Tenant).where(Tenant.slug == settings.default_tenant_id)
         )
@@ -147,7 +147,7 @@ async def seed() -> None:
         else:
             print(f"[seed] 租户已存在 slug={tenant.slug} id={tenant.id}（未改动）")
 
-        # ---------- 管理员 ----------
+        # 管理员
         user = await session.scalar(select(User).where(User.email == email))
         if user is None:
             user = User(
@@ -174,7 +174,7 @@ async def seed() -> None:
                 f"{'（已修正租户/角色）' if changed else '（未改动，密码保持原样）'}"
             )
 
-        # ---------- 演示订单（20 条，只读业务表）----------
+        # 演示订单（20 条，只读业务表）
         await _seed_orders(session, tenant.id, user.id)
 
         await session.commit()

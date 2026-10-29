@@ -1,10 +1,7 @@
 <script setup lang="ts">
 /**
- * 聊天页 —— 消费 SSE 的那一端。
- *
- * 这个文件里有两处**不看注释就一定会写错**的地方，都标了 ⚠️：
- *   1. 流式消息必须用 `reactive()` 包一层再 push（否则界面不动）
- *   2. 输入框必须判 `isComposing`（否则中文输入法选词时按回车会被提前发出去）
+ * 聊天页 —— 消费 SSE 的那一端。两处不看注释就会写错：流式消息要先 `reactive()` 再 push；
+ * 输入框要判 `isComposing`（中文输入法选词时回车会被提前发出去）。
  */
 
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
@@ -185,9 +182,7 @@ const scroller = ref<HTMLElement | null>(null)
 /** 用户是不是"贴着底部"。不贴就说明他在往上翻历史 —— 这时**不能**把他拽回来。 */
 const stick = ref(true)
 
-// ------------------------------------------------------------
 // 附件（一张图）
-// ------------------------------------------------------------
 /**
  * 待发送的那张图。
  *
@@ -487,9 +482,7 @@ watch(
   { immediate: true },
 )
 
-// ------------------------------------------------------------
 // 滚动
-// ------------------------------------------------------------
 function onScroll(): void {
   const el = scroller.value
   if (!el) return
@@ -503,9 +496,7 @@ async function scrollToBottom(force = false): Promise<void> {
   if (el) el.scrollTop = el.scrollHeight
 }
 
-// ------------------------------------------------------------
 // 提问
-// ------------------------------------------------------------
 /** 拿提问当会话标题。后端限 200 字符，这里截短一点，列表里才不会挤成一团。 */
 function titleFrom(question: string): string {
   return question.length <= 30 ? question : `${question.slice(0, 30)}…`

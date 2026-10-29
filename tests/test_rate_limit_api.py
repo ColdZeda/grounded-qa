@@ -37,9 +37,7 @@ PREFIX = get_settings().api_prefix
 DOC = "# 退换货\n\n无理由退货 7 天。\n"
 
 
-# ------------------------------------------------------------
 # 小工具
-# ------------------------------------------------------------
 async def _headers(make_account, login) -> tuple[dict[str, str], uuid.UUID]:
     account = await make_account(role=UserRole.ADMIN)
     token = await login(account.email, account.password)
@@ -104,9 +102,7 @@ def _isolated_upload_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     return target
 
 
-# ------------------------------------------------------------
 # 速率：429 的形状与时机
-# ------------------------------------------------------------
 async def test_rate_limit_returns_actionable_429(
     client: AsyncClient,
     app,
@@ -194,9 +190,7 @@ async def test_rate_limit_is_per_user_not_global(
     assert (await _ask(client, headers_b, conv_b)).status_code == 200
 
 
-# ------------------------------------------------------------
 # 配额：真 token 数
-# ------------------------------------------------------------
 async def test_tokens_are_recorded_from_the_api_usage(
     client: AsyncClient, app, make_account, login, session: AsyncSession, limits_redis: FakeRedis
 ) -> None:
@@ -269,9 +263,7 @@ async def test_quota_exhausted_blocks_and_hints_the_reset(
     assert count == 0
 
 
-# ------------------------------------------------------------
 # 上传：另一把尺子
-# ------------------------------------------------------------
 class _RecordingEnqueue:
     def __init__(self) -> None:
         self.jobs: list[object] = []
@@ -314,9 +306,7 @@ async def test_upload_rate_limit(
     assert second.json()["code"] == "rate_limited"
 
 
-# ------------------------------------------------------------
 # fail-open
-# ------------------------------------------------------------
 async def test_chat_still_works_when_redis_is_down(
     client: AsyncClient, app, make_account, login, limits_redis: FakeRedis
 ) -> None:

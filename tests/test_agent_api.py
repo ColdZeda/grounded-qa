@@ -127,9 +127,7 @@ async def _last_assistant_message(session: AsyncSession, conversation_id: str) -
     return message
 
 
-# ------------------------------------------------------------
 # ① agent 模式的 SSE 形状
-# ------------------------------------------------------------
 
 
 async def test_agent_mode_emits_tool_frames_and_persists_trace(
@@ -208,9 +206,7 @@ async def test_pipeline_mode_has_no_tool_frames_and_no_agent_meta(
     assert (message.meta or {}).get("citation_audit") is not None
 
 
-# ------------------------------------------------------------
 # ② 回落要看得出来
-# ------------------------------------------------------------
 
 
 async def test_agent_fallback_is_marked_and_recorded(
@@ -245,9 +241,7 @@ async def test_agent_fallback_is_marked_and_recorded(
     assert (message.meta or {}).get("degraded") == "模型调用失败"
 
 
-# ------------------------------------------------------------
 # ③ scratchpad 跨轮
-# ------------------------------------------------------------
 
 
 async def test_scratchpad_is_saved_and_reused_next_turn(
@@ -297,9 +291,7 @@ async def test_scratchpad_is_saved_and_reused_next_turn(
     assert "云朵单人沙发" in (scratchpad.get("items") or [])
 
 
-# ------------------------------------------------------------
 # ④ 三层开关：总闸 / 用户偏好 / 请求显式指定
-# ------------------------------------------------------------
 
 
 async def test_switch_off_forces_fast_even_if_user_asks_agent(

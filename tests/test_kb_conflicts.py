@@ -16,9 +16,7 @@ from app.kb.conflicts import (
     topic_of,
 )
 
-# ------------------------------------------------------------
 # 提取
-# ------------------------------------------------------------
 
 GERMANY_INTERNAL = """
 # 新客服入职手册 · 退换货篇
@@ -151,9 +149,7 @@ def test_same_value_is_not_a_conflict() -> None:
     assert find_conflicts([left, right]) == []
 
 
-# ------------------------------------------------------------
 # v1.4 A4：放宽召回（同值重复 / 跨单位 / 主题拆分）
-# ------------------------------------------------------------
 
 DAMAGE_POLICY_48H = """
 # 丢件与破损的报障时限
@@ -280,9 +276,7 @@ def test_warranty_one_year_vs_two_years_is_a_conflict() -> None:
     assert {conflicts[0].left.value, conflicts[0].right.value} == {1.0, 2.0}
 
 
-# ------------------------------------------------------------
 # 报告
-# ------------------------------------------------------------
 
 
 def test_report_carries_denominators_and_merges_duplicates() -> None:
@@ -362,9 +356,7 @@ def test_report_prefers_the_policy_document_as_representative() -> None:
     assert item["left"]["status"] == "active"
 
 
-# ------------------------------------------------------------
 # 推送（v1.4 A3：定时告警）
-# ------------------------------------------------------------
 
 
 def _report_with_conflict() -> dict:

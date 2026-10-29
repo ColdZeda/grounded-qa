@@ -23,9 +23,7 @@ import httpx
 
 from app.core.config import get_settings
 
-# ------------------------------------------------------------
 # 共享的 HTTP 客户端
-# ------------------------------------------------------------
 # ⚠️ 复用同一个 client 而不是每次请求新建：新建 = 每次重做 TCP 握手 + TLS 协商。
 #    2C2G 上省下的那点 CPU 不算什么，但**连接数**是实打实的。
 _http_client: httpx.AsyncClient | None = None
@@ -144,9 +142,7 @@ def _parse_tool_call(item: object) -> ToolCall:
     return ToolCall(id=raw_id, name=name, raw_arguments=text, arguments=parsed)
 
 
-# ------------------------------------------------------------
 # 对话（OpenAI 兼容：POST {base}/chat/completions）
-# ------------------------------------------------------------
 class ChatClient:
     """对话模型。支持流式与非流式。"""
 
@@ -353,9 +349,7 @@ def _parse_stream_usage(data: str) -> dict[str, int] | None:
     return counted or None
 
 
-# ------------------------------------------------------------
 # embedding（OpenAI 兼容：POST {base}/embeddings）
-# ------------------------------------------------------------
 class EmbeddingClient:
     """把文本转成向量。
 
@@ -431,9 +425,7 @@ class EmbeddingClient:
                 )
 
 
-# ------------------------------------------------------------
 # rerank（**不是** OpenAI 标准；这里按阿里云百炼 DashScope 的形状）
-# ------------------------------------------------------------
 class RerankClient:
     """交叉编码精排：把 (query, doc) 成对打分。
 

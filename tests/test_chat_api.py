@@ -42,9 +42,7 @@ UNIT_VECTOR = [1.0] + [0.0] * (DIM - 1)
 ORTHOGONAL_VECTOR = [0.0, 1.0] + [0.0] * (DIM - 2)
 
 
-# ------------------------------------------------------------
 # 假客户端（绝不联网）
-# ------------------------------------------------------------
 class FakeChat:
     """假的对话客户端。按 `chunks` 依次吐出，并记录被调用了几次。
 
@@ -186,9 +184,7 @@ async def _ask(
     return response.status_code, parse_sse(body)
 
 
-# ------------------------------------------------------------
 # 拒答
-# ------------------------------------------------------------
 
 
 async def test_refuses_and_never_calls_the_model_when_kb_is_empty(
@@ -300,9 +296,7 @@ async def test_refusal_also_persists_citations_and_confidence(
     assert assistant["confidence"] < get_settings().answer_min_score
 
 
-# ------------------------------------------------------------
 # 正常回答 + 引用溯源
-# ------------------------------------------------------------
 
 
 async def test_answers_and_emits_citations_when_evidence_exists(
@@ -420,9 +414,7 @@ async def test_citations_and_refused_flag_are_persisted(
     assert messages[0]["confidence"] is None
 
 
-# ------------------------------------------------------------
 # 隔离
-# ------------------------------------------------------------
 
 
 async def test_retrieval_never_crosses_tenants(
@@ -456,9 +448,7 @@ async def test_retrieval_never_crosses_tenants(
     assert "7 天内" not in json.dumps(events, ensure_ascii=False)
 
 
-# ------------------------------------------------------------
 # 越权与参数校验
-# ------------------------------------------------------------
 
 
 async def test_ask_on_someone_elses_conversation_returns_404(
@@ -521,9 +511,7 @@ async def test_overlong_question_is_rejected(
     assert response.status_code == 422
 
 
-# ------------------------------------------------------------
 # 短追问改写（v1.4 C1' / 走查 P1-⑧）
-# ------------------------------------------------------------
 
 
 async def test_short_followup_says_what_it_merged(

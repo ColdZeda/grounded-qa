@@ -235,7 +235,7 @@ class AlertShipper:
             await self._client.aclose()
             self._client = None
 
-    # ---------- 内部 ----------
+    # 内部
     async def _fetch_firing(self) -> list[Alert]:
         assert self._client is not None, "AlertShipper 必须先进 async with"
         base = self.settings.prometheus_url.rstrip("/")
@@ -252,7 +252,7 @@ class AlertShipper:
         # ⚠️ **HTTP 200 不等于投递成功**（2026-10-19 发现的坑，见 `_check_delivery`）
         _check_delivery(kind, response)
 
-    # ---------- 主流程 ----------
+    # 主流程
     async def poll_once(self) -> tuple[int, int]:
         """跑一轮。返回 `(新告警数, 恢复数)`。
 

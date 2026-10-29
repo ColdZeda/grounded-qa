@@ -104,9 +104,7 @@ def test_default_jwt_secret_meets_hs256_minimum_length() -> None:
     assert len(DEV_JWT_SECRET.encode("utf-8")) >= 32
 
 
-# ---------------------------------------------------------------
 # 默认值必须"开箱能用"（2026-10-16）
-# ---------------------------------------------------------------
 
 
 def test_default_model_choices_match_the_agreed_selection() -> None:

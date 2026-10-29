@@ -25,9 +25,7 @@ from app.rag.reftime import RefTime, RefTimeSource, parse_explicit_date, resolve
 from app.rag.retrieval import HybridRetriever
 from tests.test_chat_api import UNIT_VECTOR, FakeChat
 
-# ------------------------------------------------------------
 # ① 时间从哪来
-# ------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -132,9 +130,7 @@ def test_pipeline_wiring_prefers_order_then_frozen() -> None:
     )
 
 
-# ------------------------------------------------------------
 # ③ 提示词怎么解释这个时间
-# ------------------------------------------------------------
 
 
 def test_prompt_explains_why_an_old_policy_still_applies() -> None:
@@ -162,9 +158,7 @@ def test_prompt_omits_the_block_when_there_is_no_signal() -> None:
     assert "【时间基准】" not in system
 
 
-# ------------------------------------------------------------
 # ② 怎么进 SQL（真库）
-# ------------------------------------------------------------
 
 
 async def _seed(

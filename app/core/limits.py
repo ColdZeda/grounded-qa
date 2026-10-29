@@ -77,9 +77,7 @@ RATE_WINDOW_SECONDS: Final[int] = 60
 
 Scope = Literal["rate", "quota"]
 
-# ------------------------------------------------------------
 # 指标（Prometheus）
-# ------------------------------------------------------------
 #: 被拒的请求。**按 scope 分**：rate 高说明有人刷，quota 高说明有人在烧钱。
 _denied = Counter(
     "gq_limit_denied_total",
@@ -97,9 +95,7 @@ _failopen = Counter(
 _tokens = Counter("gq_tokens_total", "累计消耗的 token 数（模型 API 回报的 usage）")
 
 
-# ------------------------------------------------------------
 # 判定结果
-# ------------------------------------------------------------
 @dataclass(frozen=True)
 class LimitDecision:
     """一次判定的结果。**路由只关心 `allowed`**，其余是给人看的话术。"""
@@ -170,9 +166,7 @@ def ensure(decision: LimitDecision) -> LimitDecision:
     return decision
 
 
-# ------------------------------------------------------------
 # Redis 键：窗口对齐
-# ------------------------------------------------------------
 def _rate_key(subject: str, now: datetime) -> tuple[str, int]:
     """`(键, 距本窗口结束还有几秒)`。
 
@@ -208,9 +202,7 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-# ------------------------------------------------------------
 # 三个操作
-# ------------------------------------------------------------
 async def consume_rate(
     redis: Redis,
     *,
@@ -378,9 +370,7 @@ def _fail_open(call: str, limit: int, exc: Exception) -> LimitDecision:
     )
 
 
-# ------------------------------------------------------------
 # 门面：路由里只看得到几行
-# ------------------------------------------------------------
 class LimitGuard:
     """把"配置 + Redis + 判定"合成一个对象。
 

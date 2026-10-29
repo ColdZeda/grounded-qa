@@ -75,7 +75,7 @@ class AnswerFeedback(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
         JSONB, nullable=False, default=list
     )
 
-    # ---------- W22：「采纳入库」的草稿 → 人工发布（D11）----------
+    # W22：「采纳入库」的草稿 → 人工发布（D11）
     # ⚠️ **为什么状态挂在反馈上、不新开一张表**：一条反馈的一生就是
     #    「被指出 → 被采纳成草稿 → 被发布」，它本来就是一个流程，
     #    拆成两张表会让"这条反馈处理到哪一步了"变成一次 join。

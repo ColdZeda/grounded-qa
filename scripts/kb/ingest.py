@@ -191,9 +191,7 @@ async def _ingest(args: argparse.Namespace, *, root: Path, files: list[Path]) ->
     return 1 if summary.count("fail") else 0
 
 
-# ------------------------------------------------------------
 # CLI
-# ------------------------------------------------------------
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="ingest.py",
@@ -244,7 +242,7 @@ def _dry_run(root: Path, files: list[Path], settings: Settings) -> int:
 def main() -> int:
     args = parse_args()
 
-    # ---------- 同步部分：找文件（纯本地磁盘） ----------
+    # 同步部分：找文件（纯本地磁盘）
     root = Path(args.path).expanduser().resolve()
     if not root.is_dir():
         print(f"✗ 目录不存在：{root}", file=sys.stderr)
@@ -267,7 +265,7 @@ def main() -> int:
     if args.dry_run:
         return _dry_run(root, files, settings)
 
-    # ---------- 异步部分：连库 + 调模型 ----------
+    # 异步部分：连库 + 调模型
     return asyncio.run(_ingest(args, root=root, files=files))
 
 

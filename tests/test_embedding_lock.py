@@ -31,9 +31,7 @@ PREFIX = get_settings().api_prefix
 EXPECTED = "fake-embedding"  # 与 `FakeEmbedder.model` 一致
 
 
-# ------------------------------------------------------------
 # 纯单元：数得对、话能照着修
-# ------------------------------------------------------------
 def test_lock_is_ok_when_everything_matches() -> None:
     lock = EmbeddingLock(
         expected_model="m1",
@@ -92,9 +90,7 @@ def test_lock_tolerates_empty_knowledge_base() -> None:
     assert lock.models() == ()
 
 
-# ------------------------------------------------------------
 # 集成：三段的接线
-# ------------------------------------------------------------
 @pytest.mark.integration
 async def test_inspect_reads_the_actual_metadata(session: AsyncSession, make_account) -> None:
     account = await make_account()

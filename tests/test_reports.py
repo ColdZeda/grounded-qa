@@ -118,9 +118,7 @@ def test_summarize_generation_counts_forbidden_phrases() -> None:
     assert by_name["出现禁语"] == "1/2"
 
 
-# ------------------------------------------------------------
 # 权限（集成测试，要真库）—— 2026-10-25 收紧
-# ------------------------------------------------------------
 @pytest.mark.integration
 async def test_reports_list_is_admin_only(client, login, make_account, session) -> None:
     """评测快照**只给管理员**。

@@ -40,9 +40,7 @@ async def _create_conversation(client: AsyncClient, token: str, title: str) -> d
     return resp.json()
 
 
-# ------------------------------------------------------------
 # HTTP 层：跨租户读
-# ------------------------------------------------------------
 
 
 async def test_admin_of_another_tenant_gets_404_not_someone_elses_data(
@@ -91,9 +89,7 @@ async def test_conversation_list_never_contains_other_tenants_rows(
     assert alice_conversation["id"] not in resp.text
 
 
-# ------------------------------------------------------------
 # HTTP 层：租户**内部**再按用户分一层
-# ------------------------------------------------------------
 
 
 async def test_member_cannot_read_a_colleagues_conversation(
@@ -188,9 +184,7 @@ async def test_admin_user_list_is_tenant_scoped(client: AsyncClient, make_accoun
     assert "hashed_password" not in resp.text
 
 
-# ------------------------------------------------------------
 # 仓储层：直接测那道"焊死 tenant_id"的防线
-# ------------------------------------------------------------
 
 
 async def test_repository_get_is_tenant_scoped(session: AsyncSession, make_account) -> None:

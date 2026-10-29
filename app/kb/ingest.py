@@ -89,9 +89,7 @@ def is_supported(filename: str) -> bool:
     return any(lowered.endswith(suffix) for suffix in TEXT_SUFFIXES)
 
 
-# ------------------------------------------------------------
 # v1.3：目录名 → `content_status`
-# ------------------------------------------------------------
 #: ⚠️ **这是一条隐性契约**（`PLAN §8.6` 的"唯一隐性成本"）：
 #:    语料目录一挪，这里必须同步改 —— **改错了不会报错**，只会让不该引用的文档
 #:    悄悄混进候选集。缓解：下面的单测 `test_kb_content_status.py` 逐条钉死。
@@ -155,9 +153,7 @@ def classify_content_status(filename: str) -> tuple[ContentStatus, date | None, 
     return status_, None, None
 
 
-# ------------------------------------------------------------
 # 第一步：准备一行 Document
-# ------------------------------------------------------------
 @dataclass(frozen=True)
 class Prepared:
     """`prepare_document` 的结果。"""
@@ -265,9 +261,7 @@ async def _forget(session: AsyncSession, document: Document) -> None:
     await session.commit()
 
 
-# ------------------------------------------------------------
 # 第二步：切分 → 嵌入 → 写块
-# ------------------------------------------------------------
 async def _embed_all(
     embedder: EmbeddingClient, texts: list[str], *, on_progress: ProgressFn | None = None
 ) -> list[list[float]]:
@@ -372,9 +366,7 @@ async def _fail(session: AsyncSession, document: Document, exc: Exception) -> in
     raise IngestError(message) from exc
 
 
-# ------------------------------------------------------------
 # CLI 的便利入口：准备 + 处理
-# ------------------------------------------------------------
 @dataclass
 class IngestResult:
     """一个文件的入库结果。**给命令行看的**（worker 侧靠异常，不靠返回值）。"""

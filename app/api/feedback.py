@@ -251,9 +251,7 @@ async def _decorate(
     return out
 
 
-# ------------------------------------------------------------
 # 「采纳入库」：草稿 → 人工发布（D11）
-# ------------------------------------------------------------
 async def _load_feedback(
     session: SessionDep, user: CurrentUser, feedback_id: uuid.UUID
 ) -> AnswerFeedback:

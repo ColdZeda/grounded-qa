@@ -203,7 +203,7 @@ class RagPipeline:
         #:    "一律拒答"会让对照组恒为 0 分 —— 那不是基线，那是不及格。
         self._closed_book = closed_book
 
-    # ---------- 检索 ----------
+    # 检索
 
     def _resolve_ref_time(self, question: str) -> RefTime:
         """这次问答**用哪一天的眼光**看知识库（v1.3 B2）。
@@ -305,7 +305,7 @@ class RagPipeline:
         # 只有全文命中：trgm 分数不是相关性语义，**没有可信的置信度**
         return hits, None, "none"
 
-    # ---------- 主流程 ----------
+    # 主流程
 
     async def answer(
         self,
@@ -328,7 +328,7 @@ class RagPipeline:
         #: "这题召回错了"要能一眼看出是不是改写惹的祸。
         followup_query = ""
         if self._closed_book:
-            # ---- 闭卷：不检索、不判拒答、没有引用 ----
+            # 闭卷：不检索、不判拒答、没有引用
             hits: list[RetrievedChunk] = []
             confidence: float | None = None
             score_kind = "closed_book"

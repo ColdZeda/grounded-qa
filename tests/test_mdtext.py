@@ -67,9 +67,7 @@ def test_headings_are_plain_by_default_and_bold_for_feishu() -> None:
     assert downgrade("## 保修期", bold_headings=True) == "**保修期**"
 
 
-# ------------------------------------------------------------
 # 顾客侧：删掉行内引用编号（2026-10-28 走查 A12）
-# ------------------------------------------------------------
 
 
 def test_strip_citation_markers_removes_only_real_markers() -> None:

@@ -1,11 +1,6 @@
-"""全局配置。
+"""全局配置：所有可调项走环境变量，不硬编码（AGENTS.md §7.1 约定 11）。
 
-⚠️ 项目级约定（AGENTS.md §7.1 约定 11）：
-    **所有可调项走配置 / 环境变量，不硬编码。**
-    配额、阈值、模型名、chunk 大小都会变；写死了就要改代码。
-
-⚠️ 模型全部走 API，不落本地模型（AGENTS 硬约束 §2）——
-    所以这里只有 base_url / api_key / model 名，没有模型路径。
+模型全部走外部 API，所以这里只有 base_url / api_key / model 名，没有模型路径（AGENTS 硬约束 §2）。
 """
 
 from __future__ import annotations
@@ -29,13 +24,8 @@ DEFAULT_ADMIN_PASSWORD = "change-me"
 #: ⚠️ 刻意用 `demo-visitor@` 而不是 `demo@`：后者容易和"开发者自己建的本地账号"撞上。
 DEMO_EMAIL = "demo-visitor@grounded.local"
 
-#: **已实测校准过** `answer_min_score` 的 rerank 模型。
-#:
-#: ⚠️ 判定只用「模型在不在这个表里」—— **在表外 = 从没校准过 = 那个阈值是抄来的**。
-#:    表里的值是一句话记录，**仅供人看、不参与判定** ——
-#:    一旦参与判定，就变成"改一处要同步两处"，那必然漂移（`AGENTS §4` 刻意不写条数就是这个道理）。
-#:
-#: 📌 **重新标定完，把新模型名加进来** —— 这是"校准记录"，不是配置项。
+#: 已实测校准过 `answer_min_score` 的 rerank 模型；判定只看"模型在不在表里"。
+#: 重新标定完把新模型名加进来 —— 这是校准记录，不是配置项。
 CALIBRATED_RERANK_MODELS: dict[str, str] = {
     "qwen3.7-text-rerank": (
         "2026-10-15 · 20 条样本 · 取 0.60"
@@ -54,14 +44,14 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # ---------- 应用 ----------
+    # 应用
     app_version: str = "0.1.0"
     app_env: str = "dev"
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     log_level: str = "INFO"
 
-    # ---------- PostgreSQL ----------
+    # PostgreSQL
     postgres_host: str = "localhost"
     # ⚠️ **容器内互访**端口（容器网络里就是标准的 5432）
     postgres_port: int = 5432
@@ -76,13 +66,13 @@ class Settings(BaseSettings):
     postgres_user: str = "grounded"
     postgres_password: str = "change-me"
 
-    # ---------- Redis ----------
+    # Redis
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_db: int = 0
     redis_maxmemory: str = "96mb"
 
-    # ---------- 对话 / 多模态（任意 OpenAI 兼容端点）----------
+    # 对话 / 多模态（任意 OpenAI 兼容端点）
     # ⚠️ 刻意**不绑定厂商**：换供应商只改这几个值，不动代码。
     #    当前默认走 DeepSeek；也可换智谱（glm-4-flash 免费档）等。
     # ⚠️ `base_url` 要**带上 `/v1`**：客户端会拼 `{base}/chat/completions`。
@@ -97,7 +87,7 @@ class Settings(BaseSettings):
     #    真遇到不兼容的端点时宁可选它，也别选"全站 400"。
     llm_stream_usage: bool = True
 
-    # ---------- embedding ----------
+    # embedding
     # ⚠️ embedding_model / embedding_dim 是**元数据锁**：
     #    换模型必须全量重嵌入，否则检索质量会静默变差（AGENTS §7.1 约定 3）。
     # ⚠️ DeepSeek **不提供 embedding**，这一项必须另选一家（默认示例：阿里云百炼）。
@@ -110,7 +100,7 @@ class Settings(BaseSettings):
     embedding_model: str = "qwen3.7-text-embedding-flash"
     embedding_dim: int = 1024
 
-    # ---------- rerank（精排）----------
+    # rerank（精排）
     # 可以和 embedding 共用同一家 / 同一把 key，但必须用**专门的 rerank 模型**：
     # embedding 是双塔（query / doc 分开编码），rerank 是交叉编码，两者不能互相替代。
     rerank_enabled: bool = True
@@ -121,7 +111,7 @@ class Settings(BaseSettings):
     #    （见 `CALIBRATED_RERANK_MODELS`），配套阈值与它**不通用**。
     rerank_model: str = "qwen3.7-text-rerank"
 
-    # ---------- 检索 / 生成 ----------
+    # 检索 / 生成
     retrieve_top_k: int = 20
     #: 召回范围（v1.3 阶段 B）。**相关度 ≠ 有效性**（`AGENTS §7.1` 约定 20）：
     #: · `current` = 只在**有资格被引用**的文档里召回（`content_status = 'active'`）← 产品态
@@ -165,7 +155,7 @@ class Settings(BaseSettings):
     #    （`uv run python evals/run.py --layer generation --mode all`）。
     history_messages: int = 12
 
-    # ---------- agent（阶段 7，`PLAN §13`）----------
+    # agent（阶段 7，`PLAN §13`）
     #: **agent 模式总闸**（最高级开关）。`true` = 允许用户选择 agent；`false` = 全站强制走 pipeline。
     #:
     #: ⚠️ **代码默认 `False`，但部署两边的 `.env` 都置 `true`**（产品默认是开）。
@@ -196,7 +186,7 @@ class Settings(BaseSettings):
     # 外部模型 API 超时（秒）。2C2G 上不能让一个卡住的请求把连接池占死。
     model_request_timeout_seconds: float = 60.0
 
-    # ---------- 上传入库 ----------
+    # 上传入库
     # 上传文件的**停放目录**（api 写、worker 读，同一个容器卷 `gq-uploads`）。
     # ⚠️ 相对路径按进程 cwd 解析：容器里是 `/app` → `/app/uploads`。
     # ⚠️ 这个目录**只是传送带**，不是存储：worker 处理完就删。
@@ -213,7 +203,7 @@ class Settings(BaseSettings):
     #    而且没人知道。宁可整篇失败、让用户看见原因。
     max_chunks_per_document: int = 400
 
-    # ---------- 提问带图（query 侧多模态）----------
+    # 提问带图（query 侧多模态）
     # 单张图上限 **8 MB**（2026-10-24 走查 P1-⑦ 从 3 MB 抬上来）。
     # ⚠️ 正常路径根本到不了这个数：前端会先 canvas 压到**长边 ≤1600 / JPEG 0.85**，
     #    一张 6 MB 的手机截图传上来通常只有几百 KB。8 MB 是给"前端压不动"留的口子
@@ -231,7 +221,7 @@ class Settings(BaseSettings):
     image_model_jpeg_quality: int = 88
     image_model_max_bytes: int = 1024 * 1024
 
-    # ---------- 读图（图 → 结构化文字）----------
+    # 读图（图 → 结构化文字）
     # ⚠️ **复用对话那一套**：`deepseek-flash` 本身就是多模态模型、同一把 key、同一个端点。
     #    留独立旋钮是为了以后能换别的多模态模型 —— **换模型不需要重嵌入任何东西**
     #    （图从不进向量空间，见 `architecture.md` §9.35）。
@@ -242,14 +232,14 @@ class Settings(BaseSettings):
     #: 关掉它 = 有图也不读，直接按 D10 的降级路回话（"图片没读成功，我只按文字回答"）。
     image_analysis_enabled: bool = True
 
-    # ---------- 评测报告（只读）----------
+    # 评测报告（只读）
     # 评测结果 JSON 所在目录。**相对仓库根**解析（容器里就是 `/app/evals/results`）。
     # ⚠️ 这些文件是**报告数据**（`evals/results/*.json`），进镜像；
     #    题集（`evals/questions/`）与 runner（`evals/run.py`）**不进镜像** ——
     #    服务器不跑评测。三者边界见 `AGENTS.md §13`。
     evals_results_dir: str = "evals/results"
 
-    # ---------- 多租户 / 限流 / 配额（**成本熔断**，逻辑见 `app/core/limits.py`）----------
+    # 多租户 / 限流 / 配额（**成本熔断**，逻辑见 `app/core/limits.py`）
     default_tenant_id: str = "default"
     # 每个用户每分钟能发几**次**问答。⚠️ 比的是次数，不是 token（token 是下面那条）。
     # ⚠️ 这个数必须**明显小于** nginx 那道按 IP 的限额（120 次/分钟）——
@@ -266,7 +256,7 @@ class Settings(BaseSettings):
     # 配了之后配额页会多显示一个"估算成本"，并**同时把单价印出来**（成本数字必须可解释）。
     llm_price_per_million_tokens: float = 0.0
 
-    # ---------- 数据库连接池 ----------
+    # 数据库连接池
     # ⚠️ 这两个值**不是"越大越快"**：池子是上限，真正的约束是"同时有多少个请求在等连接"。
     # v1.1 压测实测（本机 12 核、20 并发打 `/api/v1/conversations`，交替测量）：
     #   5/5 → 348 req/s ｜ 10/10 → 330 req/s ⟹ **池大小无可分辨影响**（都在测量波动内）。
@@ -281,7 +271,7 @@ class Settings(BaseSettings):
     #: 连接最大年龄（秒）。到点主动换新连接，比等 PG / 中间设备断掉再报错好。
     postgres_pool_recycle: int = 1800
 
-    # ---------- 鉴权（JWT）----------
+    # 鉴权（JWT）
     # ⚠️ 默认值**仅供本地开发**；生产必须由环境变量覆盖（下面的 `_guard_production_secrets` 会拦）。
     #    它是"能签发任意身份"的钥匙，泄露 = 全站沦陷。
     #
@@ -295,12 +285,12 @@ class Settings(BaseSettings):
     # ⚠️ 登录接口跑在**线程池**里（见 app/api/auth.py），不会卡住事件循环。
     password_hash_rounds: int = 12
 
-    # ---------- 管理端 bootstrap（首次建库用）----------
+    # 管理端 bootstrap（首次建库用）
     # ⚠️ 这两个值只在 `python -m app.db.seed` 里用一次；生产必须改掉默认值。
     admin_email: str = "admin@example.com"
     admin_password: str = DEFAULT_ADMIN_PASSWORD
 
-    # ---------- 演示登录（走查阶段 P0-③）----------
+    # 演示登录（走查阶段 P0-③）
     # 打开后 `POST /auth/demo-login` 会签发一个**演示成员**的 token（前端登录页出现
     # 「一键体验」按钮）。**默认关闭**。
     # ⚠️ 为什么做在服务端而不是前端硬编码账号：前端硬编码等于把密码打进 JS bundle，
@@ -308,7 +298,7 @@ class Settings(BaseSettings):
     # ⚠️ 演示账号是 `member`（不能上传/不能看评测/运维），且照常受"每人每分钟次数 / 每日 token"限制。
     demo_login_enabled: bool = False
 
-    # ---------- API ----------
+    # API
     api_prefix: str = "/api/v1"
 
     @model_validator(mode="after")
@@ -361,7 +351,7 @@ class Settings(BaseSettings):
 
         return self
 
-    # ---------- 飞书渠道（v1.2 第①项）----------
+    # 飞书渠道（v1.2 第①项）
     #: 关掉开关就**不起长连接**（容器照常在跑，只是不连）—— 没配凭据的环境不该因此起不来。
     feishu_enabled: bool = False
     #: 自建应用的凭据（飞书开放平台 → 应用 → 凭证与基础信息）。
@@ -380,7 +370,7 @@ class Settings(BaseSettings):
     #:    判据一句话：**顾客侧只给结论和"能不能办"，内部侧给全部证据**（`architecture §9.53 ①`）。
     feishu_show_sources: bool = False
 
-    # ---------- 可观测 ----------
+    # 可观测
     metrics_enabled: bool = True
     #: 看板去问哪台 Prometheus。**容器里用服务名**（compose 网络内解析）；
     #: 本机直跑 uvicorn 时它不存在 ⟹ 看板返回 `available=false`，这是预期行为。

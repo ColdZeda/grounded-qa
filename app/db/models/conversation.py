@@ -73,7 +73,7 @@ class Conversation(Base, UUIDPrimaryKeyMixin, TenantMixin, TimestampMixin):
     )
     title: Mapped[str] = mapped_column(String(200), default="新会话", nullable=False)
 
-    # ---------- 渠道（走查 P1-⑥）----------
+    # 渠道（走查 P1-⑥）
     #: 从哪来。默认 `web` —— 迁移时老数据全是网页端开的会话。
     channel: Mapped[Channel] = mapped_column(
         pg_enum(Channel, "conversation_channel"),

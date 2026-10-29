@@ -29,9 +29,7 @@ from pathlib import Path
 TEXT_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
 
 
-# ------------------------------------------------------------
 # 文本清洗
-# ------------------------------------------------------------
 #: `## 标题 { #anchor }` —— mkdocs 的锚点，对读者和模型都是噪音
 ANCHOR_RE = re.compile(r"\s*\{\s*#[^}]*\}\s*$")
 #: `{* ../../docs_src/dependencies/tutorial001.py hl[8:9] *}` —— 代码**引用指令**
@@ -93,9 +91,7 @@ def clean_markdown(raw: str) -> str:
     return BLANK_RUN_RE.sub("\n\n", "\n".join(out)).strip()
 
 
-# ------------------------------------------------------------
 # 切分
-# ------------------------------------------------------------
 @dataclass(frozen=True)
 class Section:
     """一个标题下的正文。`heading_path` 形如 `Dependencies > First Steps`。"""

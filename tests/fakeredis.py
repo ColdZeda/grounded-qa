@@ -33,7 +33,7 @@ class FakeRedis:
         #: 调用流水，便于断言"到底访问了几次 Redis"。
         self.calls: list[tuple[str, str]] = []
 
-    # ---------- 内部 ----------
+    # 内部
     def _guard(self, name: str, key: str) -> None:
         self.calls.append((name, key))
         if self.broken:
@@ -49,7 +49,7 @@ class FakeRedis:
             return False
         return True
 
-    # ---------- 我们用到的那几条 ----------
+    # 我们用到的那几条
     async def incr(self, key: str) -> int:
         self._guard("incr", key)
         value = self.data.get(key, 0) + 1 if self._live(key) else 1
@@ -75,7 +75,7 @@ class FakeRedis:
             return None
         return self.data.get(key)
 
-    # ---------- 集合（告警去重用）----------
+    # 集合（告警去重用）
     # ⚠️ 真 Redis 的 `smembers` 返回 `set[str]`（我们的连接是 `decode_responses=True`），
     #    这里保持一致 —— 否则代码里多一个 `.decode()` 只在测试里不炸。
     async def sadd(self, key: str, *members: str) -> int:
@@ -101,7 +101,7 @@ class FakeRedis:
                 removed += 1
         return removed
 
-    # ---------- 测试便利 ----------
+    # 测试便利
     def seed(self, key: str, value: int) -> None:
         """直接铺一个计数（省得为了造"已用满"而循环几百次）。"""
         self.data[key] = value

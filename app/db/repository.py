@@ -57,7 +57,7 @@ class TenantScopedRepository[ModelT: Base]:
         self._tenant_id = tenant_id
         self._model = model
 
-    # ---------- 只读属性 ----------
+    # 只读属性
 
     @property
     def session(self) -> AsyncSession:
@@ -71,7 +71,7 @@ class TenantScopedRepository[ModelT: Base]:
     def model(self) -> type[ModelT]:
         return self._model
 
-    # ---------- 查询构造 ----------
+    # 查询构造
 
     def select(self) -> Select[tuple[ModelT]]:
         """返回**已注入租户条件**的 SELECT。
@@ -102,7 +102,7 @@ class TenantScopedRepository[ModelT: Base]:
         total = await self._session.scalar(select(func.count()).select_from(subquery))
         return int(total or 0)
 
-    # ---------- 写入 ----------
+    # 写入
 
     def build(self, **kwargs: Any) -> ModelT:
         """构造一个新对象，**`tenant_id` 由仓储注入**。
