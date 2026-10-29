@@ -357,7 +357,7 @@ uv run python scripts/kb/ingest.py --kb fastapi --path ../assets/knowledge-base/
 - **本机端口必须与项目 #1 错开**：本机还跑着 `E:\projects\langgraph-mcp-code-agent`，
   它的依赖栈占了 `3307`（MySQL）/ `6379`（Redis）/ `8888`（SearXNG）/ `80`（nginx）。
   本项目**宿主机**端口用 **PostgreSQL 55432 / Redis 56379 / API 58000**（容器内仍是标准端口）。
-  详见 `.env.example` 的「本机端口规划」。容器名统一 `gq-` 前缀、卷统一 `gq-*` 显式命名，**绝不复用项目 #1 的容器/网络/卷**。
+  详见 `.env.example` 顶部的端口三行。容器名统一 `gq-` 前缀、卷统一 `gq-*` 显式命名，**绝不复用项目 #1 的容器/网络/卷**。
 - 服务器上任何**超过几十秒**的操作，**必须放进 tmux 会话 `grounded`**（防断线 + 用户可旁观）。
 - 写文本文件一律 **UTF-8 无 BOM**；`.gitattributes` 里固定 `text eol=lf` 避免 CRLF 事故。
 
