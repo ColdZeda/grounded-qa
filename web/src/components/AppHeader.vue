@@ -67,14 +67,14 @@ withDefaults(
     <span
       v-if="runtimeEnv === 'dev'"
       class="env env--dev"
-      title="连的是本地后端（localhost:58000）—— 这里的账号/数据与生产完全独立"
+      title="本地后端（localhost:58000）"
     >
       本地
     </span>
     <span
       v-else-if="runtimeEnv === 'prod'"
       class="env env--prod"
-      title="连的是生产后端（120.24.67.82）—— 改动会动到线上数据"
+      title="生产后端（120.24.67.82）"
     >
       生产
     </span>

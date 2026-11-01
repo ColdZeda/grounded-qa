@@ -121,14 +121,7 @@ async function submit(): Promise<void> {
       >
         {{ demoBusy ? '进入中…' : '一键体验（演示账号）' }}
       </button>
-      <p v-if="demoAvailable" class="note">
-        演示账号是「成员」角色：能问答，看不到知识库 / 评测 / 运维，也不受你的配额影响。
-      </p>
-
-      <p class="hint">
-        开发账号由 <code>python -m app.db.seed</code> 创建；密码见 <code>.env</code> 的
-        <code>ADMIN_PASSWORD</code>。
-      </p>
+      <p v-if="demoAvailable" class="note">演示账号为只读成员。</p>
     </form>
   </main>
 </template>

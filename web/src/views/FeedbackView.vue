@@ -267,7 +267,7 @@ function relative(iso: string): string {
   <div class="shell">
     <AppHeader
       title="反馈与采纳"
-      :hint="`治理清单 · 待处理 ${pending} 条`"
+      :hint="`待处理 ${pending} 条`"
       tone="amber"
     >
       <button class="btn btn--ghost btn--sm" type="button" :disabled="loading" @click="load">
@@ -276,11 +276,6 @@ function relative(iso: string): string {
     </AppHeader>
 
     <main class="body">
-      <p class="hint">
-        坐席点「⚑ 上报错误」后，记录会出现在这里。<strong>采纳</strong>只是生成一份草稿
-        —— 草稿<strong>不进检索</strong>；点<strong>发布</strong>才会进知识库，发布前会先做一次冲突体检。
-      </p>
-
       <p v-if="error" class="alert alert--danger">{{ error }}</p>
       <p v-if="notice" class="alert alert--info">{{ notice }}</p>
 
@@ -355,7 +350,7 @@ function relative(iso: string): string {
               <input v-model="editing.title" class="form__input" type="text" maxlength="120" />
             </label>
             <label class="form__label">
-              更正后的说法（这段会进知识库，请写成对外口径，别写"我原来答错了"）
+              更正后的说法
               <textarea v-model="editing.content" class="form__area" rows="8"></textarea>
             </label>
             <div class="form__ops">
@@ -385,7 +380,7 @@ function relative(iso: string): string {
           <!-- 冲突体检结果 -->
           <div v-if="conflicts[item.id]?.length" class="conf">
             <p class="conf__title">
-              体检发现 {{ conflicts[item.id].length }} 处口径冲突 —— 看过原文再决定要不要发：
+              体检发现 {{ conflicts[item.id].length }} 处口径冲突：
             </p>
             <div v-for="(conflict, index) in conflicts[item.id]" :key="index" class="conf__item">
               <div class="conf__head">{{ conflict.topic }}（{{ conflict.scope }}）</div>

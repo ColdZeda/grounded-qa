@@ -252,9 +252,7 @@ onMounted(load)
       <ConflictsPanel />
 
       <p class="hint">
-        只收 <code>.md</code> / <code>.txt</code>。上传后走队列异步入库（解析 → 切分 →
-        向量化），下面能看到每一步的状态。
-        <template v-if="!canWrite()">上传是管理员动作，你可以查看但不能新增。</template>
+        只收 <code>.md</code> / <code>.txt</code>。<template v-if="!canWrite()">上传需管理员。</template>
       </p>
 
       <p v-if="error" class="alert alert--danger">{{ error }}</p>
@@ -290,8 +288,8 @@ onMounted(load)
             :class="contentIsLive(item) ? 'badge--ready' : 'badge--muted'"
             :title="
               contentIsLive(item)
-                ? '这份文档的内容状态允许它被检索引用'
-                : '这份文档不会被检索引用（草稿还没发布 / 内部稿 / 他站）'
+                ? '可被检索引用'
+                : '不会被检索引用'
             "
           >
             {{ CONTENT_LABEL[item.content_status] }}

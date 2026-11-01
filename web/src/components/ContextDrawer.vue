@@ -149,7 +149,7 @@ watch(
       </div>
 
       <footer class="drawer__foot">
-        只显示这一块和前后各一块 —— <b>不是全文</b>。要读完整文档请回源查看。
+        仅命中块及上下文
       </footer>
     </aside>
   </div>

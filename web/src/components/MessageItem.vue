@@ -184,7 +184,7 @@ function onBodyClick(event: MouseEvent): void {
       <span
         v-if="message.confidence !== null && !isUser && isDetailed()"
         class="chip"
-        title="置信度取自精排分（或退化时的向量余弦）。绝不用 RRF 分数——RRF 是名次的函数，库里只有一条不相关内容时它照样排第一。"
+        title="取自精排分，不用 RRF"
       >
         置信度 {{ message.confidence.toFixed(3) }}
       </span>
@@ -198,7 +198,7 @@ function onBodyClick(event: MouseEvent): void {
       <span
         v-if="message.followupPrev && isUser && isDetailed()"
         class="chip chip--merged"
-        :title="`检索时并进了上一轮的问句：「${message.followupPrev}」。只影响召回，回答仍是按你这一问生成的。`"
+        :title="`检索时并入了上一轮问句：「${message.followupPrev}」`"
       >
         已合并上一轮检索
       </span>
@@ -212,7 +212,7 @@ function onBodyClick(event: MouseEvent): void {
 
     <!-- 拒答横幅：**放在正文上面**，先看到结论再看到文案 -->
     <p v-if="message.refused" class="alert alert--warn banner">
-      已拒答 —— 检索到的依据不足以支撑回答。这是刻意的：宁可说不知道，也不编。
+      已拒答：依据不足。
     </p>
 
     <!--
@@ -325,7 +325,7 @@ function onBodyClick(event: MouseEvent): void {
     <section v-if="message.citations.length > 0 && message.refused" class="sources sources--refused">
       <details>
         <summary class="sources__title">
-          未采用的候选 · {{ message.citations.length }} 条（均低于拒答阈值，与答案无关）
+          未采用的候选 · {{ message.citations.length }} 条
         </summary>
         <CitationList
           :citations="message.citations"
@@ -356,7 +356,7 @@ function onBodyClick(event: MouseEvent): void {
     </div>
     <details v-if="repairs.length > 0" class="audit audit--repaired">
       <summary>
-        🔧 已自动改正 {{ repairs.length }} 处引用编号（只改编号、正文一个字没动）
+        🔧 已自动改正 {{ repairs.length }} 处引用编号
       </summary>
       <ul class="audit__list">
         <li v-for="(fix, index) in repairs" :key="index">

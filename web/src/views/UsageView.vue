@@ -155,7 +155,7 @@ onMounted(load)
           </dl>
 
           <p v-if="usage.tokens_used === null" class="alert alert--warn alert--inline">
-            取不到用量（Redis 不可用）。这是个 `—`，<b>不是 0</b> —— 额度到底还剩多少，现在不知道。
+            取不到用量（Redis 不可用）。
           </p>
 
           <!--
@@ -204,7 +204,7 @@ onMounted(load)
                   <span
                     v-if="item.is_channel_account"
                     class="tag"
-                    title="飞书私聊 ＋ 所有群聊的消耗都记在这个账号名下（飞书不按人记账）"
+                    title="飞书消耗记在该账号名下"
                   >
                     飞书渠道总账
                   </span>
@@ -217,9 +217,7 @@ onMounted(load)
           </table>
 
           <p class="foot">
-            ⚠️ 这是<b>租户内</b>的视图：你看不到别的租户的人。用量取不到的成员显示 `—`，并排在最后。<br />
-            带「<b>飞书渠道总账</b>」标记的那一行，是<b>飞书私聊 ＋ 所有群聊的合计</b> ——
-            飞书的消息全部记在这一个账号名下，不按顾客分。想按渠道看，看上面那张卡的「按渠道」。
+            飞书私聊与所有群聊的消耗都记在「飞书渠道总账」一行。
           </p>
         </section>
       </template>

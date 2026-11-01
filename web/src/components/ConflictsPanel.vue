@@ -125,10 +125,7 @@ function recheck(): void {
       </button>
     </header>
 
-    <p class="check__hint">
-      同主题 ＋ 同适用范围 ＋ 同单位族，数值不同 → 列出来。
-      <strong>只报不一致，不判谁对</strong>：每条都带原句，30 秒就能人工判断该改哪一份。
-    </p>
+    <p class="check__hint">只报不一致，不判谁对。</p>
 
     <div v-if="open" class="check__body">
       <!-- 骨架屏：体检要现算（几秒），比别的加载态更长 -->
@@ -143,7 +140,7 @@ function recheck(): void {
           扫描 {{ report.documents + report.skipped_documents }} 篇 → 参与配对
           <strong>{{ report.documents }}</strong> 篇
           <span class="check__aside"
-            >（跳过 {{ report.skipped_documents }} 篇：讲解稿 / 辟谣稿写的是"别人的规则"）</span
+            >（跳过 {{ report.skipped_documents }} 篇）</span
           >
           · 抽出 <strong>{{ report.facts }}</strong> 条期限事实 ·
           <strong :class="{ 'check__total--bad': report.conflicts > 0 }">{{
@@ -154,7 +151,7 @@ function recheck(): void {
 
         <p v-if="report.conflicts === 0" class="check__empty">
           没发现冲突。
-          <span class="check__aside">⚠️ 这是"没找到"，不是"没有" —— 它只认 4 个主题、只比同单位族。</span>
+          <span class="check__aside">可能漏检：只认 4 类主题。</span>
         </p>
 
         <ul v-else class="conflict-list">

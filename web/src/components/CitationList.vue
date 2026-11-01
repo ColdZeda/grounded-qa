@@ -75,7 +75,7 @@ function kindHint(kind: string): string {
       ⚠️ `isDetailed()` 必须是**函数调用**（裸标识符会被编译器常量折叠）。
     -->
     <p v-if="!isDetailed()" class="citations__hint">
-      分数已隐藏（切到「详细」可看精排分与口径）
+      分数已隐藏
     </p>
 
     <div v-for="cite in citations" :key="cite.chunk_id" class="cite" :class="{ 'cite--active': cite.index === activeIndex }">

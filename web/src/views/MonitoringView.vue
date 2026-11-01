@@ -196,17 +196,14 @@ onMounted(load)
 
 <template>
   <div class="shell">
-    <AppHeader title="运维看板" hint="只读 · 数据来自 Prometheus" tone="slate">
+    <AppHeader title="运维看板" hint="只读" tone="slate">
       <button class="btn btn--ghost btn--sm" type="button" :disabled="loading" @click="load">
         刷新
       </button>
     </AppHeader>
 
     <main class="body">
-      <p class="hint">
-        这一屏是<b>打开页面那一刻</b>去问 Prometheus 的结果，不会自动刷新（点右上角「刷新」）。
-        Prometheus 每 30 秒抓一次指标，所以最细的颗粒就是 30 秒 —— 它不是实时监控。
-      </p>
+      <p class="hint">快照：打开页面时取一次，不自动刷新。</p>
 
       <p v-if="error" class="alert alert--danger">{{ error }}</p>
       <p v-if="loading" class="muted">正在问 Prometheus…</p>
@@ -244,7 +241,7 @@ onMounted(load)
               <span class="stats__value">{{ statValue(panel) }}</span>
               <span v-if="isStale(panel)" class="stale">样本是 {{ ageOf(panel) }}的</span>
             </article>
-            <p class="stats__hint">主机级指标 · Prometheus 每 30 秒采一次</p>
+            <p class="stats__hint">每 30 秒采样</p>
           </div>
 
           <div v-else class="cards">
@@ -284,7 +281,7 @@ onMounted(load)
               <p
                 v-if="panel.title === '24 小时拒答率' && refusalSample !== null"
                 class="card__sample"
-                title="24 小时滑动窗口，来自 Prometheus 抓取 ⟹ 刚发生的一次拒答要等 30~60 秒才进得来"
+                title="24 小时窗口，约 30~60 秒延迟"
               >
                 拒答 {{ refusedCount }} / 全部 {{ refusalSample }}
               </p>

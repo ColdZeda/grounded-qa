@@ -214,7 +214,7 @@ onMounted(load)
 
 <template>
   <div class="shell">
-    <AppHeader title="会话" hint="内部坐席工作台 · Web 与飞书的问答都在这里" tone="blue">
+    <AppHeader title="会话" hint="Web + 飞书" tone="blue">
       <button class="btn btn--sm" type="button" @click="router.push({ name: 'chat-new' })">
         ＋ 新建会话
       </button>
@@ -266,7 +266,7 @@ onMounted(load)
               class="group__toggle"
               type="button"
               :aria-expanded="group.open"
-              :title="group.open ? '收起' : '展开（展开才加载）'"
+              :title="group.open ? '收起' : '展开'"
               @click="toggleGroup(group)"
             >
               <span class="group__arrow" aria-hidden="true">{{ group.open ? '▾' : '▸' }}</span>
@@ -315,7 +315,7 @@ onMounted(load)
             </button>
           </template>
           <p v-else class="group__hint">
-            已收起 · 共 {{ group.total }} 条{{ group.loaded ? '' : '（展开时才加载）' }}
+            已收起 · 共 {{ group.total }} 条
           </p>
         </section>
       </template>

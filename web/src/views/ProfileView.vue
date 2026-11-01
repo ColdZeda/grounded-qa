@@ -70,13 +70,12 @@ async function submit(): Promise<void> {
           <dt>账号</dt>
           <dd class="kv__mono">{{ currentUser?.email }}</dd>
           <dt>角色</dt>
-          <dd>{{ roleLabel }}<span class="kv__hint">（管理员能管知识库 / 评测 / 运维；成员只能问答）</span></dd>
+          <dd>{{ roleLabel }}<span class="kv__hint">（管理员）</span></dd>
           <dt>租户</dt>
           <dd class="kv__mono">{{ currentUser?.tenant_id?.slice(0, 8) }}</dd>
         </dl>
         <p class="card__note">
-          账号（邮箱或用户名都行）是全局唯一的登录标识，改它等于换账号 ——
-          需要管理员在「成员」里重新建人。
+          账号是唯一登录标识，改了等于换账号。
         </p>
       </section>
 
@@ -124,8 +123,7 @@ async function submit(): Promise<void> {
 
         <p v-if="mismatch" class="alert alert--warn form__warn">两次输入的新密码不一致。</p>
         <p class="card__note">
-          密码只存 bcrypt 哈希；上限是 <strong>72 字节</strong>（中文一个字符算 3 字节），
-          超了会被明确拒绝而不是静默截断。改完<strong>不会踢掉当前会话</strong>。
+          密码只存哈希；改完保持登录。
         </p>
       </section>
     </main>

@@ -717,7 +717,7 @@ onBeforeUnmount(() => {
       <p v-else-if="loading" class="muted">加载中…</p>
 
       <p v-else-if="messages.length === 0" class="intro">
-        问点什么吧。回答会带上引用来源；如果知识库里找不到依据，它会直接拒答，而不是编一个。
+        问点什么吧。
       </p>
 
       <div v-else class="thread">
@@ -763,10 +763,9 @@ onBeforeUnmount(() => {
     -->
     <footer v-if="isExternalChannel" class="composer composer--readonly">
       <p class="composer__readonly">
-        🔒 这是
+        🔒
         <strong>{{ conversationChannel === 'feishu_group' ? '飞书群' : '飞书私聊' }}</strong>
-        会话，在 Web 端<strong>只读</strong> —— 这里发出的消息顾客收不到。
-        <span class="composer__readonly-hint">要回复请回到飞书；要复核证据就点上面的来源。</span>
+        会话在 Web 端只读，回复请去飞书。
       </p>
     </footer>
 
@@ -854,7 +853,7 @@ onBeforeUnmount(() => {
           v-model="draft"
           class="field composer__input"
           rows="2"
-          placeholder="输入问题，Enter 发送，Shift + Enter 换行（可以直接 Ctrl+V 粘贴截图）"
+          placeholder="输入问题，Enter 发送"
           :disabled="phase !== 'idle'"
           @keydown="onKeydown"
           @paste="onPaste"

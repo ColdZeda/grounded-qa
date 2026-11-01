@@ -107,10 +107,7 @@ onMounted(load)
     </AppHeader>
 
     <main class="body">
-      <p class="hint">
-        企业内部的账号由管理员在这里发放，<strong>没有开放注册</strong> —— 陌生人不该能自己进来问你家政策。
-        新建的成员立刻可以登录，默认是「成员」（只能问答，看不到知识库 / 评测 / 运维）。
-      </p>
+      <p class="hint">账号由管理员创建，新成员默认为「成员」角色。</p>
 
       <p v-if="error" class="alert alert--danger">{{ error }}</p>
       <p v-if="notice" class="alert alert--info">{{ notice }}</p>
@@ -142,7 +139,7 @@ onMounted(load)
               v-model="form.password"
               class="field"
               type="text"
-              placeholder="≥8 位（建议 12 位以上）"
+              placeholder="≥8 位"
               autocomplete="new-password"
               :disabled="creating"
             />
@@ -161,7 +158,7 @@ onMounted(load)
         <!-- 点不动就要说清为什么（见 `blockedReason` 的注释） -->
         <p v-if="blockedReason" class="form__blocked">{{ blockedReason }}</p>
         <p class="card__note">
-          密码只存 bcrypt 哈希，<strong>建完就看不到明文</strong>（bcrypt 上限 72 字节，中文一个字符算 3 字节）。
+          密码只存哈希，建完不可见。
         </p>
       </section>
 

@@ -84,11 +84,7 @@ onMounted(load)
     </AppHeader>
 
     <main class="body">
-      <p class="hint">
-        数字来自开发机上跑的 <code>evals/run.py</code>，产物是结果 JSON；这个页面<strong>只读</strong>它。
-        每张卡片都标了<strong>生成时间</strong>与<strong>那次的配置</strong> ——
-        换个参数数字就会变，所以不能脱离它们看。
-      </p>
+      <p class="hint">只读快照（来自 evals 结果 JSON）。</p>
 
       <h3 class="all__title">评测快照</h3>
 
@@ -132,7 +128,7 @@ onMounted(load)
         <section v-if="snapshots.length > 0" class="all">
           <h3 class="all__title">全部快照（{{ snapshots.length }} 份，新的在前）</h3>
           <p class="all__hint">
-            ⚠️ 同一层有多份是<strong>判分口径改过</strong>留下的中间态。横向比之前先看它们的配置是否一致。
+            同层多份＝判分口径改过，比较前先看配置。
           </p>
           <table class="table">
             <thead>
