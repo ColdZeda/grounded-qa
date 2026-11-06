@@ -3,7 +3,7 @@
 > **多租户知识库问答平台**：把企业内部文档变成可检索、可引用的问答系统 —— 答案附引用、能回溯到命中原文，无依据时拒答。
 > 主要工作在**检索质量与幻觉治理**。
 
-**生产**：[http://120.24.67.82:8080](http://120.24.67.82:8080) ｜ 测试 **586 项**（561 通过 · 25 跳过） ｜ 最后更新 2026-10-28
+**生产**：[http://120.24.67.82:8080](http://120.24.67.82:8080) ｜ 测试 **587 项**（562 通过 · 25 跳过） ｜ 最后更新 2026-10-28
 
 ![CI](https://github.com/ColdZeda/grounded-qa/actions/workflows/ci.yml/badge.svg)
 ![deploy](https://github.com/ColdZeda/grounded-qa/actions/workflows/deploy.yml/badge.svg)
@@ -49,7 +49,7 @@ FastAPI ─ 意图路由 ─▶ 混合检索：全文路 ＋ 向量路（各取 
    ▼
 sources → delta* → done    ← SSE 手写切帧；nginx 对这个 location 关缓冲
 
-PostgreSQL 16 + pgvector（语料 / 向量 / 会话）    Redis（队列 / 限流 / 配额 / 告警去重）
+PostgreSQL 16 + pgvector（语料 / 向量 / 会话）    Redis（队列 / 限流 / 配额 / 分账 / 告警）
 mini worker（解析 → 切分 → 向量化）              外部 API（对话 / 多模态 / embedding / rerank）
 飞书：出站**长连接** —— 不需要公网回调、不需要证书
 ```
