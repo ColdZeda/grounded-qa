@@ -1449,7 +1449,7 @@ worker 启动时扫一遍 `PENDING` 重新入队，就能把"Redis 重启丢了�
 - **HTTP 层**：集成测试覆盖（`tests/test_documents_api.py`，14 条）—— 真库、真落盘、
   真调 `handle_job`，只把 embedding 换成假实现（约定 9 不许真调模型）。
 - **真 Redis ＋ 真卷 ＋ 真 embedding**：本机 compose 里跑过一次端到端探针
-  （api 容器建行＋落盘＋`LPUSH` → worker `BLPOP` → 真的调了 `qwen3.7-text-embedding-flash`
+  （api 容器建行＋落盘＋`RPUSH` → worker `BLPOP` → 真的调了 `qwen3.7-text-embedding-flash`
   → 2 块 / 1024 维 / 状态 `READY` / 卷上文件已消失），耗时约 0.5 s，探针租户随后删除。
 
 > 📌 已知不完美见 §10.3（单消费者、无重试退避、无死信队列）。

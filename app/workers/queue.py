@@ -8,9 +8,9 @@
       · 一个 1 MB 的文件 base64 之后是 1.3 MB，塞进 Redis 要占内存、还要整条重传；
       · 消息一旦过大，Redis 的 `maxmemory-policy` 会在**没有任何报错**的情况下把它挤掉。
 
-⚠️ **`enqueue` 用 `LPUSH`、消费用 `BLPOP`** —— 这是一个 **FIFO**（左边进、右边出）。
-    两边都写成同一边的话就变成 LIFO，弱化成一个栈：连着传 10 个文件时，
-    用户会看到**最后传的那个先做完**，而列表里排在第一个的一直在转圈。
+⚠️ **`enqueue` 用 `RPUSH`、消费用 `BLPOP`** —— 这是一个 **FIFO**（右边进、左边出）。
+    必须一右一左：新任务放到队尾、worker 从队头取；两端相同就成了 LIFO（栈），
+    连着传 10 个文件时会**最后传的先做完**，排在第一个的一直转圈。
 """
 
 from __future__ import annotations
@@ -95,4 +95,4 @@ async def enqueue_ingest(job: IngestJob) -> None:
     ⚠️ 抛异常就让它抛 —— 调用方（上传接口）必须**如实告诉用户"没排队成功"**。
         在这里吞掉异常，用户就会看到一个永远 `pending` 的文档。
     """
-    await get_redis().lpush(QUEUE_KEY, job.dump())
+    await get_redis().rpush(QUEUE_KEY, job.dump())
