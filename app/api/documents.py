@@ -9,7 +9,7 @@
     ① 校验后缀 / 大小（不引新的解析面：只吃文本类）
     ② 算 sha256 → 判重 → 建一行 `Document(status=PENDING)`      ← 快，毫秒级
     ③ 字节落到共享卷（`gq-uploads`）
-    ④ `LPUSH` 一条任务进 Redis，**立刻返回 202**
+    ④ `RPUSH` 一条任务进 Redis，**立刻返回 202**
     ⑤ worker 在另一个容器里：切分 → embedding → 写 `chunks` → 状态改 `READY`
 
 ⚠️ **为什么请求路径上不做 embedding**：那是一次秒级的外部 API 调用，
