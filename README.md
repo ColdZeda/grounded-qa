@@ -3,7 +3,7 @@
 > **多租户知识库问答平台**：把企业内部文档变成可检索、可引用的问答系统 —— 答案附引用、能回溯到命中原文，无依据时拒答。
 > 主要工作在**检索质量与幻觉治理**。
 
-**生产**：[http://120.24.67.82:8080](http://120.24.67.82:8080) ｜ 测试 **587 项**（562 通过 · 25 跳过） ｜ 最后更新 2026-10-28
+**生产**：[http://120.24.67.82:8080](http://120.24.67.82:8080) ｜ 测试 **587 项**（562 通过 · 25 跳过，含集成测试） ｜ 最后更新 2026-10-28
 
 ![CI](https://github.com/ColdZeda/grounded-qa/actions/workflows/ci.yml/badge.svg)
 ![deploy](https://github.com/ColdZeda/grounded-qa/actions/workflows/deploy.yml/badge.svg)
