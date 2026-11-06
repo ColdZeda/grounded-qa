@@ -49,7 +49,7 @@ FastAPI ─ 意图路由 ─▶ 混合检索：全文路 ＋ 向量路（各取 
    ▼
 sources → delta* → done    ← SSE 手写切帧；nginx 对这个 location 关缓冲
 
-PostgreSQL 16 + pgvector（语料 / 向量 / 会话）    Redis（语义缓存 ＋ BLPOP 队列 ＋ 配额记账）
+PostgreSQL 16 + pgvector（语料 / 向量 / 会话）    Redis（队列 / 限流 / 配额 / 告警去重）
 mini worker（解析 → 切分 → 向量化）              外部 API（对话 / 多模态 / embedding / rerank）
 飞书：出站**长连接** —— 不需要公网回调、不需要证书
 ```
